@@ -46,16 +46,23 @@ public final class Config {
     public static final String CARD_LOCKED = "card_aspect_locked";
     public static final String CARD_RADIUS = "card_radius_dp";
     public static final String CARD_SPACING = "card_spacing_dp";
+    /**
+     * 沉浸场景显示期间是否吃掉左侧下拉手势（左边通知栏）。
+     *
+     * 不是几何参数，借用 /elements 的 key/value 通道（SystemUI 侧一次查询就能读到）。
+     * 两个「通知栏是否展开」的信号在真机上都被证伪，所以改成直接从源头堵住手势。
+     */
+    public static final String BLOCK_LEFT_SHADE = "block_left_shade";
 
     /** 宽/高为 0 表示“跟随默认”，由覆盖层按屏幕计算。 */
     private static final Map<String, Integer> ELEMENT_DEFAULTS = new LinkedHashMap<>();
     static {
-        ELEMENT_DEFAULTS.put(CLOCK_SIZE, 52);
+        ELEMENT_DEFAULTS.put(CLOCK_SIZE, 75);
         ELEMENT_DEFAULTS.put(CLOCK_SPACING, 52);
-        ELEMENT_DEFAULTS.put(CLOCK_WEIGHT, 400);
+        ELEMENT_DEFAULTS.put(CLOCK_WEIGHT, 770);
         ELEMENT_DEFAULTS.put(CLOCK_COLOR, 0xFFFFFFFF);
         ELEMENT_DEFAULTS.put(CLOCK_ROUNDNESS, 0);
-        ELEMENT_DEFAULTS.put(COVER_SCALE, 100);
+        ELEMENT_DEFAULTS.put(COVER_SCALE, 118);
         ELEMENT_DEFAULTS.put(COVER_WIDTH, 0);
         ELEMENT_DEFAULTS.put(COVER_HEIGHT, 0);
         ELEMENT_DEFAULTS.put(COVER_LOCKED, 1);
@@ -66,6 +73,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(CARD_LOCKED, 1);
         ELEMENT_DEFAULTS.put(CARD_RADIUS, 28);
         ELEMENT_DEFAULTS.put(CARD_SPACING, 20);
+        ELEMENT_DEFAULTS.put(BLOCK_LEFT_SHADE, 1);
     }
 
     private Config() {}
@@ -142,10 +150,10 @@ public final class Config {
     public static int cornerRadiusDp(Context context) {
         if (PACKAGE.equals(context.getPackageName()))
             return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .getInt(CORNER_RADIUS, 18);
+                    .getInt(CORNER_RADIUS, 28);
         try (Cursor cursor = context.getContentResolver().query(URI, null, null, null, null)) {
-            return cursor != null && cursor.moveToFirst() ? cursor.getInt(1) : 18;
-        } catch (RuntimeException error) { return 18; }
+            return cursor != null && cursor.moveToFirst() ? cursor.getInt(1) : 28;
+        } catch (RuntimeException error) { return 28; }
     }
     public static boolean setCornerRadiusDp(Context context, int radiusDp) {
         if (radiusDp < 0 || radiusDp > 48) return false;

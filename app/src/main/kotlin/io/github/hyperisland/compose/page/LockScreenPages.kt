@@ -449,6 +449,13 @@ internal fun LockAppearancePage() {
                 }
                 DpSlider("圆角", value(Config.CARD_RADIUS), 0..48, onCommit = { update(Config.CARD_RADIUS, it) })
                 DpSlider("间距", value(Config.CARD_SPACING), 0..160, onCommit = { update(Config.CARD_SPACING, it) })
+                PreferenceSwitch(
+                    title = "锁屏禁止左下拉",
+                    summary = "沉浸场景显示时吃掉左侧下拉手势，不再和通知栏抢层级。注意：左半屏起始的上滑解锁也会失效（右半屏、指纹、电源键正常）",
+                    icon = null,
+                    checked = value(Config.BLOCK_LEFT_SHADE) != 0,
+                    onCheckedChange = { update(Config.BLOCK_LEFT_SHADE, if (it) 1 else 0) },
+                )
             }
         }
         item {

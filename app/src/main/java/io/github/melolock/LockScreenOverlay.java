@@ -75,7 +75,7 @@ final class LockScreenOverlay {
             } else if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())) {
                 Log.i(TAG, "SCREEN_ON " + state());
                 if (suspended && lockscreenCycle && keyguardLocked()) resume();
-                else if (shown != null && foreground != null && !expanded) showMusic();
+                else if (!suspended && shown != null && foreground != null && !expanded) showMusic();
                 updateSwitch();
             }
         }
@@ -103,6 +103,21 @@ final class LockScreenOverlay {
     private boolean lockscreenCycle = true;
     private boolean expanded;
     private View clock, secondaryClock, nativeBackgroundLayer, nativeForegroundLayer;
+    /**
+     * 左侧通知栏的宿主视图（`NotificationPanelView#notification_panel`）。
+     *
+     * 真机视图树显示：`legacy_window_root` 的子节点顺序是
+     * `notification_panel` → … → `control_center_container` → `keyguard_root_view`（我们的层挂这里）。
+     * 画在后面的盖在前面，所以自绘层**盖住左侧通知栏**（重叠），却在右侧控制中心**之下**（所以右侧下拉正常）。
+     *
+     * 信号用它的可见性：收起时 INVISIBLE(4)，下拉展开时 VISIBLE(0)——由系统自己维护，
+     * 不会像通知栈那样被亮屏/锁屏重排误改（那条错路踩过，见 README）。
+     */
+    private View leftShadePanel;
+    /** 左侧下拉手势拦截是否已安装（只在通知面板的触摸入口上装一次）。 */
+    private boolean shadeBlockInstalled;
+    /** 诊断用：每次成功吃掉一次下拉手势打一行。 */
+    private int shadeBlockedCount;
     private ViewGroup notifications, windowRoot;
     private FrameLayout background;
     private FrameLayout foreground;
@@ -295,6 +310,9 @@ final class LockScreenOverlay {
         windowRoot = top instanceof ViewGroup ? (ViewGroup) top : null;
         View stack = find(top, NOTIFICATIONS);
         notifications = stack instanceof ViewGroup ? (ViewGroup) stack : null;
+        // 左侧通知栏宿主：它的可见性不是可靠信号，只用它来装手势拦截。
+        leftShadePanel = findById(windowRoot, "notification_panel");
+        installShadeBlock();
         secondaryClock = findById(root, "miui_keyguard_foreground_clock_container");
         nativeBackgroundLayer = findById(root, "keyguard_background_layer");
         nativeForegroundLayer = findById(root, "keyguard_foreground_layer");
@@ -561,7 +579,7 @@ final class LockScreenOverlay {
         if (foreground != null && foreground.getParent() == root) root.removeView(foreground);
         if (background != null && background.getParent() == root) root.removeView(background);
         if (notificationButton != null && notificationButton.getParent() == foreground) foreground.removeView(notificationButton);
-        background = null; foreground = null; content = null; immersiveClock = null; playerCard = null; notificationButton = null; clock = null; secondaryClock = null; nativeBackgroundLayer = null; nativeForegroundLayer = null; notifications = null; windowRoot = null;
+        background = null; foreground = null; content = null; immersiveClock = null; playerCard = null; notificationButton = null; clock = null; secondaryClock = null; nativeBackgroundLayer = null; nativeForegroundLayer = null; notifications = null; windowRoot = null; leftShadePanel = null;
         unlockRestoreLogged = false; lastSkipReason = null; suspended = false;
     }
 
@@ -646,6 +664,77 @@ final class LockScreenOverlay {
         if (current.isAlive()) { current.addOnPreDrawListener(keyguardGuard); guardObserver = current; }
     }
     private void unregisterGuard() { if (guardObserver != null && guardObserver.isAlive()) guardObserver.removeOnPreDrawListener(keyguardGuard); guardObserver = null; }
+
+    /**
+     * 沉浸场景是否正显示在锁屏上（用来决定要不要吃掉下拉手势）。
+     */
+    private boolean sceneShowing() {
+        return !suspended && playerSceneVisible && foreground != null
+                && foreground.getVisibility() == View.VISIBLE && lockscreenCycle;
+    }
+
+    /**
+     * 在通知面板的触摸入口装一个拦截：沉浸场景显示期间，左半屏按下的手势直接吃掉。
+     *
+     * 为什么堵手势：左边通知栏展开的「状态信号」在真机上被证伪两次（通知栈可见性会被亮屏改、
+     * `notification_panel` 可见性表示「锁屏在显示」而非「拉下来了」）。我们的自绘层挂在
+     * `keyguard_root_view`（窗口根的最后一个子节点）里，即压在通知面板之上，所以面板只会拿到
+     * 落到我们层上的触摸——在这里把左半屏的 DOWN 吃掉，通知栏就不会展开。
+     * 右侧控制中心在另一个容器（`control_center_container`），不受影响。
+     */
+    private void installShadeBlock() {
+        if (shadeBlockInstalled || leftShadePanel == null) return;
+        shadeBlockInstalled = true;
+        try {
+            Class<?> panelClass = leftShadePanel.getClass();
+            for (String name : new String[]{"dispatchTouchEvent", "onInterceptTouchEvent", "onTouchEvent"}) {
+                final java.lang.reflect.Method method = findTouchMethod(panelClass, name);
+                if (method == null) continue;
+                final String hookName = name;
+                try {
+                    de.robv.android.xposed.XposedBridge.hookMethod(method, new de.robv.android.xposed.XC_MethodHook() {
+                        @Override protected void beforeHookedMethod(MethodHookParam hook) {
+                            // 关键：面板类没有覆写 dispatchTouchEvent，getMethod 拿到的是框架 View 的实现，
+                            // 钩上之后全 SystemUI 的 View 都会经过这里。不加 thisObject 判定就会把左半屏的
+                            // 所有触摸一起吃掉——踩过：播放器按钮与「展开通知」全部失灵。
+                            if (hook.thisObject != leftShadePanel) return;
+                            if (!(hook.args[0] instanceof android.view.MotionEvent)) return;
+                            android.view.MotionEvent event = (android.view.MotionEvent) hook.args[0];
+                            if (event.getActionMasked() != android.view.MotionEvent.ACTION_DOWN) return;
+                            if (!sceneShowing() || !shadeBlockEnabled()) return;
+                            // 只挡左半屏：右上角是控制中心，不该受影响。
+                            if (event.getX() > leftShadePanel.getWidth() / 2f) return;
+                            hook.setResult(Boolean.FALSE);   // 当作没处理 → 通知栏不展开
+                            Log.i(TAG, "Left-shade gesture consumed via " + hookName + " x=" + Math.round(event.getX())
+                                    + " (#" + (++shadeBlockedCount) + ")");
+                        }
+                    });
+                } catch (Throwable error) {
+                    Log.w(TAG, "Shade block hook skipped: " + name, error);
+                }
+            }
+            Log.i(TAG, "Left-shade touch block armed on " + panelClass.getName());
+        } catch (Throwable error) {
+            Log.w(TAG, "Left-shade touch block unavailable", error);
+        }
+    }
+
+    /** 优先取面板类自己声明的方法；没有才退回继承来的（那种情况必须靠 thisObject 判定兜住）。 */
+    private static java.lang.reflect.Method findTouchMethod(Class<?> type, String name) {
+        try { return type.getDeclaredMethod(name, android.view.MotionEvent.class); }
+        catch (NoSuchMethodException ignored) { }
+        try { return type.getMethod(name, android.view.MotionEvent.class); }
+        catch (NoSuchMethodException ignored) { return null; }
+    }
+
+    /** 每次手势现读配置：开关改了立刻生效，不用重建场景。 */
+    private boolean shadeBlockEnabled() {
+        try {
+            Integer value = Config.elementValues(context).get(Config.BLOCK_LEFT_SHADE);
+            return value == null || value != 0;
+        } catch (Throwable error) { return false; }
+    }
+
     private void hide(View view) {
         if (view == null) return;
         if (!changedViews.containsKey(view)) changedViews.put(view, new ViewState(view));

@@ -8,10 +8,13 @@
 - 界面只做「复用 HyperIsland 原版组件 + 换数据源」，不新写样式；同名卡片直接提升 `OverviewPage.kt` 里的实现为 `internal` 共享，禁止复制第二份。
 - `LockScreenOverlay.java` 由 Hook 注入 SystemUI 进程：任何改动都必须失败关闭（异常退回原生锁屏），并且**不要与其他会话/人工编辑并行改这个文件**。
 - 新增锁屏可调参数时：键名与默认值加到 `Config.java` 的 `ELEMENT_DEFAULTS`，Provider 走 `/elements` 的 key/value 通道，**不要**再去改 `ConfigProvider` 的列投影。
-- **装完 APK 必须重启 SystemUI 才会加载新的 Hook 代码**，顺序是先装再重启。锁屏行为异常时先比 `ps` 里 SystemUI 的 ETIME 和 APK 安装时间，再看 `logcat | grep "Elements: clock="` 有没有出现——没有就说明跑的还是旧代码。
+- **装完 APK 必须重启 SystemUI 才会加载新的 Hook 代码**，顺序是先装再重启。**无 root 重启法**：`adb -s 1b3a7d8 shell am crash com.android.systemui`（实测有效，SystemUI 崩掉后自动重启、PID 立刻变化；`am force-stop` 无效、`su` 从 adb 不可用）。锁屏行为异常时先比 `ps` 里 SystemUI 的 ETIME 和 APK 安装时间，再看 `logcat | grep "Elements: clock="` 有没有出现——没有就说明跑的还是旧代码。
 
 ## 最近完成
 
+- 左侧通知栏下拉 → **改成直接禁用该手势**（已装机能挡左下拉）：在通知面板（`leftShadePanel`，id `notification_panel`）的 `dispatchTouchEvent`/`onInterceptTouchEvent`/`onTouchEvent` 上挂 Xposed 钩子，沉浸场景显示期间对**左半屏的 ACTION_DOWN** 返回 false → 通知栏不展开；右侧控制中心在独立容器 `control_center_container`，不受影响。判断「场景在显示」用模块自身状态（`sceneShowing()`），**不再依赖任何系统视图的可见性**（通知栈可见性、`notification_panel` 可见性两个信号都被真机证伪，见 README）。开关 `Config.BLOCK_LEFT_SHADE`（默认开，外观 → 播放器「锁屏禁止左下拉」），每次手势现读配置。代价：左半屏起始的上滑解锁也会失效。日志 `Left-shade touch block armed` / `Left-shade gesture consumed`。
+  - **关键坑（第一版真机事故）**：`NotificationPanelView` 没覆写 `dispatchTouchEvent`，`getMethod` 拿到的是**框架 `View` 的实现**，钩它等于给 SystemUI **所有 View** 装钩。第一版缺 `hook.thisObject != leftShadePanel` 判定 → 左半屏触摸被全吃，**播放器 ◀/播放暂停 与「展开通知」按钮全部失灵**。修复后钩子只在 `thisObject == leftShadePanel` 时生效；`findTouchMethod()` 优先取类自己声明的方法，但退回继承实现是常态，**这个判定不能删**。
+  - 同一轮删除了 pre-draw 里的逐帧诊断（`Shade watch:` / `Expansion getters:` / `Window tree:`，每帧读 12 个视图 + 反射 7 个 getter），信号既不可靠又耗 CPU。
 - 解锁残留治本（用户截图定位）：**前景层与通知按钮从窗口根改挂锁屏根**。截图显示解锁瞬间「壁纸已出、前景组件完整残留」——背景层挂锁屏根被系统动画带走，前景挂窗口根不跟动画。挂同一容器后系统退场动画把整层一起带走，消失同步。同时实现「播放即预建」：`render()` 在桌面收到有效媒体快照且无场景时 `preCreate()`（GONE + suspended），一点播放场景就绪。`restore()` 的 removeView 判据同步改为锁屏根。
 - 暂停误判 + 解锁残留（真机日志定位）：① **暂停被当成「无会话」把场景销毁**——暂停识别原先依赖 `lastReady`，切歌失败会清空它，之后 `refresh()` 就走 `onMedia(null)` → `render-no-session` 撤层，锁屏掉回原生。改为遍历时记住第一个「允许的包 + 有 metadata + 非播放」的会话。② **解锁后前景残留桌面**——`suspend()` 把隐藏挂在 `ViewPropertyAnimator.withEndAction` 上，解锁时窗口切换、动画回调可能不推进。改为 Handler 延时兜底（`finishSuspend`），动画只负责视觉淡出。**排查手法**：`logcat -d -v time -s MeloLock | grep -v "Media ready from bitmap"` 能滤掉每 2 秒的取图噪音，直接看到状态机流转。
 - 解锁/亮屏闪屏补完（暂停保留 + 熄屏预建）：① **暂停不销毁**——`MediaSource` 区分「会话还在但暂停」和「会话消失」，暂停时交出最后一帧（`Snapshot.playing=false`、`speed=0`），并且 `current` 继续跟踪该会话以免注销回调后点播放不更新；中间键改成播放/暂停切换。② **熄屏预建**——「桌面播歌 → 熄屏 → 亮屏」这条路径上场景从未存在（桌面上 `render()` 一律 `skip("keyguard-unlocked")`），`suspend/resume` 救不了，现在 `ACTION_SCREEN_OFF` 主动触发一次媒体刷新，`render()` 在 `!isInteractive()` 时 `preCreate()`：趁着屏幕黑把场景建好并置 GONE + `suspended`，亮屏由 pre-draw 第一帧 `resume()` 秒显。`render()` 抽出 `applySnapshot()` 共用。

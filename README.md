@@ -47,9 +47,11 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 
 | 元素 | 控制项 | 默认值 | 备注 |
 | --- | --- | --- | --- |
-| 时间 | 锁定比例、字号、宽/高、粗细、字体圆润、颜色、间距 | 字号 52、粗细 400、圆润 0、白色、间距 52dp | 宽/高只在解锁比例后出现，是文本框尺寸，不拉伸字形 |
-| 专辑封面 | 锁定比例、缩放或宽/高、圆角、间距 | 缩放 100%、R角 18dp、间距 24dp | 圆角沿用原有的 `corner_radius_dp`，首页数据卡读的就是它 |
+| 时间 | 字号、粗细、字体圆润、颜色、距顶部 | 字号 75、粗细 770、圆润 0、白色、距顶部 52dp | 时间是文本，不设固定宽高，始终自适应字号与字体，不会被裁剪 |
+| 专辑封面 | 锁定比例、缩放或宽/高、圆角、间距 | 缩放 118%、R角 28dp、间距 24dp | 圆角沿用原有的 `corner_radius_dp`，首页数据卡读的就是它 |
 | 播放器 | 锁定比例、缩放或宽/高、圆角、间距 | 缩放 100%、R角 28dp、间距 20dp | 卡片宽度默认是「屏宽 − 24dp」 |
+
+**上面的默认值是 2026-10-06 从真机调好的一套抄回来的**（`content query .../elements`）：字号 75 / 粗细 770 / 封面缩放 118% / 圆角 28dp。背景三项的默认值（遮罩样式 0、颜色 `0xFF111827`、强度 150）当时已与真机一致，未改。时间是文本，**锁定比例与宽/高已在同日移除**——固定高度会裁掉大字号和自定义字体，位置改由「距顶部」控制。
 
 尺寸单位是 dp 绝对值。**锁定比例**开启时用一个缩放滑杆（时间用字号）等比调整；关闭后出现宽、高两个滑杆，封面在这种模式下按居中裁切填充，所以宽高比不同不会变形只会裁切。
 
@@ -58,6 +60,42 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 覆盖层把三元素算尺寸的逻辑集中在 `LockScreenOverlay.measureElements()`：锁定比例取默认尺寸乘百分比，解锁则取各自 dp 值，`0` 表示跟随默认。间距统一成「距上一个元素」：时间=距内容区顶部、封面=距时间、播放器=距封面，默认值与改版前完全一致。
 
 **改完参数后重启 SystemUI 才稳妥**：覆盖层在 `create()` 时读一次配置。自「熄屏唤醒防闪」之后 `ACTION_SCREEN_OFF` 不再撤层，场景若仍存活就会继续沿用旧参数——灭屏再亮屏**不一定**生效，只有场景已被销毁（解锁、关闭模块、锁屏根视图分离）后重建才会读到新值。没有做实时重建——在锁屏期间动态增删 SystemUI 视图风险不可控。
+
+### 左侧通知栏下拉：改成直接禁用该手势（当前方案）
+
+**目标**：锁屏沉浸场景显示期间，不响应左侧下拉（通知栏），从源头避免重叠；右侧控制中心不受影响。
+
+**为什么不再做「状态检测」**：左边通知栏是否展开，试过两个信号，都被真机证伪：
+
+| 信号 | 为什么不能用 |
+| --- | --- |
+| 通知栈（`NotificationStackScrollLayout`）的可见性 | 亮屏、锁屏重排、我们自己的 `restoreChangedViews()` 都会改它 → 误判后状态永久卡住，**沉浸场景彻底消失且不恢复** |
+| `notification_panel` 的可见性 | 真机日志显示**亮屏后 76ms 它自己就变 VISIBLE**（它表示「锁屏在显示、通知栏可下拉」，不是「拉下来了」）→ 每次亮屏把刚恢复的场景再藏掉，表现为「原生屏保 + 沉浸式闪一下」 |
+
+**根因确实是 z 序**（这也是「左重叠、右正常」的原因）。`uiautomator dump` + 模块自打的 `Window tree:` 显示窗口根的子节点顺序为 `notification_panel` → … → `control_center_container` → `keyguard_root_view`，自绘层挂在最后一个子节点（画在最上）→ 压在左侧通知栏之上，但在右侧控制中心之下。
+
+**当前做法：在通知面板的触摸入口吃掉左半屏手势。** 自绘层压在面板之上且不消费整块触摸，所以手势仍会派发到面板；在面板的 `dispatchTouchEvent` / `onInterceptTouchEvent` / `onTouchEvent` 上挂 Xposed 钩子，沉浸场景显示期间对**左半屏的 ACTION_DOWN** 直接返回 false（当作没处理）→ 通知栏不会展开。右侧控制中心在独立容器 `control_center_container`，不经过这个视图，所以照旧可用。
+
+**踩过的坑（不要再犯）：钩继承来的方法必须判 `thisObject`。** `NotificationPanelView` **没有覆写** `dispatchTouchEvent`，`panelClass.getMethod("dispatchTouchEvent", …)` 返回的是**框架基类 `android.view.View` 的实现**。钩它等于给 SystemUI 里**所有 View** 装钩子：第一版没有 `thisObject` 判定，结果把左半屏的触摸**全部**吃掉——播放器的 ◀ 播放/暂停（横跨屏幕中线左侧）和「展开通知」按钮（居中）一起失灵。修法是在 `beforeHookedMethod` 里第一行就 `if (hook.thisObject != leftShadePanel) return;`，只处理面板自己。`findTouchMethod()` 会优先取类自己声明的方法，但退回继承实现是常态，所以这个判定**必须**保留。
+
+同理，**不要把这些放进触摸路径**：曾经为了找可靠信号，在 pre-draw 守卫里每帧读 12 个视图属性 + 反射调用 7 个 getter（`Shade watch:` / `Expansion getters:`），既耗 CPU 又诱导后人用不可靠信号；手势拦截落地后已整体删除。
+
+判断「场景正在显示」用的是模块自己的状态（`sceneShowing()` = 有场景 ∧ 未 suspend ∧ 前台可见 ∧ 锁屏周期），**不依赖任何系统视图的可见性**。
+
+**代价（已知并接受）**：左半屏起始的「上滑解锁」也会被吃掉。右半屏、指纹、电源键不受影响。因此配置里带一个开关：
+
+- 外观 → 播放器 → **锁屏禁止左下拉**（`Config.BLOCK_LEFT_SHADE`，默认开）
+- 开关**每次手势现读**，改完立即生效，不需要重建场景或重启 SystemUI
+
+真机核对：
+
+```bash
+adb -s 1b3a7d8 logcat -d | grep -E "Left-shade touch block armed|Left-shade gesture consumed"
+# armed    → 钩子装上了（含面板真实类名）
+# consumed → 每次成功吃掉的手势，带 x 坐标与序号
+```
+
+**铁律**：不改 `suspend()` / `resume()` 内部时序（那是「熄屏秒显 + 解锁撤层」的地基，改过就出「快速开关屏露原屏保」回归）。
 
 ### 改配置后必须重启 SystemUI
 
@@ -74,7 +112,15 @@ adb -s 1b3a7d8 shell "ps -A -o PID,ETIME,NAME | grep -i com.android.systemui"
 adb -s 1b3a7d8 logcat -d | grep "Elements: clock="
 ```
 
-**本机重启 SystemUI 的限制**：`adb shell am force-stop com.android.systemui` 返回成功但进程不死（HyperOS 保护），`su` 从 adb shell 不可用（SukiSU 未放行）。因此只能二选一：在 Vector 里重启 SystemUI，或重启设备。重启后确认 `Keyguard root attached` / `Module enabled=true` 出现，说明模块已重新注入。
+**本机怎么重启 SystemUI**（2026-10-06 实测，从 adb 就能做，不需要 root）：
+
+```bash
+adb -s 1b3a7d8 shell am crash com.android.systemui    # ← 有效：SystemUI 会立刻以新 PID 重启
+adb -s 1b3a7d8 shell am force-stop com.android.systemui   # 无效：返回成功但进程不死（HyperOS 保护）
+adb -s 1b3a7d8 shell su -c 'killall com.android.systemui' # 不可用：su 未放行 shell（SukiSU）
+```
+
+`am crash` 会让 SystemUI 进程崩掉并自动重启，实测 PID 立刻变化、模块重新注入。重启后确认这三行出现，说明模块已重新注入：`SystemUI root constructor hook installed` → `Keyguard root attached` → `Module enabled=true`。重启后确认 `Keyguard root attached` / `Module enabled=true` 出现，说明模块已重新注入。
 
 **顺序很重要：先装 APK，再重启 SystemUI。** 装之前重启等于白重启。
 
