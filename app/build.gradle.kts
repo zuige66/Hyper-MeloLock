@@ -1,3 +1,6 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -23,9 +26,48 @@ android {
         compose = true
     }
 
+    // 发布签名：口令只放在仓库根的 keystore.properties（.gitignore 已排除 *.keystore 与该文件）。
+    // 文件不存在时（例如 CI 或别人克隆仓库）release 构建会直接用 debug 签名，不会报错——
+    // 但那样打出来的是未正式签名的包，不能上传 Release。
+    val keystoreFile = rootProject.file("keystore.properties")
+    signingConfigs {
+        if (keystoreFile.exists()) {
+            val props = Properties().apply {
+                FileInputStream(keystoreFile).use { load(it) }
+            }
+            create("release") {
+                storeFile = rootProject.file(props.getProperty("STORE_FILE"))
+                storePassword = props.getProperty("STORE_PASSWORD")
+                keyAlias = props.getProperty("KEY_ALIAS")
+                keyPassword = props.getProperty("KEY_PASSWORD")
+                // Android 16 只需要 v2/v3，但第三方安装器/备份工具仍可能去读 v1，全部签上最省心。
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+    buildTypes {
+        release {
+            // 不开混淆：这是个 Xposed 模块，Hook 与 ROM 内部视图都靠类名/方法名字符串定位，
+            // 开 ProGuard/R8 收益极小、风险不小。
+            isMinifyEnabled = false
+            if (signingConfigs.findByName("release") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_21
         targetCompatibility = JavaVersion.VERSION_21
+    }
+
+    lint {
+        // 迁入的 HyperIsland 多语言资源里有第三方库遗留的 ExtraTranslation（如 values-ar 里的
+        // androidx_startup），不是本项目能改的源头。release 构建不该被它们拦住。
+        checkReleaseBuilds = false
+        abortOnError = false
     }
 
     packaging {

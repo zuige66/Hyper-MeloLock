@@ -2,6 +2,12 @@
 
 独立的 Android Vector/LSPosed 模块；不修改 Cool Music 或其他播放器。只给 `com.android.systemui` 注入一个锁屏视图适配器。媒体发现、封面和播放控制使用 Android `MediaSessionManager` / `MediaController`。当前仅为指定真机构建开放，默认关闭。
 
+- **仓库**：<https://github.com/zuige66/Hyper-MeloLock>
+- **下载**：Releases 页 <https://github.com/zuige66/Hyper-MeloLock/releases>（`app-release.apk`，正式签名）
+- **许可**：AGPL-3.0（见 `LICENSE`）
+
+> 当前唯一验证设备是下面那台 Redmi Note 9 Pro；模块按**精确构建指纹**门禁（`Config.deviceSupported()`），换机型不会生效。
+
 ## 已核实的设备
 
 2026-10-06 通过 ADB 读取：
@@ -80,7 +86,9 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 
 同理，**不要把这些放进触摸路径**：曾经为了找可靠信号，在 pre-draw 守卫里每帧读 12 个视图属性 + 反射调用 7 个 getter（`Shade watch:` / `Expansion getters:`），既耗 CPU 又诱导后人用不可靠信号；手势拦截落地后已整体删除。
 
-判断「场景正在显示」用的是模块自己的状态（`sceneShowing()` = 有场景 ∧ 未 suspend ∧ 前台可见 ∧ 锁屏周期），**不依赖任何系统视图的可见性**。
+判断「场景正在显示」用的是模块自己的状态（`sceneShowing()` = 场景存在 ∧ 未 suspend ∧ 锁屏周期），**不依赖任何系统视图的可见性**。
+
+**`sceneShowing()` 里绝对不能带「播放器页在前」（`playerSceneVisible`）**：展开通知时它会被置 false，但场景（模糊背景 + 时钟）仍在锁屏上，此时左下拉照样会拉出原生通知面板 → 原生锁屏时钟和我们的时钟就重叠出现了（真机踩过，日志表现为展开期间 `Left-shade gesture consumed` 一条都没有）。判据必须是「场景是否还占着锁屏」。
 
 **代价（已知并接受）**：左半屏起始的「上滑解锁」也会被吃掉。右半屏、指纹、电源键不受影响。因此配置里带一个开关：
 
@@ -123,22 +131,31 @@ adb -s 1b3a7d8 logcat -d | grep -E "Left-shade touch block armed|Left-shade gest
 
 现在改成一次**共享元素的位移过渡**：
 
-1. **`sharedOffsetY()`**：取通知列表里第一张高度够大的卡片（通常是原生媒体卡）与自绘播放器卡片的
-   屏幕坐标差（夹在 ±220dp 内），得到"目的地"位移；没完成布局时回退 `-dp(52)`。
+1. **`measureSwapOffset()`**：取通知列表里第一张高度够大的卡片（通常是原生媒体卡）与自绘播放器卡片的
+   屏幕坐标差，**上限 `dp(96)`**；没完成布局时回退 `-dp(52)`。
+   上限是后加的：实测这个偏移很容易量到 600px 以上，按原值让卡片飞过去会**穿过时钟区域**再回来，
+   看起来就是「时间闪一下」。而且**测量值每次不同**（真机日志展开 `-605px` vs 返回 `-228px`），
+   所以展开时量一次存进 `lastSwapOffset`，返回时复用它——两个方向必须对称。
 2. **展开**：播放器卡沿该位移滑向目的地，`alpha → 0`、`scale → 0.94`（220ms）；封面走 35% 位移（180ms）；
-   通知栈以 `alpha 0 → 1`、18% 位移**延迟 70ms** 淡入（210ms）。两段运动同向，读起来是同一个控件换了地方。
-3. **返回**：同样反向——通知沿原方向淡出（150ms），播放器从目的地滑回原位伴 scale 0.94 → 1（延迟 40ms、240ms）。
+   通知栈以 `alpha 0 → 1`、18% 位移**延迟 70ms** 淡入（210ms），期间给通知栈开硬件层
+   （`beginNotificationsLayer()`，300ms 后 Handler 兜底拆除）。
+3. **返回**：通知**直接收起，不做淡出**；播放器从目的地滑回原位伴 `scale 0.94 → 1`（延迟 40ms、240ms）。
 
-两个实现约束（都踩过）：
+三个"看起来不对"的坑：
 
-- **`swappingPages` 闸门**：pre-draw 守卫每帧按 `expanded` 强制设置通知栈可见性，返回时 `expanded` 已
-  翻 false，不设闸门会把淡出中的通知瞬间按成 INVISIBLE，动画一帧都看不到。`beginPageSwap()` 用
-  **Handler 兜底**（不是 `ViewPropertyAnimator` 回调——解锁期间动画回调可能不推进）。
-- **动画属性必须复位**：`restore()` 和 `finishPageSwap` 都要把通知栈的 `alpha/translationY` 归位，
-  否则下次 `show()` 出来的是一张全透明的通知列表。
+- **返回时不要淡入 `foreground`**（真机反馈「切回播放器时间闪一下」的**真凶**）：前景（含时钟）
+  在通知页一直是显示的，旧代码把它从 `alpha 0` 淡入 180ms，等于让时钟先消失再回来。只让封面和
+  卡片滑进来就够。
+- **返回时通知不做淡出**：淡出层正好盖在时钟区域上，那一层任何合成抖动看起来都是「时间在闪」。
+- **`bringToFront()` 不要每帧调**：pre-draw 守卫每帧调用它会让窗口根每帧 `requestLayout`，
+  是切页掉帧的实打实来源。现在走 `ensureOnTop()`，只有确实不在最上层时才动 z 序。
+
+另一个独立的泄漏（用户反馈"桌面左下拉会露出原屏保时间"）：`suspended`（场景实例保留但置 GONE）期间，
+系统在**桌面下拉通知栏**时会把原生锁屏时钟重新显示出来。所以 suspended 分支里**继续按住原生时钟层**
+（`hideNativeClockLayers`），但**绝不碰壁纸层**（解锁动画要靠它，隐藏会露黑底）。
 
 日志：`Page swap: to notifications, shared offset=<n>px` / `Page swap: back to player, shared offset=<n>px`。
-**如果 offset 一直是回退值（-52dp 附近），说明测量没生效**，要检查 `notifications` 的取值与布局时机。
+**两个值应该一致**（有缓存）；一直等于回退值（-52dp 附近）说明测量没生效。
 
 ### 改配置后必须重启 SystemUI
 
@@ -194,7 +211,34 @@ adb -s 1b3a7d8 shell su -c 'killall com.android.systemui' # 不可用：su 未�
 
 ## 构建与安装
 
-使用 JDK 17+、Android SDK 36 和 Gradle 9.4.1。执行 `./gradlew :app:assembleDebug`（Windows 为 `./gradlew.bat :app:assembleDebug`），产物为 `app/build/outputs/apk/debug/app-debug.apk`。若 SDK 未自动找到，设置 `ANDROID_HOME`。
+使用 JDK 21、Android SDK 36 和项目自带的 Gradle Wrapper。
+
+```bash
+./gradlew.bat :app:assembleDebug      # 调试包：app/build/outputs/apk/debug/app-debug.apk
+./gradlew.bat :app:assembleRelease    # 发布包：app/build/outputs/apk/release/app-release.apk
+```
+
+### 发布签名
+
+Release 用仓库根的 `melolock-release.keystore`（PKCS12，10 年有效）签名，口令放在 `keystore.properties`。**这两个文件都在 `.gitignore` 里，绝不进仓库**——密钥与口令丢了就无法再给同一个应用升级，请自行另存备份。
+
+```properties
+STORE_FILE=melolock-release.keystore
+STORE_PASSWORD=<口令>
+KEY_ALIAS=melolock
+KEY_PASSWORD=<口令>
+```
+
+`app/build.gradle.kts` 只在 `keystore.properties` 存在时才创建 `release` signingConfig；没有它时 release 构建照样能跑（回退到 debug 签名），但**那样的包不能上传 Release**。正式签名目前是 v1 + v2 + v3 全签，证书指纹：
+
+```
+SHA-1:   2B:73:26:5B:F5:0D:BA:65:76:A7:75:8C:55:23:40:CD:C5:4E:C1:F7
+SHA-256: 65:7C:4D:30:52:BC:13:18:98:1E:65:F6:7E:8B:0A:DD:DE:E6:72:01:DB:AC:92:A1:86:F2:E8:58:69:53:D0:FC
+```
+
+校验方式：`apksigner verify --print-certs -v app/build/outputs/apk/release/app-release.apk`。
+
+**Release 不开混淆**：这是 Xposed 模块，Hook 与 ROM 内部视图都靠类名/方法名字符串定位，R8 收益极小、风险不小。另外迁入的 HyperIsland 多语言资源里有第三方库遗留的 `ExtraTranslation`，所以 `lint.checkReleaseBuilds` 关掉了，否则 release 会被它们拦住。
 
 Windows 上 `:app:dexBuilderDebug` 偶尔会以 `Unable to delete directory ... project_dex_archive` 或 `desugar_graph\\...\\graph.bin (拒绝访问)` 失败：这是杀毒/索引进程仍占用刚生成的 `.dex`，不是代码问题（Kotlin 与 Java 编译此时已通过）。删掉被占用的中间目录后重跑即可，必要时降并发：
 
@@ -369,3 +413,11 @@ adb -s 1b3a7d8 reboot
 16. 2026-10-06 解锁残留治本：**前景层改挂锁屏根视图** + **播放即预建**。用户截图显示解锁瞬间「壁纸已出、前景组件（大时钟/大封面/播放器卡片/通知按钮）完整残留」——根因是背景层挂在锁屏根视图（`HyperOSKeyguardRootView`），被系统解锁动画直接带走；而前景层挂在窗口根视图，不跟系统动画走，只能等我们自己的淡出，过程完全不同步。改为把 `foreground` 与 `notificationButton` 也挂到锁屏根视图：系统退场动画把整个锁屏根（背景+前景+按钮）一起带走，各层消失时机完全同步。通知栈仍在窗口根，展开通知时自然盖在锁屏根之上。`restore()` 的 removeView 判据同步改为锁屏根。
 
     同时实现「播放即预建」：`render()` 在解锁态（桌面）收到有效媒体快照且场景不存在时，直接 `preCreate()` 把场景建好并置 GONE + `suspended`——**一点播放歌曲，锁屏场景就绪**，之后锁屏/熄屏/亮屏都不再走 `create()`。`pre-draw` 守卫在 suspended 且未锁屏时完全不介入，桌面上不会误显示。
+
+17. 2026-10-06 **左侧下拉改为直接堵手势** + `thisObject` 事故修复。状态检测路线两次被真机证伪（通知栈可见性、`notification_panel` 可见性），改为在通知面板（`id/notification_panel`）的触摸入口挂 Xposed 钩子，沉浸场景显示期间把左半屏 `ACTION_DOWN` 返回 false。第一版漏了 `hook.thisObject != leftShadePanel` 判定：面板类没覆写 `dispatchTouchEvent`，`getMethod` 拿到的是框架 `View` 的实现 → 等于给 SystemUI **所有 View** 装钩，把播放器上曲/播放暂停与「展开通知」按钮一起吃掉。修复后只在面板实例上生效。开关 `Config.BLOCK_LEFT_SHADE`（默认开），每次手势现读。
+
+18. 2026-10-06 **切歌不再退回原生锁屏**。真机日志显示换歌时 App 会先摘掉 metadata 里的封面 bitmap、只留 URI（且是 `https://`，`ContentResolver` 读不了 → `FileNotFoundException`），约 300ms 后才补齐；期间会话也可能短暂不合格。旧代码三条路径一起撤层：解码失败清空 `lastReady`、会话一不合格立刻下发 null（→ `restore("render-no-session")`）、置空 `current` 注销回调。改为**失败/超时保留上一帧** + **1500ms 宽限期** + **空窗期按包名重新挂回会话**。
+
+19. 2026-10-06 **播放器页 ↔ 通知页共享元素切换**，并修掉三个真机反馈：① 展开通知后左下拉仍能拉出通知（`sceneShowing()` 不该带 `playerSceneVisible`）；② 桌面下拉露出原屏保时间（suspended 期间要继续按住原生时钟层，但不碰壁纸层）；③ 切回播放器时间闪一下（真凶是返回时把含时钟的 `foreground` 从 alpha 0 淡入）。附带：位移上限收到 96dp 且展开/返回复用同一值、`bringToFront()` 换成 `ensureOnTop()`（避免每帧 `requestLayout`）。
+
+20. 2026-10-07 **首个 Release**：仓库推送到 <https://github.com/zuige66/Hyper-MeloLock>，v0.2.0 正式签名 APK（v1+v2+v3）发布到 Releases。补 `.gitignore`（签名密钥、`.workbuddy/`、临时截图）。

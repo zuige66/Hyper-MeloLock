@@ -4,3 +4,14 @@ app/build/
 local.properties
 .idea/
 *.iml
+
+# 签名密钥：绝对不能进仓库
+keystore.properties
+*.keystore
+*.jks
+
+# 会话/AI 工作数据，不属于发布内容
+.workbuddy/
+
+# 临时调试截图（仓库里的图标源图 hyper-melolock.png 除外）
+hmsc-*.png
