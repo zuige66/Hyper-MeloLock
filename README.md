@@ -97,6 +97,24 @@ adb -s 1b3a7d8 logcat -d | grep -E "Left-shade touch block armed|Left-shade gest
 
 **铁律**：不改 `suspend()` / `resume()` 内部时序（那是「熄屏秒显 + 解锁撤层」的地基，改过就出「快速开关屏露原屏保」回归）。
 
+### 切歌的空窗期：保住上一帧，不撤层
+
+真机日志显示，换歌时 App 会先**摘掉 metadata 里的封面 bitmap、只留 URI**，约 300ms 后才补齐新封面；这段时间内会话也可能短暂不合格（playbackState 为空或非 PLAYING）。三条旧的处理会把这个过渡态当成「播放停了」：
+
+| 旧行为 | 后果 |
+| --- | --- |
+| 封面 URI 解码失败就 `lastReady = null` 并下发 `onMedia(null)` | 后续 refresh 全部落到「无缓存」，最后被判成无会话 → 撤层 |
+| 会话一不合格立刻下发 `onMedia(null)` | `render()` 走 `restore("render-no-session")`，**露原生锁屏** |
+| 会话不合格时把 `current` 置空（注销回调） | 新封面到达时没人唤醒，只能等下一次「活动会话变化」事件 |
+
+现在统一在 `MediaSource` 里收敛处理：
+
+1. **封面解不出来 ≠ 播放停了**（SystemUI 常常读不到 App 给的 `content://` 权限或私有文件）：保留上一帧继续显示，超时也一样保留，等 App 补齐；
+2. **会话失去给 1500ms 宽限期**（`SESSION_GRACE_MS`）：期间继续交出上一帧，超时确认没会话才回退；真的暂停另有分支保持画面；
+3. **空窗期按包名继续跟踪会话**（日志 `Empty gap detected; keep tracking …`），保住 `MediaController` 回调，新封面一到就立刻刷新。
+
+对应日志只有三行，一眼可判：`Session unavailable … keeping last frame up to 1500ms` / `Empty gap detected` / `Media ready from bitmap title=<新歌>`。**验收标准：切歌全程不应出现 `restore reason=render-no-session` 与 `create()`。**
+
 ### 改配置后必须重启 SystemUI
 
 这是本项目最容易误判成 bug 的地方：**Hook 代码是注入 SystemUI 进程执行的，装完新 APK 不重启 SystemUI，跑的还是旧代码。**

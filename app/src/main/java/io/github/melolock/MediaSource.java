@@ -51,6 +51,24 @@ final class MediaSource {
     private MediaController pendingArtworkController;
     private boolean started;
     private int generation;
+    /**
+     * 失去有效会话后的宽限期。切歌时 App 会先把 metadata 里的封面 bitmap 摘掉、甚至把会话
+     * 短暂置为不可用（实测 300ms 左右才补齐），这一瞬间「没会话」是过渡态而不是真的停了。
+     * 立刻撤回就露原生锁屏，所以先挺住上一帧，超时确认没有会话才回退。
+     */
+    private static final long SESSION_GRACE_MS = 1500;
+    private boolean graceScheduled;
+    // 用方法引用而不是 lambda 体：`listener` 在构造函数里赋值，直接在字段初始化器的 lambda 体里
+    // 引用它会报「可能尚未初始化变量」。
+    private final Runnable sessionLost = this::announceLost;
+    private void announceLost() {
+        graceScheduled = false;
+        lastReady = null;
+        pendingArtworkUri = null;
+        pendingArtworkController = null;
+        Log.i(TAG, "No session for " + SESSION_GRACE_MS + "ms; overlay falls back");
+        listener.onMedia(null);
+    }
     private final MediaController.Callback controllerCallback = new MediaController.Callback() {
         @Override public void onMetadataChanged(MediaMetadata metadata) { refresh(); }
         @Override public void onPlaybackStateChanged(PlaybackState state) { refresh(); }
@@ -81,6 +99,7 @@ final class MediaSource {
         lastReady = null;
         pendingArtworkUri = null;
         pendingArtworkController = null;
+        cancelGrace();
     }
     void close() { stop(); artworkWorker.shutdownNow(); }
     private void refresh() {
@@ -92,8 +111,9 @@ final class MediaSource {
         Snapshot snapshot = null;
         String artworkUri = null;
         MediaController pausedSession = null;
+        List<MediaController> sessions = null;
         try {
-            List<MediaController> sessions = manager.getActiveSessions(null);
+            sessions = manager.getActiveSessions(null);
             for (MediaController candidate : sessions) {
                 if (!Config.packageAllowed(context, candidate.getPackageName())) continue;
                 PlaybackState state = candidate.getPlaybackState();
@@ -125,6 +145,19 @@ final class MediaSource {
         } catch (RuntimeException error) { snapshot = null; selected = null; }
         // 暂停时也要继续跟踪会话：否则会注销回调，用户点「播放」后锁屏不会更新。
         MediaController tracked = selected != null ? selected : pausedSession;
+        if (tracked == null && lastReady != null && lastReady.controller != null && sessions != null) {
+            // 切歌空窗期会话暂时「不合格」（metadata / playbackState 为空），但 App 还在。
+            // 若就此把 current 置空会注销回调，之后新封面再到达就没人唤醒我们了——真机现象是
+            // 「切歌瞬间掉回原生锁屏、要靠下一次会话列表变化才回来」。按包名重新挂上去继续监听。
+            String previousPackage = lastReady.controller.getPackageName();
+            for (MediaController candidate : sessions) {
+                if (previousPackage.equals(candidate.getPackageName()) && Config.packageAllowed(context, previousPackage)) {
+                    tracked = candidate;
+                    Log.i(TAG, "Empty gap detected; keep tracking " + previousPackage + " for the next track");
+                    break;
+                }
+            }
+        }
         if (current != tracked) {
             if (current != null) current.unregisterCallback(controllerCallback);
             current = tracked;
@@ -134,6 +167,7 @@ final class MediaSource {
             lastReady = snapshot;
             pendingArtworkUri = null;
             pendingArtworkController = null;
+            cancelGrace();
             Log.i(TAG, "Media ready from bitmap in " + elapsed(refreshStart) + "ms title=" + snapshot.title);
             listener.onMedia(snapshot);
         } else if (selected != null && artworkUri != null) {
@@ -154,11 +188,12 @@ final class MediaSource {
             pendingArtworkController = controller;
             main.postDelayed(() -> {
                 if (uri.equals(pendingArtworkUri) && pendingArtworkController == controller && current == controller) {
-                    lastReady = null;
                     pendingArtworkUri = null;
                     pendingArtworkController = null;
-                    Log.w(TAG, "Artwork decode timed out; overlay may fall back");
-                    listener.onMedia(null);
+                    // 解不出来只是拿不到封面，不等于播放停了（很多 App 给的 URI 在 SystemUI 里
+                    // 读不到：content 权限或私有文件）。这里保留上一帧，让会话/下一首来决定。
+                    Log.w(TAG, "Artwork decode timed out; keeping previous frame");
+                    if (lastReady != null) listener.onMedia(lastReady);
                 }
             }, 5000);
             artworkWorker.execute(() -> {
@@ -166,11 +201,12 @@ final class MediaSource {
                 main.post(() -> {
                     if (current != controller || !uri.equals(pendingArtworkUri) || pendingArtworkController != controller) return;
                     if (art == null) {
-                        lastReady = null;
                         pendingArtworkUri = null;
                         pendingArtworkController = null;
-                        Log.i(TAG, "Artwork decode failed in " + elapsed(refreshStart) + "ms; overlay will fall back");
-                        listener.onMedia(null);
+                        // 同上：封面解失败不撤层。以前这里会清空 lastReady 并下发 null，
+                        // 后续 refresh 全部落到「无缓存」→ 最后被当成无会话把场景销毁。
+                        Log.w(TAG, "Artwork decode failed in " + elapsed(refreshStart) + "ms; keeping previous frame");
+                        if (lastReady != null) listener.onMedia(lastReady); else listener.onMedia(null);
                         return;
                     }
                     PlaybackState state = controller.getPlaybackState();
@@ -198,7 +234,19 @@ final class MediaSource {
                         pausedState.getState() == PlaybackState.STATE_PLAYING);
             }
             Log.i(TAG, "Session paused in " + elapsed(refreshStart) + "ms; keeping last frame");
+            cancelGrace();
             listener.onMedia(lastReady);
+        } else if (lastReady != null) {
+            // 切歌/重连的空窗期：会话这一瞬间不合格，但上一帧还在。立刻下发 null 会让
+            // `render()` 走 `restore("render-no-session")` 撤层，用户看到的就是「切歌进原生
+            // 锁屏」。给一段宽限期继续显示上一帧，到期仍无会话才真的回退。
+            listener.onMedia(lastReady);
+            if (!graceScheduled) {
+                graceScheduled = true;
+                main.postDelayed(sessionLost, SESSION_GRACE_MS);
+            }
+            Log.i(TAG, "Session unavailable in " + elapsed(refreshStart) + "ms; keeping last frame up to "
+                    + SESSION_GRACE_MS + "ms title=" + lastReady.title);
         } else {
             lastReady = null;
             pendingArtworkUri = null;
@@ -207,24 +255,40 @@ final class MediaSource {
             listener.onMedia(null);
         }
     }
+    private void cancelGrace() {
+        if (!graceScheduled) return;
+        graceScheduled = false;
+        main.removeCallbacks(sessionLost);
+    }
     private static long elapsed(long start) { return android.os.SystemClock.elapsedRealtime() - start; }
     private Bitmap loadArt(String uriText) {
+        Uri uri = Uri.parse(uriText);
+        String target = (uri.getScheme() == null ? "?" : uri.getScheme()) + "://" + uri.getAuthority();
         try {
-            Uri uri = Uri.parse(uriText);
             BitmapFactory.Options bounds = new BitmapFactory.Options();
             bounds.inJustDecodeBounds = true;
             try (InputStream stream = context.getContentResolver().openInputStream(uri)) {
+                if (stream == null) { Log.w(TAG, "Artwork stream null: " + target); return null; }
                 BitmapFactory.decodeStream(stream, null, bounds);
             }
-            if (bounds.outWidth < 16 || bounds.outHeight < 16) return null;
+            if (bounds.outWidth < 16 || bounds.outHeight < 16) {
+                Log.w(TAG, "Artwork too small: " + target + " " + bounds.outWidth + "x" + bounds.outHeight);
+                return null;
+            }
             BitmapFactory.Options options = new BitmapFactory.Options();
             options.inSampleSize = 1;
             int largest = Math.max(bounds.outWidth, bounds.outHeight);
             while (largest / options.inSampleSize > 1024) options.inSampleSize *= 2;
             try (InputStream stream = context.getContentResolver().openInputStream(uri)) {
-                return BitmapFactory.decodeStream(stream, null, options);
+                Bitmap decoded = BitmapFactory.decodeStream(stream, null, options);
+                if (decoded == null) Log.w(TAG, "Artwork decode returned null: " + target);
+                return decoded;
             }
-        } catch (Exception error) { return null; }
+        } catch (Exception error) {
+            // 打印原因：多数情况是 content:// 的读取权限不属于 SystemUI，或 URI 指向 App 私有文件。
+            Log.w(TAG, "Artwork open failed: " + target + " " + error);
+            return null;
+        }
     }
     private static String text(CharSequence value) { return value == null ? "" : value.toString(); }
 }
