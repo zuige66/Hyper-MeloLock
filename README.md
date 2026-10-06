@@ -115,6 +115,31 @@ adb -s 1b3a7d8 logcat -d | grep -E "Left-shade touch block armed|Left-shade gest
 
 对应日志只有三行，一眼可判：`Session unavailable … keeping last frame up to 1500ms` / `Empty gap detected` / `Media ready from bitmap title=<新歌>`。**验收标准：切歌全程不应出现 `restore reason=render-no-session` 与 `create()`。**
 
+### 播放器页 ↔ 通知页的切换动效（共享元素）
+
+两页之间有两个"播放器"：自绘的播放器卡片，和通知列表里的原生媒体通知卡。以前 `showNotifications()`
+只是 `show(notifications)` 让通知**瞬间满不透明出现**，而播放器还在跑 220ms 的淡出 → 两者并列，
+就是用户看到的"通知先出来、播放器还没消失"。
+
+现在改成一次**共享元素的位移过渡**：
+
+1. **`sharedOffsetY()`**：取通知列表里第一张高度够大的卡片（通常是原生媒体卡）与自绘播放器卡片的
+   屏幕坐标差（夹在 ±220dp 内），得到"目的地"位移；没完成布局时回退 `-dp(52)`。
+2. **展开**：播放器卡沿该位移滑向目的地，`alpha → 0`、`scale → 0.94`（220ms）；封面走 35% 位移（180ms）；
+   通知栈以 `alpha 0 → 1`、18% 位移**延迟 70ms** 淡入（210ms）。两段运动同向，读起来是同一个控件换了地方。
+3. **返回**：同样反向——通知沿原方向淡出（150ms），播放器从目的地滑回原位伴 scale 0.94 → 1（延迟 40ms、240ms）。
+
+两个实现约束（都踩过）：
+
+- **`swappingPages` 闸门**：pre-draw 守卫每帧按 `expanded` 强制设置通知栈可见性，返回时 `expanded` 已
+  翻 false，不设闸门会把淡出中的通知瞬间按成 INVISIBLE，动画一帧都看不到。`beginPageSwap()` 用
+  **Handler 兜底**（不是 `ViewPropertyAnimator` 回调——解锁期间动画回调可能不推进）。
+- **动画属性必须复位**：`restore()` 和 `finishPageSwap` 都要把通知栈的 `alpha/translationY` 归位，
+  否则下次 `show()` 出来的是一张全透明的通知列表。
+
+日志：`Page swap: to notifications, shared offset=<n>px` / `Page swap: back to player, shared offset=<n>px`。
+**如果 offset 一直是回退值（-52dp 附近），说明测量没生效**，要检查 `notifications` 的取值与布局时机。
+
 ### 改配置后必须重启 SystemUI
 
 这是本项目最容易误判成 bug 的地方：**Hook 代码是注入 SystemUI 进程执行的，装完新 APK 不重启 SystemUI，跑的还是旧代码。**

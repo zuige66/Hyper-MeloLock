@@ -119,6 +119,31 @@ final class LockScreenOverlay {
     /** 诊断用：每次成功吃掉一次下拉手势打一行。 */
     private int shadeBlockedCount;
     private ViewGroup notifications, windowRoot;
+    /**
+     * 播放器页 ↔ 通知页切换动画进行中。
+     *
+     * pre-draw 守卫每帧都会按 `expanded` 强制设置通知栈可见性；返回播放器时 `expanded` 已经翻成
+     * false，若不加这个闸门守卫会立刻把它按成 INVISIBLE，淡出动画一帧都看不到——那就是
+     * 「通知瞬间整齐消失、播放器才姗姗来迟」的来源。
+     */
+    private boolean swappingPages;
+    private final Runnable finishPageSwap = () -> {
+        swappingPages = false;
+        if (notifications == null) return;
+        if (expanded) return;   // 期间又切回通知页了：交给正在进行的入场动画，别抢
+        // 动画可能因为熄屏/解锁根本没跑完：这里必须把 alpha/位移复位，
+        // 否则下一次 show() 出来的是一张全透明的通知栈。
+        notifications.animate().cancel();
+        notifications.setAlpha(1f);
+        notifications.setTranslationY(0f);
+        hide(notifications);
+    };
+    private void beginPageSwap(int durationMs) {
+        swappingPages = true;
+        main.removeCallbacks(finishPageSwap);
+        // 兜底用 Handler，不能依赖 ViewPropertyAnimator 的回调（解锁期间动画回调可能不推进）。
+        main.postDelayed(finishPageSwap, durationMs);
+    }
     private FrameLayout background;
     private FrameLayout foreground;
     private LinearLayout content;
@@ -172,7 +197,8 @@ final class LockScreenOverlay {
                     hideNativeWallpaperLayers(root);
                     hideNativeClockLayers(root);
                     if (!expanded) {
-                        hide(notifications);
+                        // 切回播放器时通知正在淡出，让动画跑完再隐藏。
+                        if (!swappingPages) hide(notifications);
                     } else {
                         show(notifications);
                     }
@@ -513,22 +539,48 @@ final class LockScreenOverlay {
 
     private void showMusic() {
         boolean animateIn = !playerSceneVisible;
-        expanded = false; hideNativeWallpaperLayers(root); hideNativeClockLayers(root); hide(notifications);
+        boolean returning = expanded;   // 从通知页返回：走共享元素的反向动画
+        expanded = false; hideNativeWallpaperLayers(root); hideNativeClockLayers(root);
         foreground.animate().cancel(); cover.animate().cancel(); playerCard.animate().cancel();
         cover.setVisibility(View.VISIBLE); playerCard.setVisibility(View.VISIBLE);
         foreground.setVisibility(View.VISIBLE); foreground.bringToFront(); notificationButton.bringToFront(); notificationButton.setText("展开通知");
         // hideNativeClockLayers() must never retain an old hidden state on the
         // module clock after a page transition or a SystemUI pre-draw pass.
         immersiveClock.setVisibility(View.VISIBLE); immersiveClock.setAlpha(1f);
+        // 必须在卡片 VISIBLE 之后测量，否则 GONE 状态下 getLocationOnScreen 全返回 0。
+        int shared = sharedOffsetY();
+        if (returning) {
+            // 通知沿来的方向退回去并淡出，随后播放器从「通知里那张卡」的位置滑回来。
+            beginPageSwap(180);
+            Log.i(TAG, "Page swap: back to player, shared offset=" + shared + "px");
+            if (notifications != null) {
+                notifications.animate().cancel();
+                notifications.setAlpha(1f); notifications.setTranslationY(0f);
+                notifications.animate().alpha(0f).translationY(shared * 0.18f).setDuration(150)
+                        .setInterpolator(fastOutSlowIn()).start();
+            }
+        } else {
+            hide(notifications);
+        }
         if (animateIn) {
             foreground.setAlpha(0f);
-            cover.setAlpha(0f); cover.setTranslationY(-dp(24));
-            playerCard.setAlpha(0f); playerCard.setTranslationY(-dp(36));
+            if (returning) {
+                cover.setAlpha(0f); cover.setTranslationY(shared * 0.35f);
+                playerCard.setAlpha(0f); playerCard.setTranslationY(shared);
+                playerCard.setScaleX(0.94f); playerCard.setScaleY(0.94f);
+            } else {
+                cover.setAlpha(0f); cover.setTranslationY(-dp(24));
+                playerCard.setAlpha(0f); playerCard.setTranslationY(-dp(36));
+                playerCard.setScaleX(1f); playerCard.setScaleY(1f);
+            }
             foreground.animate().alpha(1f).setDuration(180).start();
-            cover.animate().alpha(1f).translationY(0f).setStartDelay(20).setDuration(220).start();
-            playerCard.animate().alpha(1f).translationY(0f).setStartDelay(40).setDuration(240).start();
+            cover.animate().alpha(1f).translationY(0f).setStartDelay(20).setDuration(220)
+                    .setInterpolator(fastOutSlowIn()).start();
+            playerCard.animate().alpha(1f).translationY(0f).scaleX(1f).scaleY(1f).setStartDelay(40).setDuration(240)
+                    .setInterpolator(fastOutSlowIn()).start();
         } else {
-            foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f); playerCard.setAlpha(1f); playerCard.setTranslationY(0f);
+            foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f);
+            playerCard.setAlpha(1f); playerCard.setTranslationY(0f); playerCard.setScaleX(1f); playerCard.setScaleY(1f);
         }
         playerSceneVisible = true;
         main.removeCallbacks(progressTicker); main.post(progressTicker);
@@ -541,14 +593,51 @@ final class LockScreenOverlay {
         show(notifications); hideNativeWallpaperLayers(root); hideNativeClockLayers(root);
         immersiveClock.setVisibility(View.VISIBLE); immersiveClock.setAlpha(1f);
         foreground.animate().cancel(); cover.animate().cancel(); playerCard.animate().cancel();
-        foreground.setVisibility(View.VISIBLE); foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f); playerCard.setAlpha(1f); playerCard.setTranslationY(0f);
-        playerCard.animate().translationY(-dp(52)).alpha(0f).setDuration(220).withEndAction(() -> {
-            if (expanded && playerCard != null) playerCard.setVisibility(View.GONE);
-        }).start();
-        cover.animate().translationY(-dp(28)).alpha(0f).setDuration(180).withEndAction(() -> {
-            if (expanded && cover != null) cover.setVisibility(View.GONE);
-        }).start();
+        foreground.setVisibility(View.VISIBLE); foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f);
+        playerCard.setAlpha(1f); playerCard.setTranslationY(0f); playerCard.setScaleX(1f); playerCard.setScaleY(1f);
+        int shared = sharedOffsetY();
+        Log.i(TAG, "Page swap: to notifications, shared offset=" + shared + "px");
+        // 播放器带着轻微缩小滑向「列表里那张媒体卡」的位置并淡出；通知随后沿同一方向淡入。
+        // 两段运动方向一致 → 读起来是同一个控件换了地方，而不是两张卡片各管各的出现/消失。
+        playerCard.animate().alpha(0f).translationY(shared).scaleX(0.94f).scaleY(0.94f).setDuration(220)
+                .setInterpolator(fastOutSlowIn())
+                .withEndAction(() -> { if (expanded && playerCard != null) playerCard.setVisibility(View.GONE); }).start();
+        cover.animate().alpha(0f).translationY(shared * 0.35f).setDuration(180).setInterpolator(fastOutSlowIn())
+                .withEndAction(() -> { if (expanded && cover != null) cover.setVisibility(View.GONE); }).start();
+        if (notifications != null) {
+            // 关键：不能像以前那样 show() 之后就完事——那样通知是瞬间满不透明出现，
+            // 而播放器还在 220ms 的淡出里，两者并列就是用户看到的「错位」。
+            notifications.animate().cancel();
+            notifications.setAlpha(0f); notifications.setTranslationY(shared * 0.18f);
+            notifications.animate().alpha(1f).translationY(0f).setStartDelay(70).setDuration(210)
+                    .setInterpolator(fastOutSlowIn()).start();
+        }
         notificationButton.bringToFront(); notificationButton.setText("返回播放器");
+    }
+
+    /**
+     * 「两个播放器」之间的共享位移：通知列表里第一张足够高的卡片（通常是原生媒体通知卡）
+     * 相对自绘播放器卡片的屏幕纵向偏移。两页切换时让卡片沿这个位移移动 + 缩放，
+     * 视觉上就是同一个控件在换位置。
+     */
+    private int sharedOffsetY() {
+        int fallback = -dp(52);
+        if (notifications == null || playerCard == null) return fallback;
+        View destination = notifications;
+        for (int i = 0; i < notifications.getChildCount(); i++) {
+            View child = notifications.getChildAt(i);
+            if (child != null && child.getVisibility() == View.VISIBLE && child.getHeight() > dp(56)) { destination = child; break; }
+        }
+        int[] to = new int[2], from = new int[2];
+        destination.getLocationOnScreen(to);
+        playerCard.getLocationOnScreen(from);
+        int delta = to[1] - from[1];
+        if (delta == 0) return fallback;   // 尚未完成布局时测量值不可信
+        int limit = dp(220);
+        return Math.max(-limit, Math.min(limit, delta));
+    }
+    private static android.view.animation.Interpolator fastOutSlowIn() {
+        return new android.view.animation.PathInterpolator(0.4f, 0f, 0.2f, 1f);
     }
 
     private void transport(int action) {
@@ -575,7 +664,12 @@ final class LockScreenOverlay {
     /** 撤层。reason 只用于诊断日志，用来定位「上滑露壁纸 / 亮屏先见原生锁屏」由哪条路径触发。 */
     private void restore(String reason) {
         if (foreground != null || background != null || shown != null) Log.i(TAG, "restore reason=" + reason + " " + state());
-        main.removeCallbacks(progressTicker); main.removeCallbacks(finishSuspend); cancelArtworkFallback(); unregisterGuard(); shown = null; expanded = false; playerSceneVisible = false; restoreChangedViews();
+        main.removeCallbacks(progressTicker); main.removeCallbacks(finishSuspend); main.removeCallbacks(finishPageSwap);
+        swappingPages = false;
+        // 页面切换动画可能只跑到一半就被撤层：复位通知栈的动画属性，
+        // 否则下次 show() 出来的是一张全透明的通知列表。
+        if (notifications != null) { notifications.animate().cancel(); notifications.setAlpha(1f); notifications.setTranslationY(0f); }
+        cancelArtworkFallback(); unregisterGuard(); shown = null; expanded = false; playerSceneVisible = false; restoreChangedViews();
         if (foreground != null && foreground.getParent() == root) root.removeView(foreground);
         if (background != null && background.getParent() == root) root.removeView(background);
         if (notificationButton != null && notificationButton.getParent() == foreground) foreground.removeView(notificationButton);
