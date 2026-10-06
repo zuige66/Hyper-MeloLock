@@ -13,5 +13,5 @@ keystore.properties
 # 会话/AI 工作数据，不属于发布内容
 .workbuddy/
 
-# 临时调试截图（仓库里的图标源图 hyper-melolock.png 除外）
+# 临时调试截图（README 展示图在 docs/images/，不受此规则影响）
 hmsc-*.png
