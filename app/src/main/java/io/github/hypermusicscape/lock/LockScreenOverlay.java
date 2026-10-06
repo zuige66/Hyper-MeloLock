@@ -5,18 +5,22 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.database.ContentObserver;
 import android.graphics.Color;
 import android.graphics.RenderEffect;
 import android.graphics.Shader;
+import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
+import android.media.session.PlaybackState;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
 import android.text.TextUtils;
+import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -29,8 +33,15 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextClock;
 import android.widget.TextView;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 
 /** Exact-build OS3 adapter. The player card is module-owned because OS3 owns its native header. */
 final class LockScreenOverlay {
@@ -44,11 +55,21 @@ final class LockScreenOverlay {
     private final ContentObserver switchObserver;
     private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context ignored, Intent intent) {
-            if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction()) || Intent.ACTION_USER_PRESENT.equals(intent.getAction())) restore();
-            else if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())) updateSwitch();
+            if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
+                // Keep the already-rendered scene in SystemUI memory.  Rebuilding it
+                // only after SCREEN_ON is what caused the one-second stock-screen flash.
+                main.removeCallbacks(progressTicker);
+            } else if (Intent.ACTION_USER_PRESENT.equals(intent.getAction())) {
+                restore();
+            } else if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())) {
+                if (shown != null && foreground != null && !expanded) showMusic();
+                updateSwitch();
+            }
         }
     };
     private final IdentityHashMap<View, ViewState> changedViews = new IdentityHashMap<>();
+    /** 内置圆体数字字体的缓存：roundness → Typeface，整个 SystemUI 进程只解一次。 */
+    private static final Map<Integer, Typeface> roundedTypefaces = new HashMap<>();
     private final ViewTreeObserver.OnPreDrawListener keyguardGuard;
     private boolean observing;
     private Boolean lastEnabled;
@@ -58,12 +79,22 @@ final class LockScreenOverlay {
     private ViewGroup notifications, windowRoot;
     private FrameLayout background;
     private FrameLayout foreground;
+    private LinearLayout playerCard;
     private ImageView baseBlur, blur, cover, cardArt;
     private TextView title, artist, previous, playPause, next, elapsed, duration;
     private ProgressBar progress;
     private Button notificationButton;
     private MediaSource.Snapshot shown;
     private ViewTreeObserver guardObserver;
+    private boolean playerSceneVisible;
+    private boolean artworkFallbackPending;
+    private final Runnable artworkFallback = () -> {
+        artworkFallbackPending = false;
+        if (foreground != null && shown != null) {
+            Log.i(TAG, "Artwork update timed out; native lockscreen restored");
+            restore();
+        }
+    };
     private final Runnable progressTicker = new Runnable() {
         @Override public void run() {
             updateProgress();
@@ -131,8 +162,17 @@ final class LockScreenOverlay {
     private void render(MediaSource.Snapshot snapshot) {
         PowerManager power = context.getSystemService(PowerManager.class);
         KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
-        if (!Config.enabled(context) || snapshot == null || !root.isAttachedToWindow() || power == null || !power.isInteractive()
+        if (!Config.enabled(context) || !root.isAttachedToWindow() || power == null
                 || keyguard == null || !keyguard.isKeyguardLocked()) { restore(); return; }
+        // A metadata callback may arrive while the display is off.  Preserve the
+        // last valid scene until wake-up instead of exposing the stock wallpaper.
+        if (!power.isInteractive()) return;
+        if (snapshot == null) {
+            if (foreground != null && shown != null && isStillPlaying()) deferArtworkFallback();
+            else restore();
+            return;
+        }
+        cancelArtworkFallback();
         if (foreground == null && !create()) return;
         registerGuard();
         shown = snapshot;
@@ -145,6 +185,8 @@ final class LockScreenOverlay {
     }
 
     private boolean create() {
+        Map<String, Integer> elements = Config.elementValues(context);
+        ElementGeometry geometry = measureElements(elements);
         clock = find(root, CLOCK);
         View top = root.getRootView();
         windowRoot = top instanceof ViewGroup ? (ViewGroup) top : null;
@@ -186,30 +228,144 @@ final class LockScreenOverlay {
 
         LinearLayout content = new LinearLayout(context);
         content.setOrientation(LinearLayout.VERTICAL); content.setGravity(Gravity.CENTER_HORIZONTAL);
-        FrameLayout.LayoutParams contentParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP); contentParams.topMargin = dp(52);
+        FrameLayout.LayoutParams contentParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP); contentParams.topMargin = dp(elem(elements, Config.CLOCK_SPACING));
         foreground.addView(content, contentParams);
         TextClock time = new TextClock(context);
-        time.setFormat12Hour("h:mm"); time.setFormat24Hour("HH:mm"); time.setTextColor(Color.WHITE); time.setTextSize(52); time.setGravity(Gravity.CENTER);
-        content.addView(time, new LinearLayout.LayoutParams(-1, -2));
+        time.setFormat12Hour("h:mm"); time.setFormat24Hour("HH:mm"); time.setGravity(Gravity.CENTER);
+        time.setTextSize(elem(elements, Config.CLOCK_SIZE));
+        time.setTextColor(elem(elements, Config.CLOCK_COLOR));
+        applyClockTypeface(time, elem(elements, Config.CLOCK_ROUNDNESS), elem(elements, Config.CLOCK_WEIGHT));
+        content.addView(time, new LinearLayout.LayoutParams(geometry.clockWidth, geometry.clockHeight));
         cover = new ImageView(context); cover.setScaleType(ImageView.ScaleType.CENTER_CROP); cover.setClipToOutline(true);
         GradientDrawable coverShape = new GradientDrawable(); coverShape.setColor(Color.WHITE); coverShape.setCornerRadius(dp(Config.cornerRadiusDp(context))); cover.setBackground(coverShape);
-        int artSize = Math.min((int) (context.getResources().getDisplayMetrics().widthPixels * .72f), dp(360));
-        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(artSize, artSize); artParams.topMargin = dp(24); artParams.bottomMargin = dp(20);
+        LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(geometry.coverWidth, geometry.coverHeight);
+        artParams.topMargin = dp(elem(elements, Config.COVER_SPACING));
         content.addView(cover, artParams);
-        LinearLayout card = buildPlayerCard();
-        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(-1, dp(178)); cardParams.leftMargin = dp(12); cardParams.rightMargin = dp(12);
-        content.addView(card, cardParams);
+        playerCard = buildPlayerCard(elements);
+        LinearLayout.LayoutParams cardParams = new LinearLayout.LayoutParams(geometry.cardWidth, geometry.cardHeight);
+        cardParams.topMargin = dp(elem(elements, Config.CARD_SPACING));
+        content.addView(playerCard, cardParams);
         notificationButton = new Button(context); notificationButton.setText("展开通知");
         notificationButton.setOnClickListener(v -> { if (expanded) showMusic(); else showNotifications(); });
         FrameLayout.LayoutParams entry = new FrameLayout.LayoutParams(-2, dp(48), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL); entry.bottomMargin = dp(125);
         windowRoot.addView(notificationButton, entry);
+        // 诊断用：一眼看出本次创建实际用了哪套参数，避免把“未重启 SystemUI”误判成代码问题。
+        Log.i(TAG, "Elements: clock=" + elem(elements, Config.CLOCK_SIZE) + "sp w" + elem(elements, Config.CLOCK_WEIGHT)
+                + " round" + elem(elements, Config.CLOCK_ROUNDNESS) + " color" + elem(elements, Config.CLOCK_COLOR)
+                + " locked" + elem(elements, Config.CLOCK_LOCKED)
+                + " | cover=" + geometry.coverWidth + "x" + geometry.coverHeight + "px r"
+                + Config.cornerRadiusDp(context) + " p" + elem(elements, Config.COVER_SCALE)
+                + " | card=" + geometry.cardWidth + "x" + geometry.cardHeight + "px r"
+                + elem(elements, Config.CARD_RADIUS) + " p" + elem(elements, Config.CARD_SCALE)
+                + " | spacing=" + elem(elements, Config.CLOCK_SPACING) + "/"
+                + elem(elements, Config.COVER_SPACING) + "/" + elem(elements, Config.CARD_SPACING));
         Log.i(TAG, "Custom media card overlay created");
         return true;
     }
 
-    private LinearLayout buildPlayerCard() {
+    private static int elem(Map<String, Integer> elements, String key) {
+        Integer value = elements.get(key);
+        return value == null ? Config.elementDefault(key) : value;
+    }
+
+    private static int clamp(int value, int min, int max) { return Math.max(min, Math.min(max, value)); }
+
+    private static final class ElementGeometry {
+        int clockWidth, clockHeight, coverWidth, coverHeight, cardWidth, cardHeight;
+    }
+
+    /**
+     * 计算三元素的最终像素尺寸。
+     *
+     * 锁定比例时取默认尺寸乘缩放百分比；解锁时长宽取各自的 dp 值。
+     * 任何异常取值都只会退回默认值，不会让覆盖层失败。
+     */
+    private ElementGeometry measureElements(Map<String, Integer> elements) {
+        DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        int screenWidthDp = Math.max(1, Math.round(metrics.widthPixels / metrics.density));
+        ElementGeometry geometry = new ElementGeometry();
+
+        if (elem(elements, Config.CLOCK_LOCKED) != 0) {
+            geometry.clockWidth = -1;  // MATCH_PARENT
+            geometry.clockHeight = -2; // WRAP_CONTENT
+        } else {
+            geometry.clockWidth = dp(clamp(elem(elements, Config.CLOCK_WIDTH), 40, 4096));
+            geometry.clockHeight = dp(clamp(elem(elements, Config.CLOCK_HEIGHT), 20, 4096));
+        }
+
+        int defaultArt = Math.min((int) (metrics.widthPixels * .72f), dp(360));
+        if (elem(elements, Config.COVER_LOCKED) != 0) {
+            int size = Math.max(dp(40), defaultArt * clamp(elem(elements, Config.COVER_SCALE), 10, 300) / 100);
+            geometry.coverWidth = size;
+            geometry.coverHeight = size;
+        } else {
+            geometry.coverWidth = dp(clamp(elem(elements, Config.COVER_WIDTH), 40, 4096));
+            geometry.coverHeight = dp(clamp(elem(elements, Config.COVER_HEIGHT), 40, 4096));
+        }
+
+        int baseCardWidthDp = Math.max(160, screenWidthDp - 24);
+        if (elem(elements, Config.CARD_LOCKED) != 0) {
+            int scale = clamp(elem(elements, Config.CARD_SCALE), 10, 300);
+            geometry.cardWidth = dp(Math.max(160, baseCardWidthDp * scale / 100));
+            geometry.cardHeight = dp(Math.max(60, 178 * scale / 100));
+        } else {
+            geometry.cardWidth = dp(clamp(elem(elements, Config.CARD_WIDTH), 160, 4096));
+            geometry.cardHeight = dp(clamp(elem(elements, Config.CARD_HEIGHT), 60, 4096));
+        }
+        return geometry;
+    }
+
+    /**
+     * 圆润度 0 用系统字体；1 / 2 用内置的开源圆体数字字体（OFL）。
+     *
+     * 粗细（wght）通过可变字体轴设置，失败则退回系统字体，绝不因为字体问题撤掉沉浸页。
+     */
+    private void applyClockTypeface(TextView view, int roundness, int weight) {
+        int wght = clamp(weight, 100, 1000);
+        try {
+            Typeface rounded = roundTypeface(roundness);
+            view.setTypeface(rounded != null
+                    ? rounded
+                    : Typeface.create(Typeface.SANS_SERIF, wght, false));
+            view.getPaint().setFontVariationSettings("'wght' " + wght);
+        } catch (Throwable error) {
+            Log.w(TAG, "Clock typeface not applied: " + error);
+        }
+    }
+
+    /** 从本模块 APK 的 assets 解出圆体字体并缓存；SystemUI 读不到模块资源时返回 null。 */
+    private Typeface roundTypeface(int roundness) {
+        if (roundness <= 0) return null;
+        Typeface cached = roundedTypefaces.get(roundness);
+        if (cached != null) return cached;
+        try {
+            File target = new File(context.getCacheDir(), "hmsc_clock_round_" + roundness + ".ttf");
+            if (target.length() == 0) {
+                ApplicationInfo info = context.getPackageManager().getApplicationInfo(Config.PACKAGE, 0);
+                try (ZipFile zip = new ZipFile(info.sourceDir)) {
+                    ZipEntry entry = zip.getEntry("assets/fonts/clock_round_" + roundness + ".ttf");
+                    if (entry == null) return null;
+                    try (InputStream in = zip.getInputStream(entry);
+                         OutputStream out = new FileOutputStream(target)) {
+                        byte[] buffer = new byte[8192];
+                        int read;
+                        while ((read = in.read(buffer)) > 0) out.write(buffer, 0, read);
+                    }
+                }
+            }
+            cached = Typeface.createFromFile(target);
+            roundedTypefaces.put(roundness, cached);
+            Log.i(TAG, "Rounded clock font loaded: level=" + roundness);
+            return cached;
+        } catch (Throwable error) {
+            Log.w(TAG, "Rounded clock font unavailable (" + roundness + "): " + error);
+            return null;
+        }
+    }
+
+    private LinearLayout buildPlayerCard(final Map<String, Integer> elements) {
         LinearLayout card = new LinearLayout(context); card.setOrientation(LinearLayout.VERTICAL); card.setPadding(dp(16), dp(14), dp(16), dp(10));
-        GradientDrawable cardBackground = new GradientDrawable(); cardBackground.setColor(0xF2181818); cardBackground.setCornerRadius(dp(28)); card.setBackground(cardBackground);
+        GradientDrawable cardBackground = new GradientDrawable(); cardBackground.setColor(0xF2181818); cardBackground.setCornerRadius(dp(elem(elements, Config.CARD_RADIUS))); card.setBackground(cardBackground);
         LinearLayout header = new LinearLayout(context); header.setGravity(Gravity.CENTER_VERTICAL); card.addView(header, new LinearLayout.LayoutParams(-1, dp(64)));
         cardArt = new ImageView(context); cardArt.setScaleType(ImageView.ScaleType.CENTER_CROP); cardArt.setClipToOutline(true);
         GradientDrawable artShape = new GradientDrawable(); artShape.setCornerRadius(dp(12)); artShape.setColor(0xFF404040); cardArt.setBackground(artShape);
@@ -236,13 +392,31 @@ final class LockScreenOverlay {
     }
 
     private void showMusic() {
+        boolean animateIn = !playerSceneVisible;
         expanded = false; hide(clock); hide(secondaryClock); hide(nativeBackgroundLayer); hide(nativeForegroundLayer); hide(notifications);
+        foreground.animate().cancel(); playerCard.animate().cancel();
         foreground.setVisibility(View.VISIBLE); foreground.bringToFront(); notificationButton.bringToFront(); notificationButton.setText("展开通知");
+        if (animateIn) {
+            foreground.setAlpha(0f);
+            playerCard.setAlpha(0f); playerCard.setTranslationY(-dp(36));
+            foreground.animate().alpha(1f).setDuration(180).start();
+            playerCard.animate().alpha(1f).translationY(0f).setStartDelay(40).setDuration(240).start();
+        } else {
+            foreground.setAlpha(1f); playerCard.setAlpha(1f); playerCard.setTranslationY(0f);
+        }
+        playerSceneVisible = true;
         main.removeCallbacks(progressTicker); main.post(progressTicker);
     }
 
     private void showNotifications() {
-        expanded = true; main.removeCallbacks(progressTicker); restoreChangedViews(); foreground.setVisibility(View.GONE);
+        expanded = true; playerSceneVisible = false; main.removeCallbacks(progressTicker); restoreChangedViews();
+        foreground.animate().cancel(); playerCard.animate().cancel();
+        foreground.setAlpha(1f); playerCard.setAlpha(1f); playerCard.setTranslationY(0f);
+        // Let the stock notification page fade in beneath this card while it moves upward.
+        foreground.animate().alpha(0f).setDuration(220).withEndAction(() -> {
+            if (expanded && foreground != null) { foreground.setVisibility(View.GONE); foreground.setAlpha(1f); }
+        }).start();
+        playerCard.animate().translationY(-dp(52)).alpha(0f).setDuration(220).start();
         notificationButton.bringToFront(); notificationButton.setText("返回播放器");
     }
 
@@ -264,11 +438,11 @@ final class LockScreenOverlay {
     }
 
     private void restore() {
-        main.removeCallbacks(progressTicker); unregisterGuard(); shown = null; expanded = false; restoreChangedViews();
+        main.removeCallbacks(progressTicker); cancelArtworkFallback(); unregisterGuard(); shown = null; expanded = false; playerSceneVisible = false; restoreChangedViews();
         if (foreground != null && foreground.getParent() == windowRoot) windowRoot.removeView(foreground);
         if (background != null && background.getParent() == root) root.removeView(background);
         if (notificationButton != null && notificationButton.getParent() == windowRoot) windowRoot.removeView(notificationButton);
-        background = null; foreground = null; notificationButton = null; clock = null; secondaryClock = null; nativeBackgroundLayer = null; nativeForegroundLayer = null; notifications = null; windowRoot = null;
+        background = null; foreground = null; playerCard = null; notificationButton = null; clock = null; secondaryClock = null; nativeBackgroundLayer = null; nativeForegroundLayer = null; notifications = null; windowRoot = null;
     }
 
     private void registerGuard() {
@@ -284,6 +458,22 @@ final class LockScreenOverlay {
     private void restoreChangedViews() {
         for (Map.Entry<View, ViewState> entry : changedViews.entrySet()) { entry.getKey().setVisibility(entry.getValue().visibility); entry.getKey().setImportantForAccessibility(entry.getValue().accessibility); }
         changedViews.clear();
+    }
+    private boolean isStillPlaying() {
+        try {
+            PlaybackState state = shown.controller.getPlaybackState();
+            return state != null && state.getState() == PlaybackState.STATE_PLAYING;
+        } catch (RuntimeException error) { return false; }
+    }
+    private void deferArtworkFallback() {
+        if (artworkFallbackPending) return;
+        artworkFallbackPending = true;
+        main.postDelayed(artworkFallback, 2500);
+        Log.i(TAG, "Keeping previous artwork while the next track updates");
+    }
+    private void cancelArtworkFallback() {
+        artworkFallbackPending = false;
+        main.removeCallbacks(artworkFallback);
     }
     private TextView label(int color, int sizeSp, boolean bold) {
         TextView text = new TextView(context); text.setTextColor(color); text.setTextSize(sizeSp); text.setSingleLine(true); text.setEllipsize(TextUtils.TruncateAt.END);

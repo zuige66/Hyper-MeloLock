@@ -30,8 +30,8 @@
   - 告警卡仅在 `Config.deviceSupported()` 为假（设备构建指纹不在已验证列表内）时出现，与 `HookEntry` 的加载门禁同一判据。
   - 系统信息卡四行：系统版本、应用版本、Xposed 框架、设备型号。前三行中 Xposed 框架依赖 Vector/LSPosed 服务绑定（`XposedPrefsSyncApp.awaitReady()`）；legacy 模块拿不到服务时显示 `未知`。
 - **音乐应用**：对齐 HyperIsland「应用」页 —— 搜索栏加应用行（图标、名称、包名、开关），整行点击也可切换。列表扫描声明 `MediaBrowserService` 的已安装应用；未设置表示允许全部，取消勾选后落成显式白名单，全部取消后锁屏不再接管任何播放器。
-- **外观**：设置封面圆角、深色/浅色/纯色背景、遮罩颜色和强度。配置通过只读 `ContentProvider` 同步给 SystemUI。
-- **开发者**：开发者与联系方式、项目链接、开源说明。**作者署名与全部外链当前留空**，页面显示「待填写」并置灰不可点击。
+- **外观**：锁屏三元素（时间 / 专辑封面 / 播放器）的编辑器，外加原有的背景设置。配置通过只读 `ContentProvider` 同步给 SystemUI。
+- **开发者**：应用图标 + 名称 + 版本、开发者 `zuige`、GitHub `zuige66`、开源说明。**联系方式与捐赠/教程/资源外链仍留空**，对应行显示「待填写」并置灰不可点击。
 
 四页共用的卡片来自 HyperIsland 原版实现：`OverviewPage.kt` 里原先私有的 `StatusGrid` / `StatusCard` / `StatCard` / `InfoCard` / 告警卡已提升为 `internal` 的 `OverviewStatusGrid` / `OverviewStatusCard` / `OverviewStatCard` / `OverviewInfoCard` / `OverviewAlertCard`，只把标题与数值参数化，视觉与交互代码未改动。HyperIsland 自己的首页（`OverviewPage`）改为调用同一批组件，因此不存在第二份样式实现。音乐应用页的行样式沿用 HyperIsland `AppsPage` 的 `Card` + `BasicComponent` 组合，图标复用 `InstalledAppsRepository` 的缓存与解码逻辑。
 
@@ -40,6 +40,40 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 原有 Java/Xposed 锁屏适配链路保留；Compose 页面通过公开的 `Config` API 与同一 ContentProvider 配置同步。`Config.java` 新增 `selectedPackages()`、`allPackagesDisabled()`、`enabledAppCount()`、`deviceSupported()` 四个只读辅助方法，用于区分「未设置（允许全部）」与「已全部取消」两种空集，没有改动任何配置键或读写语义。构建环境已升级到 AGP 9.3.1、Gradle 9.5、Kotlin/Compose 2.4.10。
 
 界面文案现状：这四个页面沿用原有实现，标题与说明文本直接写中文，只有导航栏、系统信息行和链接行使用 `strings.xml` 资源；`待填写` 也是硬编码中文。后续要补多语言时需要一并抽到资源。
+
+### 锁屏元素编辑（时间 / 专辑封面 / 播放器）
+
+`外观` 页把锁屏上三个自绘元素拆成三张卡，每张卡都能调大小、圆角和间距：
+
+| 元素 | 控制项 | 默认值 | 备注 |
+| --- | --- | --- | --- |
+| 时间 | 锁定比例、字号、宽/高、粗细、字体圆润、颜色、间距 | 字号 52、粗细 400、圆润 0、白色、间距 52dp | 宽/高只在解锁比例后出现，是文本框尺寸，不拉伸字形 |
+| 专辑封面 | 锁定比例、缩放或宽/高、圆角、间距 | 缩放 100%、R角 18dp、间距 24dp | 圆角沿用原有的 `corner_radius_dp`，首页数据卡读的就是它 |
+| 播放器 | 锁定比例、缩放或宽/高、圆角、间距 | 缩放 100%、R角 28dp、间距 20dp | 卡片宽度默认是「屏宽 − 24dp」 |
+
+尺寸单位是 dp 绝对值。**锁定比例**开启时用一个缩放滑杆（时间用字号）等比调整；关闭后出现宽、高两个滑杆，封面在这种模式下按居中裁切填充，所以宽高比不同不会变形只会裁切。
+
+配置实现：键名与默认值集中在 `Config.java` 的 `ELEMENT_DEFAULTS`，统一按字符串存取。`ConfigProvider` 新增 `elements` 路径（`content://io.github.hypermusicscape.lock.config/elements`），返回 key/value 两列，因此以后再加参数不需要改 Provider 的列投影。SystemUI 侧由 `Config.elementValues()` 一次查询解析成整数表，读不到时回落默认值，不会撤掉沉浸页。
+
+覆盖层把三元素算尺寸的逻辑集中在 `LockScreenOverlay.measureElements()`：锁定比例取默认尺寸乘百分比，解锁则取各自 dp 值，`0` 表示跟随默认。间距统一成「距上一个元素」：时间=距内容区顶部、封面=距时间、播放器=距封面，默认值与改版前完全一致。
+
+**改完需要灭屏再亮屏一次**：覆盖层在 `create()` 时读配置，且 `ACTION_SCREEN_OFF` 会 `restore()`，所以重新亮屏后会按新参数重建。没有做实时重建——在锁屏期间动态增删 SystemUI 视图风险不可控。
+
+### 时间字体的圆润与粗细
+
+文字没有几何圆角，Android 也没有「圆角字体」API。实测本机 `MiSansVF.ttf` 与 `MiSansLatinVF.ttf` 只有 `wght` 一个可变轴，`fonts.xml` 里也没有 `sans-serif-rounded`，所以「圆润度」只能靠换字体实现。
+
+做法是往 APK 里内置两个 OFL 开源圆体数字字体，`圆润` 下拉提供三档：
+
+| 档位 | 字体 | 来源 | 文件 |
+| --- | --- | --- | --- |
+| 0 直角 | 系统字体（MiSans / sans-serif） | 系统 | 无 |
+| 1 中等圆 | Quicksand（可变，wght 300–700） | Google Fonts，OFL-1.1 | `assets/fonts/clock_round_1.ttf`，122 KB |
+| 2 很圆 | Baloo 2（可变，wght 400–800） | Google Fonts，OFL-1.1 | `assets/fonts/clock_round_2.ttf`，667 KB |
+
+锁屏时间只渲染 `0-9` 和 `:`，所以这两个字体不覆盖中文也不影响显示，中文仍走系统字体。**粗细**用可变字体的 `wght` 轴实现，是 100–900 连续可调（`Paint.setFontVariationSettings`），档 0 走系统字体的 `wght`，档 1/2 走内置字体的 `wght` 区间。
+
+字体由 SystemUI 进程在首次需要时从模块 APK 的 `assets` 解出、写入自己的缓存目录再 `Typeface.createFromFile`（`LockScreenOverlay.roundTypeface()`），每个档位全进程只解一次；任何失败都会静默退回系统字体并打日志，绝不会因为字体问题撤掉沉浸页。
 
 为避免把 HyperIsland 的更新内容带入本项目，当前配置端已关闭启动时环境统计，并在最终 APK 中移除 `INTERNET` 权限。HyperIsland 的更新检查、预设云端下载和外部资源链接源码仍随迁入代码保留，但当前四页不会调用；APK 不声明安装权限，也不会自动安装其他 APK。
 
@@ -110,6 +144,8 @@ adb -s 1b3a7d8 install -r app/build/outputs/apk/debug/app-debug.apk
 
 用户已在真机验收“专辑封面 + 自绘播放器”布局：封面、时间、原生风格卡片、播放进度和通知入口均可显示。该验收版本已创建本地 Git 提交 `1ce2c93 feat: add immersive album and media player card`；工作目录原先没有 Git 仓库，因此该提交是新仓库的首个提交，仅包含 `README.md`、`LockScreenOverlay.java` 和 `MediaSource.java`，未纳入并行开发的 Compose 界面文件。截图同时发现底部快捷入口区域露出原壁纸。后续修复在锁屏根视图底部插入一层相同的模糊专辑图与遮罩，位于系统手电筒/相机快捷入口下方；窗口顶层交互场景仍保留底部空间，避免遮挡快捷入口和解锁手势。Debug 构建已通过，**待安装、重启及真机验收。**
 
+用户确认包含三段布局、全屏专辑背景和正常通知页切换的版本可用，已创建第二个本地 Git 提交 `e976aec feat: complete immersive layout and notification transition`。在此提交之后，通知切换改为 220 ms 的重叠过渡：恢复系统通知页时，自绘播放器卡片上移 52 dp 并淡出，背景场景同时淡出，通知页在下方出现；返回播放器页时卡片自上方滑回。切歌时，如果 `MediaSession` 仍报告播放状态但新封面元数据暂时为空，模块保留现有封面和背景最多 2.5 秒，等待新封面回调，避免短暂露出系统原壁纸；超时或播放停止仍恢复原生锁屏。Debug 构建已通过，**待安装、重启及真机验收。**
+
 ## 故障恢复
 
 优先在模块应用中关闭开关。无法操作应用时，从已授权的电脑停用模块应用，随后重启设备；恢复前保持停用：
@@ -125,6 +161,10 @@ adb -s 1b3a7d8 reboot
 
 本仓库按 AGPL-3.0 发布。仅参考 HyperMusicCover 的产品思路，没有复制其源码、资源或钩子；其澎湃 OS 4 适配未用于本项目。Vector 的 legacy Xposed API 用作 `compileOnly` 依赖，不打包到 APK。
 
+应用标识：应用名 `Hyper Music Scape Lock`（`values` / `values-zh` 的 `app_name`，其他语言回落到英文），启动器图标为仓库根目录的 `hyper-music-scape-lock.png`（已放入 `res/drawable-nodpi/ic_hmsc.png`）。它不是自适应图标，部分启动器可能加自己的遮罩。
+
+**第三方字体许可**：`app/src/main/assets/fonts/` 下的 `clock_round_1.ttf`（Quicksand）与 `clock_round_2.ttf`（Baloo 2）来自 Google Fonts，按 SIL Open Font License 1.1 授权，可随应用一起分发。OFL 要求分发时附带许可证全文并保留字体名称，**对外发布前需要把 OFL-1.1 全文一并放进仓库并在应用内可查看**（当前尚未加入，只在文档里记录）。
+
 ## 后续
 
 先完成上面的真机验收并修复观察到的问题，再增加其他系统版本的适配器和对应构建门禁。
@@ -135,3 +175,9 @@ adb -s 1b3a7d8 reboot
 2. 重新连接设备后按上面的安装命令刷入，重点看：状态卡点击切换是否可靠（这是模块唯一的开关入口）、两张数据卡的数字是否与「音乐应用」页勾选状态一致、数据卡点击跳页是否正确、暗色主题下绿色/红色状态卡对比度。
 3. 作者署名与三个外链常量留在 `LockScreenPages.kt` 末尾的 `TODO(作者信息)` 处，填上后对应行会自动从「待填写」置灰恢复为可点击。
 4. 中文文案目前硬编码在这四个页面里，补多语言时需抽到 `strings.xml`。
+
+5. 2026-10-06 第二轮：外观页加入三元素编辑器（时间/封面/播放器的大小·圆角·间距，时间的粗细·颜色·字体圆润），应用名与图标换成 Hyper Music Scape Lock，开发者填 `zuige` / `zuige66`，修复首页状态卡关掉后点不回来的 bug。构建通过、已装到 `1b3a7d8`，**锁屏实际效果待验收**：改完要灭屏再亮屏才生效，需确认时间三档字体是否真的换了字形、粗细是否连续可辨、封面宽高不同时的裁切、以及播放器卡片改尺寸后控件是否被压变形。
+
+6. `LockScreenOverlay.java` 在 2026-10-06 18:00 前后被本会话之外改动过（加入了播放器卡入场动画、封面超时回退、`deferArtworkFallback`）。本轮改动是在那份内容之上叠加的，两边的改动都保留了。**同一个文件不要并行编辑**，否则会互相覆盖。
+
+7. 2026-10-06 熄屏唤醒防闪：不再在 `ACTION_SCREEN_OFF` 时移除已经渲染的沉浸层，也不会因为熄屏期间的媒体回调撤掉它；`ACTION_SCREEN_ON` 先立即恢复缓存场景，再刷新 `MediaSession`。解锁、关闭模块、锁屏根视图分离，或亮屏后确认没有有效会话时仍恢复原生锁屏。该修复已完成 Debug 构建，待真机验证首次唤醒是否消除原生锁屏的一秒闪现。
