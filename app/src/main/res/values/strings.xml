@@ -1,6 +1,6 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Hyper MusicScapeLock</string>
+    <string name="app_name">Hyper MeloLock</string>
     <string name="preset_reset_config">Reset configuration</string>
     <string name="preset_reset_summary">The selected items will be reset to their default settings</string>
     <string name="preset_reset_success">Selected settings have been reset</string>

@@ -1,4 +1,4 @@
-package io.github.hypermusicscape.lock;
+package io.github.melolock;
 
 import android.app.Activity;
 import android.content.Intent;
@@ -46,10 +46,10 @@ public final class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.rgb(247, 248, 252));
         root.setPadding(dp(18), dp(18), dp(18), dp(10));
-        TextView title = text("Hyper Music Scape Lock", 28, TEXT);
+        TextView title = text("Hyper MeloLock", 28, TEXT);
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         root.addView(title);
-        root.addView(text("Hyper Music Scape Lock  ·  OS3", 14, MUTED), marginParams(-1, -2, 0, 4, 0, 12));
+        root.addView(text("Hyper MeloLock  ·  OS3", 14, MUTED), marginParams(-1, -2, 0, 4, 0, 12));
         LinearLayout tabs = new LinearLayout(this);
         tabs.setGravity(Gravity.CENTER);
         String[] names = {"首页", "音乐应用", "外观", "关于"};
@@ -78,7 +78,7 @@ public final class MainActivity extends Activity {
         status.setTypeface(null, android.graphics.Typeface.BOLD);
         hero.addView(status, marginParams(-1, -2, 0, 6, 0, 0));
         hero.addView(text("锁屏时显示正在播放的音乐，并保留系统解锁与紧急操作。", 15, MUTED));
-        toggle = button(Config.enabled(this) ? "关闭沉浸音乐锁屏" : "开启沉浸音乐锁屏", 16);
+        toggle = button(Config.enabled(this) ? "关闭MeloLock" : "开启MeloLock", 16);
         toggle.setOnClickListener(v -> { if (!Config.setEnabled(this, !Config.enabled(this))) Toast.makeText(this, "保存开关失败", Toast.LENGTH_SHORT).show(); refresh(); });
         hero.addView(toggle, marginParams(-1, dp(48), 0, 18, 0, 0));
         content.addView(hero);
@@ -155,13 +155,13 @@ public final class MainActivity extends Activity {
     private View aboutPage() {
         LinearLayout content = page(); LinearLayout hero = card(); hero.setGravity(Gravity.CENTER);
         TextView logo = text("HMSC", 34, BLUE); logo.setTypeface(null, android.graphics.Typeface.BOLD); hero.addView(logo);
-        hero.addView(text("Hyper Music Scape Lock", 19, TEXT), marginParams(-1, -2, 0, 5, 0, 0)); hero.addView(text("为 HyperOS 打造的沉浸音乐锁屏模块", 14, MUTED)); content.addView(hero);
-        LinearLayout developer = card(); addSection(developer, "开发者", "Hyper Music Scape Lock Team"); addSection(developer, "基于", "HyperIsland 的页面设计思路；模块逻辑保持本项目独立实现。");
+        hero.addView(text("Hyper MeloLock", 19, TEXT), marginParams(-1, -2, 0, 5, 0, 0)); hero.addView(text("为 HyperOS 打造的MeloLock模块", 14, MUTED)); content.addView(hero);
+        LinearLayout developer = card(); addSection(developer, "开发者", "Hyper MeloLock Team"); addSection(developer, "基于", "HyperIsland 的页面设计思路；模块逻辑保持本项目独立实现。");
         Button github = button("打开 GitHub 项目", 15); github.setOnClickListener(v -> open("https://github.com/1812z/HyperIsland")); developer.addView(github, marginParams(-1, dp(46), 0, 12, 0, 0)); content.addView(developer, marginParams(-1, -2, 0, 12, 0, 0));
         content.addView(text("开源许可证：AGPL-3.0（本项目）\nHyperIsland：MIT License", 13, MUTED)); return scroll(content);
     }
 
-    private void refresh() { if (toggle != null) toggle.setText(Config.enabled(this) ? "关闭沉浸音乐锁屏" : "开启沉浸音乐锁屏"); }
+    private void refresh() { if (toggle != null) toggle.setText(Config.enabled(this) ? "关闭MeloLock" : "开启MeloLock"); }
     @Override protected void onResume() { super.onResume(); refresh(); }
     private void showPage(int index) { pageHost.removeAllViews(); pageHost.addView(pages.get(index), new LinearLayout.LayoutParams(-1, -1)); }
     private LinearLayout page() { LinearLayout box = new LinearLayout(this); box.setOrientation(LinearLayout.VERTICAL); return box; }

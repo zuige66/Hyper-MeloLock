@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hyper MusicScapeLock</string>
+    <string name="app_name">Hyper MeloLock</string>
     <string name="preset_reset_config">还原配置</string>
     <string name="preset_reset_summary">选中的项目配置将恢复默认</string>
     <string name="preset_reset_success">所选配置已还原</string>

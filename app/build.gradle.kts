@@ -10,12 +10,12 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "io.github.hypermusicscape.lock"
+        applicationId = "io.github.melolock"
         minSdk = 36
         targetSdk = 37
         versionCode = 9
         versionName = "0.2.0"
-        testInstrumentationRunner = "io.github.hypermusicscape.lock.ToggleInstrumentation"
+        testInstrumentationRunner = "io.github.melolock.ToggleInstrumentation"
     }
 
     buildFeatures {

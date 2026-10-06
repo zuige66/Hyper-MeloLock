@@ -1,4 +1,4 @@
-package io.github.hypermusicscape.lock;
+package io.github.melolock;
 
 import android.content.Context;
 import android.database.Cursor;
@@ -12,7 +12,7 @@ import java.util.Map;
 import java.util.Set;
 
 public final class Config {
-    static final String PACKAGE = "io.github.hypermusicscape.lock";
+    static final String PACKAGE = "io.github.melolock";
     static final String AUTHORITY = PACKAGE + ".config";
     static final Uri URI = Uri.parse("content://" + AUTHORITY + "/state");
     static final Uri ELEMENTS_URI = Uri.parse("content://" + AUTHORITY + "/elements");
@@ -31,9 +31,6 @@ public final class Config {
     // 这样新增参数不需要再改 Provider 的列投影。
 
     public static final String CLOCK_SIZE = "clock_text_size_dp";
-    public static final String CLOCK_WIDTH = "clock_width_dp";
-    public static final String CLOCK_HEIGHT = "clock_height_dp";
-    public static final String CLOCK_LOCKED = "clock_aspect_locked";
     public static final String CLOCK_SPACING = "clock_spacing_dp";
     public static final String CLOCK_WEIGHT = "clock_weight";
     public static final String CLOCK_COLOR = "clock_color";
@@ -54,9 +51,6 @@ public final class Config {
     private static final Map<String, Integer> ELEMENT_DEFAULTS = new LinkedHashMap<>();
     static {
         ELEMENT_DEFAULTS.put(CLOCK_SIZE, 52);
-        ELEMENT_DEFAULTS.put(CLOCK_WIDTH, 0);
-        ELEMENT_DEFAULTS.put(CLOCK_HEIGHT, 0);
-        ELEMENT_DEFAULTS.put(CLOCK_LOCKED, 1);
         ELEMENT_DEFAULTS.put(CLOCK_SPACING, 52);
         ELEMENT_DEFAULTS.put(CLOCK_WEIGHT, 400);
         ELEMENT_DEFAULTS.put(CLOCK_COLOR, 0xFFFFFFFF);

@@ -1,4 +1,4 @@
-package io.github.hypermusicscape.lock;
+package io.github.melolock;
 
 import android.app.Activity;
 import android.app.Instrumentation;

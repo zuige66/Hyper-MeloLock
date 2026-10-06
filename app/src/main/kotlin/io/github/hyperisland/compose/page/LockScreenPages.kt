@@ -53,7 +53,7 @@ import io.github.hyperisland.compose.page.home.OverviewInfoCard
 import io.github.hyperisland.compose.page.home.OverviewStatusGrid
 import io.github.hyperisland.compose.service.HomeSystemInfo
 import io.github.hyperisland.compose.service.SystemInfoProvider
-import io.github.hypermusicscape.lock.Config
+import io.github.melolock.Config
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -240,9 +240,12 @@ internal fun LockMusicAppsPage() {
         load()
     }
     LaunchedEffect(Unit) {
-        if (apps.isEmpty()) {
-            if (repository.needsAppListPermission()) permissionLauncher.launch(APP_LIST_PERMISSION)
-            else load()
+        // 缺权限时一定要弹授权框（之前带了「列表为空」的额外条件，容易一直问不到），
+        // 拿到结果后由上面的回调再刷新列表。
+        if (repository.needsAppListPermission()) {
+            permissionLauncher.launch(APP_LIST_PERMISSION)
+        } else {
+            load()
         }
     }
 
@@ -370,21 +373,7 @@ internal fun LockAppearancePage() {
         item {
             SectionTitle("时间")
             Card {
-                PreferenceSwitch(
-                    title = "锁定比例",
-                    summary = "关闭后可分别调整宽度和高度",
-                    icon = null,
-                    checked = value(Config.CLOCK_LOCKED) != 0,
-                    onCheckedChange = { locked ->
-                        update(Config.CLOCK_LOCKED, if (locked) 1 else 0)
-                        if (!locked) seedSize(Config.CLOCK_WIDTH, Config.CLOCK_HEIGHT, screenWidthDp, 64)
-                    },
-                )
                 DpSlider("字号", value(Config.CLOCK_SIZE), 20..120, onCommit = { update(Config.CLOCK_SIZE, it) })
-                if (value(Config.CLOCK_LOCKED) == 0) {
-                    DpSlider("宽度", value(Config.CLOCK_WIDTH).coerceAtLeast(40), 40..600, onCommit = { update(Config.CLOCK_WIDTH, it) })
-                    DpSlider("高度", value(Config.CLOCK_HEIGHT).coerceAtLeast(20), 20..300, onCommit = { update(Config.CLOCK_HEIGHT, it) })
-                }
                 DpSlider("粗细", value(Config.CLOCK_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.CLOCK_WEIGHT, it) })
                 PreferenceDropdown(
                     title = "字体圆润",
@@ -402,7 +391,7 @@ internal fun LockAppearancePage() {
                     selectedIndex = CLOCK_COLORS.indexOf(value(Config.CLOCK_COLOR)).coerceAtLeast(0),
                     onSelectedIndexChange = { update(Config.CLOCK_COLOR, CLOCK_COLORS[it]) },
                 )
-                DpSlider("间距", value(Config.CLOCK_SPACING), 0..160, onCommit = { update(Config.CLOCK_SPACING, it) })
+                DpSlider("距顶部", value(Config.CLOCK_SPACING), 0..160, onCommit = { update(Config.CLOCK_SPACING, it) })
             }
         }
         item {
@@ -748,7 +737,7 @@ private const val PLACEHOLDER_TEXT = "待填写"
 /** HyperOS 上枚举全部应用需要的 MIUI 权限，与 HyperIsland 应用页一致。 */
 private const val APP_LIST_PERMISSION = "com.android.permission.GET_INSTALLED_APPS"
 
-private const val APP_LOG_TAG = "HyperMusicScapeLock[App]"
+private const val APP_LOG_TAG = "MeloLock[App]"
 
 private val PALETTE = intArrayOf(0xFF111827.toInt(), 0xFF253B80.toInt(), 0xFF5B2C83.toInt(), 0xFF14532D.toInt(), 0xFF000000.toInt())
 

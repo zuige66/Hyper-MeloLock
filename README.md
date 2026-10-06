@@ -1,4 +1,4 @@
-# 沉浸音乐锁屏（实验版）
+# Hyper MeloLock（实验版）
 
 独立的 Android Vector/LSPosed 模块；不修改 Cool Music 或其他播放器。只给 `com.android.systemui` 注入一个锁屏视图适配器。媒体发现、封面和播放控制使用 Android `MediaSessionManager` / `MediaController`。当前仅为指定真机构建开放，默认关闭。
 
@@ -29,7 +29,7 @@
   - 右数据卡为「封面圆角」，取 `Config.cornerRadiusDp()`；点击跳到「外观」页。
   - 告警卡仅在 `Config.deviceSupported()` 为假（设备构建指纹不在已验证列表内）时出现，与 `HookEntry` 的加载门禁同一判据。
   - 系统信息卡四行：系统版本、应用版本、Xposed 框架、设备型号。前三行中 Xposed 框架依赖 Vector/LSPosed 服务绑定（`XposedPrefsSyncApp.awaitReady()`）；legacy 模块拿不到服务时显示 `未知`。
-- **音乐应用**：对齐 HyperIsland「应用」页 —— 搜索栏加应用行（图标、名称、包名、开关），整行点击也可切换。列表扫描声明 `MediaBrowserService` 的已安装应用；未设置表示允许全部，取消勾选后落成显式白名单，全部取消后锁屏不再接管任何播放器。
+- **音乐应用**：对齐 HyperIsland「应用」页 —— 搜索栏加应用行（图标、名称、包名、开关），整行点击也可切换。**列表是全部已安装应用**（含系统应用，可用「显示系统应用」开关过滤），由用户自行勾选哪些是音乐播放器。首次进入表示允许全部；取消勾选后落成显式白名单，全部取消后锁屏不再接管任何播放器。HyperOS 上枚举全部应用需要 `com.android.permission.GET_INSTALLED_APPS`，**该权限必须在 Manifest 里显式声明**：申请一个未声明的权限，系统会直接返回拒绝、连授权框都不弹（这正是 2026-10-06 第一次改完列表为空、看不到授权框的原因）。进入该页时会自动申请，实测弹出 MIUI 的「获取已安装的应用信息」授权框。
 - **外观**：锁屏三元素（时间 / 专辑封面 / 播放器）的编辑器，外加原有的背景设置。配置通过只读 `ContentProvider` 同步给 SystemUI。
 - **开发者**：应用图标 + 名称 + 版本、开发者 `zuige`、GitHub `zuige66`、开源说明。**联系方式与捐赠/教程/资源外链仍留空**，对应行显示「待填写」并置灰不可点击。
 
@@ -53,11 +53,30 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 
 尺寸单位是 dp 绝对值。**锁定比例**开启时用一个缩放滑杆（时间用字号）等比调整；关闭后出现宽、高两个滑杆，封面在这种模式下按居中裁切填充，所以宽高比不同不会变形只会裁切。
 
-配置实现：键名与默认值集中在 `Config.java` 的 `ELEMENT_DEFAULTS`，统一按字符串存取。`ConfigProvider` 新增 `elements` 路径（`content://io.github.hypermusicscape.lock.config/elements`），返回 key/value 两列，因此以后再加参数不需要改 Provider 的列投影。SystemUI 侧由 `Config.elementValues()` 一次查询解析成整数表，读不到时回落默认值，不会撤掉沉浸页。
+配置实现：键名与默认值集中在 `Config.java` 的 `ELEMENT_DEFAULTS`，统一按字符串存取。`ConfigProvider` 新增 `elements` 路径（`content://io.github.melolock.config/elements`），返回 key/value 两列，因此以后再加参数不需要改 Provider 的列投影。SystemUI 侧由 `Config.elementValues()` 一次查询解析成整数表，读不到时回落默认值，不会撤掉沉浸页。
 
 覆盖层把三元素算尺寸的逻辑集中在 `LockScreenOverlay.measureElements()`：锁定比例取默认尺寸乘百分比，解锁则取各自 dp 值，`0` 表示跟随默认。间距统一成「距上一个元素」：时间=距内容区顶部、封面=距时间、播放器=距封面，默认值与改版前完全一致。
 
-**改完需要灭屏再亮屏一次**：覆盖层在 `create()` 时读配置，且 `ACTION_SCREEN_OFF` 会 `restore()`，所以重新亮屏后会按新参数重建。没有做实时重建——在锁屏期间动态增删 SystemUI 视图风险不可控。
+**改完参数后重启 SystemUI 才稳妥**：覆盖层在 `create()` 时读一次配置。自「熄屏唤醒防闪」之后 `ACTION_SCREEN_OFF` 不再撤层，场景若仍存活就会继续沿用旧参数——灭屏再亮屏**不一定**生效，只有场景已被销毁（解锁、关闭模块、锁屏根视图分离）后重建才会读到新值。没有做实时重建——在锁屏期间动态增删 SystemUI 视图风险不可控。
+
+### 改配置后必须重启 SystemUI
+
+这是本项目最容易误判成 bug 的地方：**Hook 代码是注入 SystemUI 进程执行的，装完新 APK 不重启 SystemUI，跑的还是旧代码。**
+
+2026-10-06 实测案例：外观页改完字号/粗细/封面缩放后，锁屏上「只有圆角生效，其他都不行」。查下来 `content query` 两条通道都返回了正确的新值，问题在于 SystemUI 进程启动时间早于 APK 安装时间，仍在跑不认识新键的旧覆盖层代码——旧代码只读 `corner_radius_dp`，所以正好只有圆角生效。
+
+排查这类问题先看两条命令：
+
+```bash
+# 进程启动时间是否晚于 APK 安装时间
+adb -s 1b3a7d8 shell "ps -A -o PID,ETIME,NAME | grep -i com.android.systemui"
+# 覆盖层每次创建都会打印本次实际取到的参数，有这一行才说明跑的是新代码
+adb -s 1b3a7d8 logcat -d | grep "Elements: clock="
+```
+
+**本机重启 SystemUI 的限制**：`adb shell am force-stop com.android.systemui` 返回成功但进程不死（HyperOS 保护），`su` 从 adb shell 不可用（SukiSU 未放行）。因此只能二选一：在 Vector 里重启 SystemUI，或重启设备。重启后确认 `Keyguard root attached` / `Module enabled=true` 出现，说明模块已重新注入。
+
+**顺序很重要：先装 APK，再重启 SystemUI。** 装之前重启等于白重启。
 
 ### 时间字体的圆润与粗细
 
@@ -80,7 +99,8 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 - 播放中的标准 MediaSession 提供标题、歌手、封面及上一首、暂停、下一首操作；支持封面 Bitmap 和 URI。无播放会话、封面无效、URI 读取失败时恢复原生锁屏。
 - 封面显示在中间，同一封面经 `RenderEffect` 模糊并加暗色遮罩作为背景。顶部用 `TextClock` 显示时间，下方显示播放控制。
 - 有媒体时收起原生时钟及通知栈；`展开通知` 按钮可恢复原生通知区域，`返回播放器` 可收起。原生解锁与紧急操作视图没有被移除，底部区域留给系统交互。
-- 0.1.2 增加锁屏态门禁：仅在系统报告锁屏、屏幕交互中、媒体会话和封面有效时创建覆盖层；并以 `HyperMusicScapeLock` 标签记录钩子、视图适配和开关状态。
+- **解锁时覆盖层淡出后保留实例**（`LockScreenOverlay.suspend()` / `resume()`），不销毁场景。锁屏重新出现时直接复用同一批视图，亮屏即显示、零重建。只有在模块关闭、媒体不可用、锁屏根视图分离时才真正销毁。
+- 0.1.2 增加锁屏态门禁：仅在系统报告锁屏、屏幕交互中、媒体会话和封面有效时创建覆盖层；并以 `MeloLock` 标签记录钩子、视图适配和开关状态。
 - 应用内开关默认关闭，保存在模块私有配置中；SystemUI 通过模块的只读配置接口读取，不需要“修改系统设置”权限。后台钩子仍须先在 Vector 中启用并以 `SystemUI` 为唯一作用域。
 
 ## 构建与安装
@@ -96,13 +116,27 @@ rm -rf app/build/intermediates/project_dex_archive app/build/intermediates/desug
 
 增量构建时这两个目录可能残留，建议先清理再判断是否编译失败。
 
+还有一类失败长这样，**和代码无关**：
+
+```
+Gradle could not start your build.
+> ... FileNotFoundException: C:\Users\<user>\.gradle\caches\journal-1\journal-1.lock (拒绝访问。)
+```
+
+原因：`--no-daemon` 的单次 daemon 有时不会退出，一直占着 Gradle 用户目录的 journal 锁。处理方式是用 Gradle 自己的命令停掉它，再删掉残留锁文件：
+
+```bash
+./gradlew.bat --stop
+rm -f ~/.gradle/caches/journal-1/journal-1.lock
+```
+
 安装：
 
 ```powershell
 adb -s 1b3a7d8 install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-在 Vector 中启用“沉浸音乐锁屏”，只勾选 `com.android.systemui`，然后按 Vector 提示重启 SystemUI 或设备。首次启动应用时开关应显示关闭；先确认无音乐锁屏、通知、解锁和紧急操作都保持原样，再开启模块开关。之前授予的“修改系统设置”权限不再使用，可以在系统设置中撤销。
+在 Vector 中启用“Hyper MeloLock”，只勾选 `com.android.systemui`，然后按 Vector 提示重启 SystemUI 或设备。首次启动应用时开关应显示关闭；先确认无音乐锁屏、通知、解锁和紧急操作都保持原样，再开启模块开关。之前授予的“修改系统设置”权限不再使用，可以在系统设置中撤销。
 
 ## 真机逐步验收
 
@@ -110,13 +144,13 @@ adb -s 1b3a7d8 install -r app/build/outputs/apk/debug/app-debug.apk
 2. **单个播放器**：开启开关，使用一个提供标准 MediaSession 的音乐应用播放带封面的曲目。确认时间在上、封面在中、控制在下，背景模糊来自封面；暂停或结束后原生锁屏立即恢复。
 3. **通知与安全入口**：有普通通知时确认默认收起、点击“展开通知”能看见通知、点击“返回播放器”能返回。再分别确认手势解锁、密码/指纹入口及紧急操作。
 4. **跨播放器**：依次测试 Cool Music 和另一款提供 MediaSession 的播放器，包括上一首/下一首、切歌换封面、无封面、停止播放和多会话切换。
-5. **故障日志**：若没有效果或 SystemUI 异常，记录 `adb logcat -d -s LSPosed:* HyperMusicScapeLock:* AndroidRuntime:E` 和 Vector 模块日志；不要继续扩大系统版本适配。
+5. **故障日志**：若没有效果或 SystemUI 异常，记录 `adb logcat -d -s LSPosed:* MeloLock:* AndroidRuntime:E` 和 Vector 模块日志；不要继续扩大系统版本适配。
 
 第一次现场验收暴露了开关故障：0.1.0 向 `Settings.System` 写入自定义键时，设备抛出 `IllegalArgumentException: You cannot keep your settings in the secure settings`，导致应用闪退，开关并未开启。0.1.1 改用模块私有配置和只读接口，不再请求 `WRITE_SETTINGS`。已在设备内验证配置开启→只读接口读取→关闭的往返测试，最终状态为 `enabled=0`；更新后已重启设备，SystemUI 进程保持运行。设置页按钮的手动点击与锁屏交互仍待验收。ADB 已确认该 SystemUI 获 `MEDIA_CONTENT_CONTROL` 权限。**锁屏交互及第 2–4 步尚未完成真机验收**，不应将其视为稳定版；仍须核实视图层级、通知入口位置及解锁/紧急操作触控区域。该设备拒绝 ADB shell 注入按键事件（缺少 `INJECT_EVENTS`），这些交互须在设备上手动测试。
 
 第二次现场验收中，应用开关可以开启，但锁屏未变化，音乐播放后立即暂停。系统 `MediaSessionService` 在 2026-10-06 09:33:52 记录了 `callingPackage:com.android.bluetooth` 发出的 `KEYCODE_MEDIA_PAUSE`，之后播放器状态变为 `PAUSED`；这次暂停事件并非模块的自定义按钮调用。需在蓝牙关闭时复测，以区分蓝牙设备/系统服务与模块行为。锁屏覆盖层仍未验收通过。
 
-0.1.2 安装并重启后，开关仍为 `enabled=1`，但当前 logcat 中没有 `HyperMusicScapeLock` 钩子日志，也没有 Vector 加载本模块的记录；同一次启动能看到 Vector 加载其他模块。下一步须核实 Vector 中本模块总开关与 `com.android.systemui` 作用域是否实际生效，再用诊断日志判断根视图和媒体条件。设备同时保持蓝牙开启且有连接，蓝牙关闭对照尚待完成。
+0.1.2 安装并重启后，开关仍为 `enabled=1`，但当前 logcat 中没有 `MeloLock` 钩子日志，也没有 Vector 加载本模块的记录；同一次启动能看到 Vector 加载其他模块。下一步须核实 Vector 中本模块总开关与 `com.android.systemui` 作用域是否实际生效，再用诊断日志判断根视图和媒体条件。设备同时保持蓝牙开启且有连接，蓝牙关闭对照尚待完成。
 
 用户随后确认：0.1.2 重启后 Vector 中本模块总开关变为关闭，手动打开后作用域仍为 `com.android.systemui`。这足以解释该次启动缺少注入日志。0.1.3 已安装到设备（versionCode 4），将 Xposed 元数据的最低 API 和作用域资源格式调整为设备上已正常加载的 legacy 模块使用的格式；应用内开关仍为 `enabled=1`。每次更新 APK 后都应重新检查 Vector 总开关，避免把未注入误判为视图钩子失败。
 
@@ -151,17 +185,25 @@ adb -s 1b3a7d8 install -r app/build/outputs/apk/debug/app-debug.apk
 优先在模块应用中关闭开关。无法操作应用时，从已授权的电脑停用模块应用，随后重启设备；恢复前保持停用：
 
 ```powershell
-adb -s 1b3a7d8 shell pm disable-user --user 0 io.github.hypermusicscape.lock
+adb -s 1b3a7d8 shell pm disable-user --user 0 io.github.melolock
 adb -s 1b3a7d8 reboot
 ```
 
-设备已验证 `pm disable-user` 可以停用本应用；修复后可用 `adb -s 1b3a7d8 shell pm enable io.github.hypermusicscape.lock` 重新启用。若 SystemUI 无法正常工作，也可在 Vector 中停用本模块的 `SystemUI` 作用域并重启；必要时通过恢复模式停用 Vector 模块。模块不改系统 APK、壁纸或播放器数据。再次测试前保存 SystemUI/Vector 日志。该 ROM 已拒绝 0.1.0 文档中的 `settings put system` 以及 `pm clear`，都不能作为恢复手段。
+设备已验证 `pm disable-user` 可以停用本应用；修复后可用 `adb -s 1b3a7d8 shell pm enable io.github.melolock` 重新启用。若 SystemUI 无法正常工作，也可在 Vector 中停用本模块的 `SystemUI` 作用域并重启；必要时通过恢复模式停用 Vector 模块。模块不改系统 APK、壁纸或播放器数据。再次测试前保存 SystemUI/Vector 日志。该 ROM 已拒绝 0.1.0 文档中的 `settings put system` 以及 `pm clear`，都不能作为恢复手段。
 
 ## 许可证与参考
 
 本仓库按 AGPL-3.0 发布。仅参考 HyperMusicCover 的产品思路，没有复制其源码、资源或钩子；其澎湃 OS 4 适配未用于本项目。Vector 的 legacy Xposed API 用作 `compileOnly` 依赖，不打包到 APK。
 
-应用标识：应用名 `Hyper Music Scape Lock`（`values` / `values-zh` 的 `app_name`，其他语言回落到英文），启动器图标为仓库根目录的 `hyper-music-scape-lock.png`（已放入 `res/drawable-nodpi/ic_hmsc.png`）。它不是自适应图标，部分启动器可能加自己的遮罩。
+应用标识：应用名 `Hyper MeloLock`（`values` / `values-zh` 的 `app_name`，其他语言回落到英文），包名与 applicationId 为 `io.github.melolock`，Gradle 根项目名 `Hyper MeloLock`。
+
+**2026-10-06 做过一次整体改名**（原 `io.github.hypermusicscape.lock` / `Hyper Music Scape Lock`）：包目录与 7 个 Java 文件的 `package`、`applicationId`、`Config.PACKAGE`（`AUTHORITY` 与 `URI` 由其派生）、`assets/xposed_init`、Manifest 的 provider authorities、日志 tag（覆盖层 `HyperMusicScapeLock` → `MeloLock`，配置端 → `MeloLock[App]`）以及文档全部同步。**改名后是一个全新的应用**：不会原地覆盖升级旧的 `io.github.hypermusicscape.lock`，Vector 里会出现两个模块；必须卸载旧模块应用并重新启用本模块、重新勾选 `com.android.systemui` 作用域，旧配置数据也不会继承。仓库目录名仍是 `Hyper Music Scape Lock`（工作区路径未动）。启动器图标源图为仓库根目录 `hyper-melolock.png`（已放入 `res/drawable-nodpi/ic_hmsc.png`），它不是自适应图标，部分启动器可能加自己的遮罩。
+
+**首页大标题字号**：Miuix `TopAppBar` 把大标题字号写死为 `MiuixTheme.textStyles.title1`（默认 32sp）且没有参数可传，`LocalTextStyles` 又是 internal。为此 `CollapsingPage` 新增 `largeTitleFontSize`：非空时用同一个 `ThemeController` 再开一层 `MiuixTheme`，只替换 `title1`，颜色与深浅色模式不受影响（`HyperIslandTheme` 通过 `LocalThemeController` 暴露控制器）。`Hyper MeloLock` 只有 12 个字符，32sp 下已能单行，所以首页**不再传这个参数**；机制保留，将来名字变长或想要更紧凑的标题时可用。
+
+**启动更新检查已禁用**：本模块在 Manifest 里移除了 `INTERNET`，HyperIsland 原本的启动期更新检查必然失败并弹「检查更新失败」，已在 `AppShell` 中移除该调用。
+
+**滑条点击行为**：HyperIsland 的 `PreferenceSlider` 把点击当作手动输入入口（弹对话框）。本模块的调参滑条通过新增的 `allowManualInput = false` 让点击轨道直接跳到位。默认值 `true`，HyperIsland 自身页面行为未变。
 
 **第三方字体许可**：`app/src/main/assets/fonts/` 下的 `clock_round_1.ttf`（Quicksand）与 `clock_round_2.ttf`（Baloo 2）来自 Google Fonts，按 SIL Open Font License 1.1 授权，可随应用一起分发。OFL 要求分发时附带许可证全文并保留字体名称，**对外发布前需要把 OFL-1.1 全文一并放进仓库并在应用内可查看**（当前尚未加入，只在文档里记录）。
 
@@ -176,8 +218,65 @@ adb -s 1b3a7d8 reboot
 3. 作者署名与三个外链常量留在 `LockScreenPages.kt` 末尾的 `TODO(作者信息)` 处，填上后对应行会自动从「待填写」置灰恢复为可点击。
 4. 中文文案目前硬编码在这四个页面里，补多语言时需抽到 `strings.xml`。
 
-5. 2026-10-06 第二轮：外观页加入三元素编辑器（时间/封面/播放器的大小·圆角·间距，时间的粗细·颜色·字体圆润），应用名与图标换成 Hyper Music Scape Lock，开发者填 `zuige` / `zuige66`，修复首页状态卡关掉后点不回来的 bug。构建通过、已装到 `1b3a7d8`，**锁屏实际效果待验收**：改完要灭屏再亮屏才生效，需确认时间三档字体是否真的换了字形、粗细是否连续可辨、封面宽高不同时的裁切、以及播放器卡片改尺寸后控件是否被压变形。
+5. 2026-10-06 第二轮：外观页加入三元素编辑器（时间/封面/播放器的大小·圆角·间距，时间的粗细·颜色·字体圆润），应用名与图标换成 Hyper MeloLock，开发者填 `zuige` / `zuige66`，修复首页状态卡关掉后点不回来的 bug。构建通过、已装到 `1b3a7d8`，**锁屏实际效果待验收**：改完要灭屏再亮屏才生效，需确认时间三档字体是否真的换了字形、粗细是否连续可辨、封面宽高不同时的裁切、以及播放器卡片改尺寸后控件是否被压变形。
 
 6. `LockScreenOverlay.java` 在 2026-10-06 18:00 前后被本会话之外改动过（加入了播放器卡入场动画、封面超时回退、`deferArtworkFallback`）。本轮改动是在那份内容之上叠加的，两边的改动都保留了。**同一个文件不要并行编辑**，否则会互相覆盖。
 
+7. 2026-10-06 第二轮收尾（已提交 `f344d75 app页面配置`）：应用名改 `Hyper MeloLock`、音乐应用页改为列出全部应用并申请应用列表权限、滑条改为点击跳位、禁用启动更新检查、首页系统信息加 `Build.*` 兜底并对失败打日志。
+
+8. 2026-10-06 第三轮（**已实拍验收**）：① 首页大标题降到 22sp，`Hyper MeloLock` 单行放下；② Manifest 补声明 `com.android.permission.GET_INSTALLED_APPS`，进入「音乐应用」页实测弹出 MIUI 授权框；③ 系统信息卡恢复真值（系统版本 `OS3.0.303.0.WNKCNXM`）；④ 启动时不再弹「检查更新失败」。
+
+   **仍未验收**：锁屏三元素调参（需要重启 SystemUI，见上文「改配置后必须重启 SystemUI」）。「Xposed 框架」一行在 legacy 模块下固定显示「未知」——`XposedPrefsSyncApp` 依赖 libxposed 的 service 绑定，legacy 模块拿不到；设备上也没找到可识别的框架管理器包（`pm list packages | grep -i vector/lsposed` 无结果），所以暂时无法用包名版本号兜底。这不算 bug，但要显示真值需要换读取方式。
+
 7. 2026-10-06 熄屏唤醒防闪：不再在 `ACTION_SCREEN_OFF` 时移除已经渲染的沉浸层，也不会因为熄屏期间的媒体回调撤掉它；`ACTION_SCREEN_ON` 先立即恢复缓存场景，再刷新 `MediaSession`。解锁、关闭模块、锁屏根视图分离，或亮屏后确认没有有效会话时仍恢复原生锁屏。该修复已完成 Debug 构建，待真机验证首次唤醒是否消除原生锁屏的一秒闪现。
+
+8. 2026-10-06 时间裁切修复：时间字号为 91 时，用户把自定义容器高度设为 100 dp，圆体/粗体字形的实际绘制高度超过容器，导致底部被裁掉；布局剩余空间不能参与该文本控件测量。现移除时间的锁定比例、宽度和高度设置，时间始终 `MATCH_PARENT × WRAP_CONTENT`，外观页只保留字号、粗细、圆润、颜色和“距顶部”。通知入口的底部边距从 125 dp 调整为 78 dp，移动到系统底部快捷入口上方。Debug 构建通过，待真机验收。
+
+9. 2026-10-06 解锁滑动背景裂缝修复：此前同一张模糊专辑图分别绘制在锁屏根视图和通知窗根视图；解锁手势期间两个根视图由 SystemUI 分别做位移/淡出动画，底部会暴露原壁纸。现删除通知窗根视图里的重复模糊图和遮罩，只保留锁屏根视图内的单一全屏背景层；窗口顶层仅放封面、播放器和通知入口。普通通知继续由守卫隐藏。Debug 构建已通过，待真机滑动解锁验收。
+
+10. 2026-10-06 播放中壁纸与时间页修复：通知页过去调用完整视图恢复，连同系统壁纸层与系统时钟一起恢复，因此播放时可见原壁纸，且该构建的系统时钟会丢失小时。通知页现只临时恢复通知栈，继续隐藏原壁纸、原生前景和两组系统时钟；模块自己的 `TextClock` 留在通知页上方。其后验证发现等待 `ACTION_USER_PRESENT` 会让覆盖层残留到桌面，因此撤回该延迟撤层策略：`isKeyguardLocked()` 变为 false 时立即恢复原生界面，根视图分离仍为第二道清理。为阻止主题在布局动画中动态加入第二个时间或壁纸层，守卫现在遍历锁屏根视图并隐藏所有时钟类及 `wallpaper`/`keyguard_background` 标识的原生层。Debug 构建已通过，待真机验收通知页、上滑解锁和无媒体回退。**其中「`isKeyguardLocked()` 变为 false 时立即恢复原生界面」这条策略已在第 13 条被「淡出 + 保留实例」取代——第 12 条的日志证明它正是上滑露壁纸一秒的直接原因。**
+
+11. 2026-10-06 冷启动观察：已通过 ADB 对设备 `1b3a7d8` 执行重启并清空后抓取日志。启动完成约 48 秒后，SystemUI 才挂入锁屏根视图；在此之前 Launcher/个人助理窗口已开始附着，所以会短暂出现无状态栏的桌面。SystemUI 随后报告主线程约 2.5 秒的延迟，堆栈落在系统自己的 `MiuiIslandMediaViewHolder` / 通知栈初始化；同时 Qualcomm 电话与 IMS 服务因 telephony service 尚未就绪反复重启。模块日志显示锁屏根钩子安装、根视图附着且 `enabled=true`，crash 缓冲区没有 SystemUI 或模块进程崩溃。结论是“桌面 → 黑屏 → 仅壁纸 → 黑屏 → 锁屏”由系统开机阶段的窗口和服务排序造成；LSPosed 模块只有 SystemUI 创建后才能运行，不能提前接管这段过程。后续应以模块开/关的两次冷启动时序对照评估其额外影响，避免为遮挡启动闪屏而在更早的系统层强行加覆盖层。
+
+12. 2026-10-06 桌面通知栏与切歌过渡修复：`KeyguardManager.isKeyguardLocked()` 在本机已解锁后下拉通知栏的短窗口内仍可能返回 true，导致锁屏根视图中的模块时间和背景进入桌面通知栏。现以 `ACTION_USER_PRESENT` 作为解锁周期边界，在下一次 `SCREEN_OFF` 前强制隐藏/暂停场景，媒体回调只预建不可见视图，不能再把锁屏组件恢复到桌面通知栏。通知入口从 HyperOS 锁屏根移动到模块自己的 `FrameLayout` 并固定在底部 10 dp，避免根布局在动画中忽略 gravity 后落到左上角；位置低于充电文案。切歌数据层不再以 `MediaController` 对象是否相同决定是否保留缓存，新的 MediaSession 或 URI 封面均会继续显示上一首完整沉浸页，待下一张封面解码成功才原子切换；5 秒超时或解码失败才回退原生。Debug APK（`0.2.0` / versionCode 9）已构建并安装，待重启 SystemUI 后验收桌面下拉、入口位置和跨会话切歌。
+
+13. 2026-10-06 通知页空白与时间消失修复：`hideNativeClockLayers(root)` 的递归范围意外包含模块的 `foreground`，把自绘 `TextClock` 当成系统时钟隐藏，因此播放器页会只剩封面和卡片。现递归遇到模块自己的前景/背景即停止，并且每次进入播放器页或通知页都会明确恢复自绘时钟可见。通知页此前仅按进入沉浸前的原始 visibility 恢复通知栈；该 ROM 有时原始状态就是 `INVISIBLE`，于是出现只剩模糊背景的空白页。现通知页及其 pre-draw 守卫都会明确设通知栈为 `VISIBLE`，最终 `restore()` 仍会回到初始状态。Debug 构建通过后已安装到 `1b3a7d8` 并重启；日志确认锁屏根已附着、模块 `enabled=true`。启动检查时无活跃媒体会话，故原生锁屏保持显示，待播放带封面曲目后进行真机验收。
+
+12. 2026-10-06 闪屏诊断日志（第四轮，**本轮只加日志、不改行为**）。用户真机复现确认第 7 条的「熄屏唤醒防闪」与第 9 条的「解锁滑动背景裂缝」**都没消除**对应现象：① 上滑解锁时仍有一秒露出壁纸；② 快速熄屏再亮屏时先显示原生锁屏约一秒。为精确定位触发路径，补了以下日志：
+
+    - `LockScreenOverlay.restore()` 改成 `restore(String reason)`，所有调用点标注原因（`predraw-keyguard-unlocked` / `user-present` / `switch-off` / `destroy` / `render-*` / `artwork-timeout`）；撤层前打印一行状态快照 `fg/bg/shown/expanded/scene/attached/interactive/keyguard`。
+    - pre-draw 守卫检测到「前景仍存活但 `isKeyguardLocked()` 已翻 false」时打一次 `Pre-draw: keyguard unlocked while overlay alive`（有一次性标志，不会每帧刷屏）。
+    - `render()` 的每个早退分支走 `skip(reason)` 去重日志，可在日志里直接看到「为什么没渲染」。
+    - `MediaSource.refresh()` 打印「从查询会话到真正出图」的耗时（毫秒），并区分三条路径：bitmap 直出 / 缓存帧命中 / URI 异步解码，用于判断亮屏后的一秒是花在异步取封面还是别处。
+    - `HookEntry` 打印锁屏根视图的 attach/detach 时间点与可见性，用于判断场景是否为 `destroy()` 销毁。
+
+    **抓取方式**：`adb -s 1b3a7d8 logcat -c` 后复现问题，再 `adb -s 1b3a7d8 logcat -v time | grep MeloLock`。注意覆盖层跑在 `com.android.systemui` 进程，**配置端 App 进程的日志里不会有这些行**——按包名 `io.github.melolock` 过滤只会看到配置界面自己的日志。
+
+    同时订正上文「改完需要灭屏再亮屏一次」：自熄屏唤醒防闪改动后 `ACTION_SCREEN_OFF` 不再撤层，场景存活时灭屏再亮屏不会重建。
+
+13. 2026-10-06 解锁闪屏修复：**淡出 + 保留实例（已构建、已安装，待真机验收）**。第 12 条的诊断日志抓到了 5 轮完整「熄屏 → 亮屏 → 解锁」，把两个现象定为同一根因：
+
+    - **上滑解锁露壁纸一秒**：解锁瞬间 `keyguardGuard` 检测到 `isKeyguardLocked()` 翻 false，立即 `restore()`。日志显示此时 `interactive=true`（屏幕亮着）、`attached=true`（根视图没分离）、`scene=true`（场景完整）——是**守卫主动撤层**，不是根视图分离。而 `restore()` 里的 `restoreChangedViews()` 会把原生壁纸层恢复 VISIBLE，系统解锁动画却还要跑 80~190ms（`USER_PRESENT` 才到），空档期就是壁纸。
+    - **亮屏先见原生锁屏约一秒**：是上一条的衍生——每次解锁都销毁场景，下次亮屏只能 `create()` 重建，实测 126~145ms，叠加屏幕物理亮起到广播送达的系统延迟，观感即「先原生锁屏再变音乐版」。**反证**：日志里有一轮没经过解锁，`SCREEN_OFF kept=fg=true` → `SCREEN_ON fg=true` 直接复用，完全不闪。
+
+    改法：新增 `suspended` 状态。解锁时 `suspend()` 把覆盖层淡出 180ms 到 `GONE` 并保留全部视图实例，随后 `restoreChangedViews()` 把原生层交还系统；判定为 suspended 时 pre-draw 守卫完全不介入（不隐藏原生层、不 bringToFront），媒体回调也不接管界面。锁屏重新出现时 `resume()` 恢复可见性并直接 `showMusic()`，跳过 `create()`。仅在模块关闭、媒体不可用（`snapshot == null`）、锁屏根视图分离时才真正 `restore()`。
+
+    日志新增 `suspend reason=...` / `suspend done; scene kept for reuse` / `resume reused scene ...`，`state()` 增加 `suspended=` 字段，验收时看这几行即可判断是否走的复用路径。
+
+14. 2026-10-06 暂停保留 + 熄屏预建（第 13 条的补完）。真机验证第 13 条时发现两条遗漏的路径：
+
+    - **暂停时不该销毁**：原实现里暂停会让 `snapshot == null` → `restore()` 撤层，于是「暂停后锁屏」被原生界面顶替，下次亮屏又要重建。现在 `MediaSource` 区分「会话还在但暂停」与「会话真的消失」：前者交出最后一帧（`Snapshot.playing = false`，`speed` 归零让进度条停在暂停处），后者才回退原生锁屏。同时 `current` 在暂停时仍指向该会话，否则会注销 controller 回调、用户点播放后锁屏不更新。中间键改为播放/暂停切换，图标跟随 `playing`。
+    - **「桌面播歌 → 熄屏 → 亮屏」从来没有场景可复用**：在桌面上 `render()` 一直 `skip("keyguard-unlocked")`，场景根本没建过，`suspend/resume` 救不了这条路径。现在 `ACTION_SCREEN_OFF` 会主动触发一次媒体刷新，`render()` 在 `!isInteractive()` 时调 `preCreate()`——屏幕已灭、用户看不见，正好把场景建好并置 `GONE` + `suspended`，亮屏时由 pre-draw 第一帧 `resume()` 秒显。
+
+    新增日志：`Scene pre-created while display off; will resume on wake`、`Session paused in Xms; keeping last frame`。`render()` 抽出 `applySnapshot()` 供正常渲染与预建共用。
+
+15. 2026-10-06 暂停误判 + 解锁残留。真机日志暴露第 14 条的两个漏洞：
+
+    - **暂停被误判成「无会话」，整个场景被销毁**：暂停识别原先依赖 `lastReady`，而切歌失败（日志里的 `Artwork decode failed in 81ms`）会把 `lastReady` 清空，此后暂停就认不出来 —— `refresh()` 走 `onMedia(null)`，`render()` 落到 `render-no-session` 把覆盖层撤掉，锁屏直接掉回「壁纸 + 原生时钟 + 原生媒体通知卡」。改为遍历会话时记住第一个「允许的包 + 有 metadata + 非播放」的会话，不依赖 `lastReady` / `current`。
+    - **解锁后前景组件残留桌面**：`suspend()` 原先把隐藏动作挂在 `ViewPropertyAnimator.withEndAction` 上，但解锁时窗口正在切换，动画回调可能根本不推进，前景层就永远保持可见。改为「淡出只是视觉效果，真正的隐藏由 `main.postDelayed(finishSuspend, 150)` 兜底」——`finishSuspend` 走 Handler，不依赖动画回调；`resume()` / `restore()` 会取消这个待执行回调。
+
+    另外诊断日志的 tag 已随整体改名变为 `MeloLock`。
+
+16. 2026-10-06 解锁残留治本：**前景层改挂锁屏根视图** + **播放即预建**。用户截图显示解锁瞬间「壁纸已出、前景组件（大时钟/大封面/播放器卡片/通知按钮）完整残留」——根因是背景层挂在锁屏根视图（`HyperOSKeyguardRootView`），被系统解锁动画直接带走；而前景层挂在窗口根视图，不跟系统动画走，只能等我们自己的淡出，过程完全不同步。改为把 `foreground` 与 `notificationButton` 也挂到锁屏根视图：系统退场动画把整个锁屏根（背景+前景+按钮）一起带走，各层消失时机完全同步。通知栈仍在窗口根，展开通知时自然盖在锁屏根之上。`restore()` 的 removeView 判据同步改为锁屏根。
+
+    同时实现「播放即预建」：`render()` 在解锁态（桌面）收到有效媒体快照且场景不存在时，直接 `preCreate()` 把场景建好并置 GONE + `suspended`——**一点播放歌曲，锁屏场景就绪**，之后锁屏/熄屏/亮屏都不再走 `create()`。`pre-draw` 守卫在 suspended 且未锁屏时完全不介入，桌面上不会误显示。

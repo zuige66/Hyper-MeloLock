@@ -6,18 +6,29 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import io.github.hyperisland.compose.data.FlutterPrefsRepository
 import top.yukonga.miuix.kmp.theme.ColorSchemeMode
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.ThemeController
+
+/**
+ * 当前主题控制器。
+ *
+ * Miuix 的 `LocalTextStyles` 是 internal，页面想单独覆写某档文字样式时，
+ * 只能用 `MiuixTheme(controller = ..., textStyles = ...)` 再开一层。拿到同一个
+ * controller 才能保证颜色、动态取色和深浅色模式跟外层一致。
+ */
+internal val LocalThemeController = staticCompositionLocalOf<ThemeController?> { null }
 
 @Composable
 internal fun HyperIslandTheme(
@@ -69,7 +80,9 @@ internal fun HyperIslandTheme(
             navigationBarStyle = systemBarStyle,
         )
     }
-    MiuixTheme(controller = controller, content = content)
+    CompositionLocalProvider(LocalThemeController provides controller) {
+        MiuixTheme(controller = controller, content = content)
+    }
 }
 
 internal const val PREF_THEME_MODE = "pref_theme_mode"

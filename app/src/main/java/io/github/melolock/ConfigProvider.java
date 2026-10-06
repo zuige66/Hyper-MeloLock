@@ -1,4 +1,4 @@
-package io.github.hypermusicscape.lock;
+package io.github.melolock;
 
 import android.content.ContentProvider;
 import android.content.ContentValues;

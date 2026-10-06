@@ -9,5 +9,5 @@ dependencyResolutionManagement {
         maven(url = "https://s01.oss.sonatype.org/content/repositories/snapshots/")
     }
 }
-rootProject.name = "HyperMusicScapeLock"
+rootProject.name = "Hyper MeloLock"
 include(":app")

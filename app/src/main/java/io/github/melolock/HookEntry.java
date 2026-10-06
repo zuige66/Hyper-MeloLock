@@ -1,4 +1,4 @@
-package io.github.hypermusicscape.lock;
+package io.github.melolock;
 
 import android.os.Build;
 import android.util.Log;
@@ -12,7 +12,7 @@ import java.util.WeakHashMap;
 
 /** The only ROM-specific hook. No code is imported from HyperMusicCover. */
 public final class HookEntry implements IXposedHookLoadPackage {
-    private static final String TAG = "HyperMusicScapeLock";
+    private static final String TAG = "MeloLock";
     private static final WeakHashMap<View, LockScreenOverlay> overlays = new WeakHashMap<>();
     @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
         if (!"com.android.systemui".equals(param.packageName) ||
@@ -26,10 +26,13 @@ public final class HookEntry implements IXposedHookLoadPackage {
                             View view = (View) hook.thisObject;
                             view.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
                                 @Override public void onViewAttachedToWindow(View attached) {
+                                    Log.i(TAG, "Keyguard root attached; visibility=" + attached.getVisibility()
+                                            + " shown=" + attached.isShown() + " window=" + attached.getWindowToken());
                                     attached.post(() -> attach(attached));
                                 }
                                 @Override public void onViewDetachedFromWindow(View detached) {
                                     LockScreenOverlay overlay = overlays.remove(detached);
+                                    Log.i(TAG, "Keyguard root detached; overlay=" + (overlay != null));
                                     if (overlay != null) overlay.destroy();
                                 }
                             });

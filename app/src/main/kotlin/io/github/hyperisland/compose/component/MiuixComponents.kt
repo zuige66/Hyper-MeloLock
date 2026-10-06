@@ -17,9 +17,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import io.github.hyperisland.R
+import io.github.hyperisland.compose.theme.LocalThemeController
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
@@ -33,6 +35,7 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.theme.defaultTextStyles
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 @Composable
@@ -46,6 +49,8 @@ internal fun CollapsingPage(
     horizontalContentPadding: Dp = 16.dp,
     topContentPadding: Dp = 8.dp,
     bottomContentPadding: Dp = 28.dp,
+    /** 非空时覆写大标题字号；长名字默认 32sp 会折成两行。 */
+    largeTitleFontSize: TextUnit? = null,
     content: LazyListScope.() -> Unit,
 ) {
     val scrollBehavior = MiuixScrollBehavior()
@@ -54,20 +59,22 @@ internal fun CollapsingPage(
         Scaffold(
             topBar = {
                 BlurredBar(topGradient = true) {
-                    TopAppBar(
-                        title = title,
-                        largeTitle = title,
-                        subtitle = subtitle,
-                        color = Color.Transparent,
-                        scrollBehavior = scrollBehavior,
-                        actions = {
-                            if (actionIcon != null && onAction != null) {
-                                IconButton(onClick = onAction) {
-                                    Icon(actionIcon, actionDescription)
+                    LargeTitleSizeOverride(largeTitleFontSize) {
+                        TopAppBar(
+                            title = title,
+                            largeTitle = title,
+                            subtitle = subtitle,
+                            color = Color.Transparent,
+                            scrollBehavior = scrollBehavior,
+                            actions = {
+                                if (actionIcon != null && onAction != null) {
+                                    IconButton(onClick = onAction) {
+                                        Icon(actionIcon, actionDescription)
+                                    }
                                 }
-                            }
-                        },
-                    )
+                            },
+                        )
+                    }
                 }
             },
             snackbarHost = snackbarHost,
@@ -84,6 +91,29 @@ internal fun CollapsingPage(
             }
         }
     }
+}
+
+/**
+ * 覆写 Miuix 大标题字号。
+ *
+ * `TopAppBar` 把大标题字号写死成 `MiuixTheme.textStyles.title1`（默认 32sp），没有参数可传；
+ * 而 `LocalTextStyles` 是 internal，外部改不了。这里用同一个 [LocalThemeController] 再开一层
+ * [MiuixTheme]，只替换 `title1`，颜色与深浅色模式保持与外层一致。
+ */
+@Composable
+private fun LargeTitleSizeOverride(fontSize: TextUnit?, content: @Composable () -> Unit) {
+    val controller = LocalThemeController.current
+    if (fontSize == null || controller == null) {
+        content()
+        return
+    }
+    MiuixTheme(
+        controller = controller,
+        textStyles = defaultTextStyles(
+            title1 = MiuixTheme.textStyles.title1.copy(fontSize = fontSize),
+        ),
+        content = content,
+    )
 }
 
 @Composable

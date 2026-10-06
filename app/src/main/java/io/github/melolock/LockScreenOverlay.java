@@ -1,4 +1,4 @@
-package io.github.hypermusicscape.lock;
+package io.github.melolock;
 
 import android.app.KeyguardManager;
 import android.content.BroadcastReceiver;
@@ -45,7 +45,7 @@ import java.util.zip.ZipFile;
 
 /** Exact-build OS3 adapter. The player card is module-owned because OS3 owns its native header. */
 final class LockScreenOverlay {
-    private static final String TAG = "HyperMusicScapeLock";
+    private static final String TAG = "MeloLock";
     private static final String CLOCK = "com.android.keyguard.clock.KeyguardClockContainer";
     private static final String NOTIFICATIONS = "com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout";
     private final ViewGroup root;
@@ -56,13 +56,26 @@ final class LockScreenOverlay {
     private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context ignored, Intent intent) {
             if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
+                lockscreenCycle = true;
                 // Keep the already-rendered scene in SystemUI memory.  Rebuilding it
                 // only after SCREEN_ON is what caused the one-second stock-screen flash.
+                Log.i(TAG, "SCREEN_OFF kept=" + state());
                 main.removeCallbacks(progressTicker);
+                // 主动让媒体层回调一次：此时还没有场景的话，render() 会在屏幕看不见时先建好。
+                if (Config.enabled(context)) media.start();
             } else if (Intent.ACTION_USER_PRESENT.equals(intent.getAction())) {
-                restore();
+                // USER_PRESENT is the reliable boundary between keyguard and the
+                // unlocked notification shade.  On this ROM isKeyguardLocked()
+                // can still briefly report true while the home shade is opening.
+                lockscreenCycle = false;
+                Log.i(TAG, "USER_PRESENT " + state());
+                // 解锁完成。正常路径是 pre-draw 守卫在解锁动画一开始就 suspend() 淡出；
+                // 这里只兜底补一次，仍然保留实例，不再销毁场景。
+                if (!suspended && foreground != null) suspend("user-present");
             } else if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())) {
-                if (shown != null && foreground != null && !expanded) showMusic();
+                Log.i(TAG, "SCREEN_ON " + state());
+                if (suspended && lockscreenCycle && keyguardLocked()) resume();
+                else if (shown != null && foreground != null && !expanded) showMusic();
                 updateSwitch();
             }
         }
@@ -74,15 +87,31 @@ final class LockScreenOverlay {
     private boolean observing;
     private Boolean lastEnabled;
     private boolean missingViewsLogged;
+    /** 诊断用：解锁撤层只记一次，避免 pre-draw 每帧刷屏。 */
+    private boolean unlockRestoreLogged;
+    /** 诊断用：render 早退原因去重，只在原因变化时打日志。 */
+    private String lastSkipReason;
+    private int createAttempts;
+    /**
+     * 解锁后场景是否处于「已淡出但保留」状态。
+     *
+     * true 时 pre-draw 守卫完全不介入（不隐藏原生层、不 bringToFront、不撤销），
+     * 媒体回调也不接管界面，只等锁屏重新出现时 resume() 直接复用同一批视图。
+     */
+    private boolean suspended;
+    /** True only from screen-off until the user has completed an unlock. */
+    private boolean lockscreenCycle = true;
     private boolean expanded;
     private View clock, secondaryClock, nativeBackgroundLayer, nativeForegroundLayer;
     private ViewGroup notifications, windowRoot;
     private FrameLayout background;
     private FrameLayout foreground;
+    private LinearLayout content;
     private LinearLayout playerCard;
-    private ImageView baseBlur, blur, cover, cardArt;
+    private ImageView baseBlur, cover, cardArt;
     private TextView title, artist, previous, playPause, next, elapsed, duration;
     private ProgressBar progress;
+    private TextClock immersiveClock;
     private Button notificationButton;
     private MediaSource.Snapshot shown;
     private ViewTreeObserver guardObserver;
@@ -92,7 +121,7 @@ final class LockScreenOverlay {
         artworkFallbackPending = false;
         if (foreground != null && shown != null) {
             Log.i(TAG, "Artwork update timed out; native lockscreen restored");
-            restore();
+            restore("artwork-timeout");
         }
     };
     private final Runnable progressTicker = new Runnable() {
@@ -111,11 +140,27 @@ final class LockScreenOverlay {
         this.root = (ViewGroup) root;
         context = root.getContext();
         keyguardGuard = () -> {
+            if (suspended) {
+                // 解锁后场景已淡出并置 GONE，守卫必须完全放手：继续隐藏原生层会破坏，
+                // 继续 bringToFront 会把不可见场景提到桌面之上。锁屏重新出现才 resume。
+                if (lockscreenCycle && keyguardLocked()) resume();
+                return true;
+            }
             if (foreground != null) {
-                KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
-                if (keyguard == null || !keyguard.isKeyguardLocked()) restore();
-                else if (!expanded) {
-                    hide(clock); hide(secondaryClock); hide(nativeBackgroundLayer); hide(nativeForegroundLayer); hide(notifications);
+                if (!lockscreenCycle || !keyguardLocked()) {
+                    if (!unlockRestoreLogged) {
+                        unlockRestoreLogged = true;
+                        Log.i(TAG, "Pre-draw: keyguard unlocked while overlay alive " + state());
+                    }
+                    suspend("predraw-keyguard-unlocked");
+                } else {
+                    hideNativeWallpaperLayers(root);
+                    hideNativeClockLayers(root);
+                    if (!expanded) {
+                        hide(notifications);
+                    } else {
+                        show(notifications);
+                    }
                     foreground.bringToFront();
                     if (notificationButton != null) notificationButton.bringToFront();
                 }
@@ -123,7 +168,7 @@ final class LockScreenOverlay {
             return true;
         };
         media = new MediaSource(context, snapshot -> {
-            try { render(snapshot); } catch (Throwable error) { Log.e(TAG, "Overlay render failed", error); restore(); }
+            try { render(snapshot); } catch (Throwable error) { Log.e(TAG, "Overlay render failed", error); restore("render-error"); }
         });
         switchObserver = new ContentObserver(main) { @Override public void onChange(boolean ignored) { updateSwitch(); } };
     }
@@ -140,15 +185,16 @@ final class LockScreenOverlay {
     }
 
     void destroy() {
+        Log.i(TAG, "Overlay destroy " + state());
         if (observing) { context.getContentResolver().unregisterContentObserver(switchObserver); context.unregisterReceiver(screenReceiver); observing = false; }
-        media.close(); restore();
+        media.close(); restore("destroy");
     }
 
     private void updateSwitch() {
         boolean enabled = Config.enabled(context);
-        if (lastEnabled == null || lastEnabled != enabled) Log.i(TAG, "Module enabled=" + enabled);
+        if (lastEnabled == null || lastEnabled != enabled) Log.i(TAG, "Module enabled=" + enabled + " " + state());
         lastEnabled = enabled;
-        if (enabled) media.start(); else { media.stop(); restore(); }
+        if (enabled) media.start(); else { Log.i(TAG, "Module switched off; restoring " + state()); media.stop(); restore("switch-off"); }
     }
 
     private boolean compatible() {
@@ -160,31 +206,88 @@ final class LockScreenOverlay {
     }
 
     private void render(MediaSource.Snapshot snapshot) {
-        PowerManager power = context.getSystemService(PowerManager.class);
-        KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
-        if (!Config.enabled(context) || !root.isAttachedToWindow() || power == null
-                || keyguard == null || !keyguard.isKeyguardLocked()) { restore(); return; }
-        // A metadata callback may arrive while the display is off.  Preserve the
-        // last valid scene until wake-up instead of exposing the stock wallpaper.
-        if (!power.isInteractive()) return;
-        if (snapshot == null) {
-            if (foreground != null && shown != null && isStillPlaying()) deferArtworkFallback();
-            else restore();
+        if (!Config.enabled(context)) { skip("disabled"); restore("render-disabled"); return; }
+        if (!root.isAttachedToWindow()) { skip("root-detached"); restore("render-root-detached"); return; }
+        if (!lockscreenCycle) {
+            // 下拉桌面通知栏时系统仍可能把 keyguard root 保持 attached。这个周期
+            // 标记优先于 KeyguardManager，确保自绘时间/背景绝不渗到桌面通知栏。
+            if (snapshot != null && foreground == null) preCreate(snapshot);
+            else if (foreground != null && !suspended) suspend("desktop-notification-shade");
+            skip("unlocked-cycle");
             return;
         }
+        if (suspended) {
+            // 解锁后场景已淡出保留：媒体还在播就什么都不做，等锁屏出现时复用同一批视图；
+            // 只有媒体真的不可用才销毁，免得锁屏重新出现时呈现已经过期的封面和曲目。
+            if (snapshot == null) { Log.i(TAG, "Suspended scene dropped: media unavailable"); restore("suspended-media-gone"); }
+            else skip("suspended-scene-kept");
+            return;
+        }
+        PowerManager power = context.getSystemService(PowerManager.class);
+        KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
+        if (power == null) { skip("no-power"); restore("render-no-power"); return; }
+        if (keyguard == null || !keyguard.isKeyguardLocked()) {
+            // 桌面上不接管界面，但趁媒体回调把场景提前建好（不可见）：
+            // 一播放歌曲场景就绪，之后锁屏/熄屏/亮屏都不用再 create()。
+            if (snapshot != null && foreground == null) {
+                preCreate(snapshot);
+                skip("scene prebuilt on desktop");
+                return;
+            }
+            skip("keyguard-unlocked");
+            restore("render-keyguard-unlocked");
+            return;
+        }
+        // A metadata callback may arrive while the display is off.  Preserve the
+        // last valid scene until wake-up instead of exposing the stock wallpaper.
+        if (!power.isInteractive()) {
+            // 屏幕已灭、用户看不见，正好把场景提前建好：「桌面播歌 → 熄屏 → 亮屏」
+            // 这条路径上从来没有场景（解锁期间不接管界面），亮屏得现 create()，
+            // 实测 126~145ms，正是「先见原生锁屏」的来源。
+            if (snapshot != null && foreground == null) preCreate(snapshot);
+            skip("display-off");
+            return;
+        }
+        if (snapshot == null) {
+            if (foreground != null && shown != null && isStillPlaying()) { skip("awaiting-artwork"); deferArtworkFallback(); }
+            else { skip("no-session"); restore("render-no-session"); }
+            return;
+        }
+        lastSkipReason = null;
         cancelArtworkFallback();
         if (foreground == null && !create()) return;
         registerGuard();
-        shown = snapshot;
-        baseBlur.setImageBitmap(snapshot.art);
-        blur.setImageBitmap(snapshot.art); cover.setImageBitmap(snapshot.art); cardArt.setImageBitmap(snapshot.art);
-        title.setText(emptyAs(snapshot.title, "未知曲目")); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
-        playPause.setText("Ⅱ");
-        updateProgress();
+        applySnapshot(snapshot);
         if (!expanded) showMusic();
     }
 
+    /** 把一帧数据铺到已建好的视图上；不涉及可见性，供正常渲染与熄屏预建共用。 */
+    private void applySnapshot(MediaSource.Snapshot snapshot) {
+        shown = snapshot;
+        baseBlur.setImageBitmap(snapshot.art); cover.setImageBitmap(snapshot.art); cardArt.setImageBitmap(snapshot.art);
+        title.setText(emptyAs(snapshot.title, "未知曲目")); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
+        playPause.setText(snapshot.playing ? "Ⅱ" : "▶");
+        updateProgress();
+    }
+
+    /**
+     * 屏幕已灭时预建场景：建好立刻置 GONE 并标记 suspended，
+     * 亮屏时由 pre-draw 守卫的 resume() 直接恢复，跳过 create()。
+     */
+    private void preCreate(MediaSource.Snapshot snapshot) {
+        if (!create()) return;
+        registerGuard();
+        applySnapshot(snapshot);
+        foreground.setVisibility(View.GONE);
+        if (background != null) background.setVisibility(View.GONE);
+        if (notificationButton != null) notificationButton.setVisibility(View.GONE);
+        playerSceneVisible = true;   // 数据已就绪，亮屏不需要入场动画
+        suspended = true;            // 复用 suspend 语义，等 resume() 恢复
+        Log.i(TAG, "Scene pre-created while display off; will resume on wake");
+    }
+
     private boolean create() {
+        Log.i(TAG, "create() attempt " + (++createAttempts) + " " + state());
         Map<String, Integer> elements = Config.elementValues(context);
         ElementGeometry geometry = measureElements(elements);
         clock = find(root, CLOCK);
@@ -200,6 +303,9 @@ final class LockScreenOverlay {
             missingViewsLogged = true;
             return false;
         }
+        Log.i(TAG, "Native layers: clock=" + (clock != null) + " secondary=" + (secondaryClock != null)
+                + " background=" + (nativeBackgroundLayer != null)
+                + " foreground=" + (nativeForegroundLayer != null));
         // This layer is below SystemUI's shortcut row but above the stock wallpaper.
         // It fills the bottom area that the interaction scene deliberately leaves free.
         background = new FrameLayout(context);
@@ -216,26 +322,21 @@ final class LockScreenOverlay {
 
         foreground = new FrameLayout(context);
         FrameLayout.LayoutParams sceneParams = new FrameLayout.LayoutParams(-1, -1, Gravity.TOP);
-        sceneParams.bottomMargin = dp(88);
-        windowRoot.addView(foreground, sceneParams);
-        blur = new ImageView(context);
-        blur.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        if (blurDp > 0) blur.setRenderEffect(RenderEffect.createBlurEffect(dp(blurDp), dp(blurDp), Shader.TileMode.CLAMP));
-        foreground.addView(blur, new FrameLayout.LayoutParams(-1, -1));
-        View scrim = new View(context);
-        scrim.setBackground(new ColorDrawable((color & 0x00FFFFFF) | (Config.overlayAlpha(context) << 24)));
-        foreground.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
+        // 挂在锁屏根视图而不是窗口根：解锁时系统的退场动画作用在锁屏根上，
+        // 挂窗口根的前景不会跟着走，会「壁纸已出、组件还在」地残留到桌面（实测）。
+        // 通知栈仍在窗口根，展开通知时它自然盖在锁屏根之上。
+        root.addView(foreground, sceneParams);
 
-        LinearLayout content = new LinearLayout(context);
+        content = new LinearLayout(context);
         content.setOrientation(LinearLayout.VERTICAL); content.setGravity(Gravity.CENTER_HORIZONTAL);
         FrameLayout.LayoutParams contentParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP); contentParams.topMargin = dp(elem(elements, Config.CLOCK_SPACING));
         foreground.addView(content, contentParams);
-        TextClock time = new TextClock(context);
-        time.setFormat12Hour("h:mm"); time.setFormat24Hour("HH:mm"); time.setGravity(Gravity.CENTER);
-        time.setTextSize(elem(elements, Config.CLOCK_SIZE));
-        time.setTextColor(elem(elements, Config.CLOCK_COLOR));
-        applyClockTypeface(time, elem(elements, Config.CLOCK_ROUNDNESS), elem(elements, Config.CLOCK_WEIGHT));
-        content.addView(time, new LinearLayout.LayoutParams(geometry.clockWidth, geometry.clockHeight));
+        immersiveClock = new TextClock(context);
+        immersiveClock.setFormat12Hour("h:mm"); immersiveClock.setFormat24Hour("HH:mm"); immersiveClock.setGravity(Gravity.CENTER);
+        immersiveClock.setTextSize(elem(elements, Config.CLOCK_SIZE));
+        immersiveClock.setTextColor(elem(elements, Config.CLOCK_COLOR));
+        applyClockTypeface(immersiveClock, elem(elements, Config.CLOCK_ROUNDNESS), elem(elements, Config.CLOCK_WEIGHT));
+        content.addView(immersiveClock, new LinearLayout.LayoutParams(geometry.clockWidth, geometry.clockHeight));
         cover = new ImageView(context); cover.setScaleType(ImageView.ScaleType.CENTER_CROP); cover.setClipToOutline(true);
         GradientDrawable coverShape = new GradientDrawable(); coverShape.setColor(Color.WHITE); coverShape.setCornerRadius(dp(Config.cornerRadiusDp(context))); cover.setBackground(coverShape);
         LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(geometry.coverWidth, geometry.coverHeight);
@@ -247,19 +348,22 @@ final class LockScreenOverlay {
         content.addView(playerCard, cardParams);
         notificationButton = new Button(context); notificationButton.setText("展开通知");
         notificationButton.setOnClickListener(v -> { if (expanded) showMusic(); else showNotifications(); });
-        FrameLayout.LayoutParams entry = new FrameLayout.LayoutParams(-2, dp(48), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL); entry.bottomMargin = dp(125);
-        windowRoot.addView(notificationButton, entry);
+        // 放在我们自己的 FrameLayout 内，避免 HyperOS 动画期间根容器忽略 gravity
+        // 而把入口落到左上角；底部位置低于充电文案。
+        FrameLayout.LayoutParams entry = new FrameLayout.LayoutParams(-2, dp(48), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL); entry.bottomMargin = dp(10);
+        foreground.addView(notificationButton, entry);
         // 诊断用：一眼看出本次创建实际用了哪套参数，避免把“未重启 SystemUI”误判成代码问题。
         Log.i(TAG, "Elements: clock=" + elem(elements, Config.CLOCK_SIZE) + "sp w" + elem(elements, Config.CLOCK_WEIGHT)
                 + " round" + elem(elements, Config.CLOCK_ROUNDNESS) + " color" + elem(elements, Config.CLOCK_COLOR)
-                + " locked" + elem(elements, Config.CLOCK_LOCKED)
                 + " | cover=" + geometry.coverWidth + "x" + geometry.coverHeight + "px r"
                 + Config.cornerRadiusDp(context) + " p" + elem(elements, Config.COVER_SCALE)
                 + " | card=" + geometry.cardWidth + "x" + geometry.cardHeight + "px r"
                 + elem(elements, Config.CARD_RADIUS) + " p" + elem(elements, Config.CARD_SCALE)
                 + " | spacing=" + elem(elements, Config.CLOCK_SPACING) + "/"
                 + elem(elements, Config.COVER_SPACING) + "/" + elem(elements, Config.CARD_SPACING));
-        Log.i(TAG, "Custom media card overlay created");
+        Log.i(TAG, "Custom media card overlay created in " + createAttempts + " attempt(s)");
+        createAttempts = 0;
+        unlockRestoreLogged = false;
         return true;
     }
 
@@ -285,13 +389,11 @@ final class LockScreenOverlay {
         int screenWidthDp = Math.max(1, Math.round(metrics.widthPixels / metrics.density));
         ElementGeometry geometry = new ElementGeometry();
 
-        if (elem(elements, Config.CLOCK_LOCKED) != 0) {
-            geometry.clockWidth = -1;  // MATCH_PARENT
-            geometry.clockHeight = -2; // WRAP_CONTENT
-        } else {
-            geometry.clockWidth = dp(clamp(elem(elements, Config.CLOCK_WIDTH), 40, 4096));
-            geometry.clockHeight = dp(clamp(elem(elements, Config.CLOCK_HEIGHT), 20, 4096));
-        }
+        // A clock is text, not a scalable panel. A fixed height clips large glyphs
+        // and custom fonts, so it always measures itself; top spacing controls its
+        // position in the scene.
+        geometry.clockWidth = -1;  // MATCH_PARENT
+        geometry.clockHeight = -2; // WRAP_CONTENT
 
         int defaultArt = Math.min((int) (metrics.widthPixels * .72f), dp(360));
         if (elem(elements, Config.COVER_LOCKED) != 0) {
@@ -393,30 +495,41 @@ final class LockScreenOverlay {
 
     private void showMusic() {
         boolean animateIn = !playerSceneVisible;
-        expanded = false; hide(clock); hide(secondaryClock); hide(nativeBackgroundLayer); hide(nativeForegroundLayer); hide(notifications);
-        foreground.animate().cancel(); playerCard.animate().cancel();
+        expanded = false; hideNativeWallpaperLayers(root); hideNativeClockLayers(root); hide(notifications);
+        foreground.animate().cancel(); cover.animate().cancel(); playerCard.animate().cancel();
+        cover.setVisibility(View.VISIBLE); playerCard.setVisibility(View.VISIBLE);
         foreground.setVisibility(View.VISIBLE); foreground.bringToFront(); notificationButton.bringToFront(); notificationButton.setText("展开通知");
+        // hideNativeClockLayers() must never retain an old hidden state on the
+        // module clock after a page transition or a SystemUI pre-draw pass.
+        immersiveClock.setVisibility(View.VISIBLE); immersiveClock.setAlpha(1f);
         if (animateIn) {
             foreground.setAlpha(0f);
+            cover.setAlpha(0f); cover.setTranslationY(-dp(24));
             playerCard.setAlpha(0f); playerCard.setTranslationY(-dp(36));
             foreground.animate().alpha(1f).setDuration(180).start();
+            cover.animate().alpha(1f).translationY(0f).setStartDelay(20).setDuration(220).start();
             playerCard.animate().alpha(1f).translationY(0f).setStartDelay(40).setDuration(240).start();
         } else {
-            foreground.setAlpha(1f); playerCard.setAlpha(1f); playerCard.setTranslationY(0f);
+            foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f); playerCard.setAlpha(1f); playerCard.setTranslationY(0f);
         }
         playerSceneVisible = true;
         main.removeCallbacks(progressTicker); main.post(progressTicker);
     }
 
     private void showNotifications() {
-        expanded = true; playerSceneVisible = false; main.removeCallbacks(progressTicker); restoreChangedViews();
-        foreground.animate().cancel(); playerCard.animate().cancel();
-        foreground.setAlpha(1f); playerCard.setAlpha(1f); playerCard.setTranslationY(0f);
-        // Let the stock notification page fade in beneath this card while it moves upward.
-        foreground.animate().alpha(0f).setDuration(220).withEndAction(() -> {
-            if (expanded && foreground != null) { foreground.setVisibility(View.GONE); foreground.setAlpha(1f); }
+        expanded = true; playerSceneVisible = false; main.removeCallbacks(progressTicker);
+        // The album backdrop and the module clock remain visible. Only the native
+        // notification stack is revealed; restoring all views would show wallpaper.
+        show(notifications); hideNativeWallpaperLayers(root); hideNativeClockLayers(root);
+        immersiveClock.setVisibility(View.VISIBLE); immersiveClock.setAlpha(1f);
+        foreground.animate().cancel(); cover.animate().cancel(); playerCard.animate().cancel();
+        foreground.setVisibility(View.VISIBLE); foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f); playerCard.setAlpha(1f); playerCard.setTranslationY(0f);
+        playerCard.animate().translationY(-dp(52)).alpha(0f).setDuration(220).withEndAction(() -> {
+            if (expanded && playerCard != null) playerCard.setVisibility(View.GONE);
         }).start();
-        playerCard.animate().translationY(-dp(52)).alpha(0f).setDuration(220).start();
+        cover.animate().translationY(-dp(28)).alpha(0f).setDuration(180).withEndAction(() -> {
+            if (expanded && cover != null) cover.setVisibility(View.GONE);
+        }).start();
         notificationButton.bringToFront(); notificationButton.setText("返回播放器");
     }
 
@@ -424,7 +537,11 @@ final class LockScreenOverlay {
         if (shown == null) return;
         try {
             if (action == 1) shown.controller.getTransportControls().skipToPrevious();
-            else if (action == 2) shown.controller.getTransportControls().pause();
+            // 中间键是播放/暂停切换：暂停时场景会保留在锁屏上，所以这里必须能恢复播放。
+            else if (action == 2) {
+                if (shown.playing) shown.controller.getTransportControls().pause();
+                else shown.controller.getTransportControls().play();
+            }
             else shown.controller.getTransportControls().skipToNext();
         } catch (RuntimeException error) { Log.w(TAG, "Media transport action failed", error); }
     }
@@ -437,12 +554,91 @@ final class LockScreenOverlay {
         else { progress.setProgress(0); elapsed.setText("--:--"); duration.setText("--:--"); }
     }
 
-    private void restore() {
-        main.removeCallbacks(progressTicker); cancelArtworkFallback(); unregisterGuard(); shown = null; expanded = false; playerSceneVisible = false; restoreChangedViews();
-        if (foreground != null && foreground.getParent() == windowRoot) windowRoot.removeView(foreground);
+    /** 撤层。reason 只用于诊断日志，用来定位「上滑露壁纸 / 亮屏先见原生锁屏」由哪条路径触发。 */
+    private void restore(String reason) {
+        if (foreground != null || background != null || shown != null) Log.i(TAG, "restore reason=" + reason + " " + state());
+        main.removeCallbacks(progressTicker); main.removeCallbacks(finishSuspend); cancelArtworkFallback(); unregisterGuard(); shown = null; expanded = false; playerSceneVisible = false; restoreChangedViews();
+        if (foreground != null && foreground.getParent() == root) root.removeView(foreground);
         if (background != null && background.getParent() == root) root.removeView(background);
-        if (notificationButton != null && notificationButton.getParent() == windowRoot) windowRoot.removeView(notificationButton);
-        background = null; foreground = null; playerCard = null; notificationButton = null; clock = null; secondaryClock = null; nativeBackgroundLayer = null; nativeForegroundLayer = null; notifications = null; windowRoot = null;
+        if (notificationButton != null && notificationButton.getParent() == foreground) foreground.removeView(notificationButton);
+        background = null; foreground = null; content = null; immersiveClock = null; playerCard = null; notificationButton = null; clock = null; secondaryClock = null; nativeBackgroundLayer = null; nativeForegroundLayer = null; notifications = null; windowRoot = null;
+        unlockRestoreLogged = false; lastSkipReason = null; suspended = false;
+    }
+
+    /**
+     * 解锁时不再硬撤场景。
+     *
+     * 硬撤（旧行为）有两个后果：① `restore()` 会 `restoreChangedViews()` 把原生壁纸层恢复
+     * VISIBLE，而系统解锁动画还要跑上百毫秒（实测 `USER_PRESENT` 在 80~190ms 后才到），
+     * 空档期就露出壁纸；② 场景被销毁，下次亮屏必须重建（实测 126~145ms），观感是
+     * 「先看到原生锁屏再变成音乐版」。这里改为淡出到 GONE 并**保留实例**。
+     */
+    private void suspend(String reason) {
+        if (suspended || foreground == null) return;
+        suspended = true;
+        main.removeCallbacks(progressTicker);
+        main.removeCallbacks(finishSuspend);
+        Log.i(TAG, "suspend reason=" + reason + " " + state());
+        foreground.animate().cancel();
+        if (cover != null) cover.animate().cancel();
+        if (playerCard != null) playerCard.animate().cancel();
+        // 淡出只是视觉效果，真正的隐藏交给 finishSuspend 兜底：
+        // 解锁时窗口正在切换，ViewPropertyAnimator 的回调可能根本不推进，
+        // 那样前景组件就会一直留在桌面上（实测过）。
+        foreground.animate().alpha(0f).setDuration(120).start();
+        main.postDelayed(finishSuspend, 150);
+    }
+
+    /** suspend 收尾：隐藏场景并把原生层交还系统。用 Handler 而非动画回调，避免解锁时残留。 */
+    private final Runnable finishSuspend = () -> {
+        if (!suspended || foreground == null) return;   // 中途 resume()/restore() 过
+        foreground.animate().cancel();
+        foreground.setAlpha(1f);
+        foreground.setVisibility(View.GONE);
+        if (background != null) background.setVisibility(View.GONE);
+        if (notificationButton != null) notificationButton.setVisibility(View.GONE);
+        // 原生壁纸/时钟交还系统：桌面期间我们完全不碰这些层。
+        restoreChangedViews();
+        Log.i(TAG, "suspend done; scene kept for reuse");
+    };
+
+    /** 锁屏重新出现：复用 suspend 保留的场景，跳过 create() 重建。 */
+    private void resume() {
+        if (!suspended || foreground == null) return;
+        suspended = false;
+        main.removeCallbacks(finishSuspend);
+        Log.i(TAG, "resume reused scene " + state());
+        foreground.animate().cancel();
+        foreground.setAlpha(1f);
+        foreground.setVisibility(View.VISIBLE);
+        if (background != null) background.setVisibility(View.VISIBLE);
+        if (notificationButton != null) notificationButton.setVisibility(View.VISIBLE);
+        showMusic();
+    }
+
+    /** 诊断用：一行描述覆盖层与系统状态，配合 restore/skip 日志定位闪屏路径。 */
+    private String state() {
+        return "fg=" + (foreground != null) + " bg=" + (background != null) + " shown=" + (shown != null)
+                + " expanded=" + expanded + " scene=" + playerSceneVisible + " suspended=" + suspended
+                + " attached=" + root.isAttachedToWindow() + " interactive=" + interactive()
+                + " keyguard=" + keyguardLocked();
+    }
+
+    private boolean keyguardLocked() {
+        KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
+        return keyguard != null && keyguard.isKeyguardLocked();
+    }
+
+    private boolean interactive() {
+        PowerManager power = context.getSystemService(PowerManager.class);
+        return power != null && power.isInteractive();
+    }
+
+    /** render 早退原因去重：只在原因变化时打一行，避免媒体回调反复刷同一状态。 */
+    private void skip(String reason) {
+        if (reason.equals(lastSkipReason)) return;
+        lastSkipReason = reason;
+        Log.i(TAG, "render skipped: " + reason + " " + state());
     }
 
     private void registerGuard() {
@@ -455,9 +651,53 @@ final class LockScreenOverlay {
         if (!changedViews.containsKey(view)) changedViews.put(view, new ViewState(view));
         view.setVisibility(View.INVISIBLE); view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
     }
+    /** Makes a temporarily hidden SystemUI view visible while retaining its original state for restore(). */
+    private void show(View view) {
+        if (view == null) return;
+        if (!changedViews.containsKey(view)) changedViews.put(view, new ViewState(view));
+        view.setVisibility(View.VISIBLE);
+        view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+    }
     private void restoreChangedViews() {
         for (Map.Entry<View, ViewState> entry : changedViews.entrySet()) { entry.getKey().setVisibility(entry.getValue().visibility); entry.getKey().setImportantForAccessibility(entry.getValue().accessibility); }
         changedViews.clear();
+    }
+    /** Hides every stock keyguard clock layer; ROM themes may add one after create(). */
+    private void hideNativeClockLayers(View view) {
+        // foreground owns TextClock too. Do not recursively hide our own scene.
+        if (view == null || view == foreground || view == background) return;
+        String className = view.getClass().getName().toLowerCase(java.util.Locale.ROOT);
+        String idName = resourceName(view);
+        if (className.contains("clock") || idName.contains("clock")) hide(view);
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) hideNativeClockLayers(group.getChildAt(i));
+        }
+    }
+    /** Keeps any stock wallpaper/background container hidden while media owns the keyguard. */
+    private void hideNativeWallpaperLayers(View view) {
+        if (view == null || view == background) return;
+        String idName = resourceName(view);
+        if (view == nativeBackgroundLayer || view == nativeForegroundLayer
+                || idName.contains("wallpaper") || idName.contains("keyguard_background")) hide(view);
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) hideNativeWallpaperLayers(group.getChildAt(i));
+        }
+    }
+    private String resourceName(View view) {
+        int id = view.getId();
+        if (id == View.NO_ID) return "";
+        try { return context.getResources().getResourceEntryName(id).toLowerCase(java.util.Locale.ROOT); }
+        catch (RuntimeException ignored) { return ""; }
+    }
+    /** Reveals one stock view without forgetting its original state for final restore. */
+    private void reveal(View view) {
+        if (view == null) return;
+        ViewState state = changedViews.get(view);
+        if (state == null) return;
+        view.setVisibility(state.visibility);
+        view.setImportantForAccessibility(state.accessibility);
     }
     private boolean isStillPlaying() {
         try {

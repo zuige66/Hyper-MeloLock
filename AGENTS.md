@@ -8,16 +8,30 @@
 - 界面只做「复用 HyperIsland 原版组件 + 换数据源」，不新写样式；同名卡片直接提升 `OverviewPage.kt` 里的实现为 `internal` 共享，禁止复制第二份。
 - `LockScreenOverlay.java` 由 Hook 注入 SystemUI 进程：任何改动都必须失败关闭（异常退回原生锁屏），并且**不要与其他会话/人工编辑并行改这个文件**。
 - 新增锁屏可调参数时：键名与默认值加到 `Config.java` 的 `ELEMENT_DEFAULTS`，Provider 走 `/elements` 的 key/value 通道，**不要**再去改 `ConfigProvider` 的列投影。
+- **装完 APK 必须重启 SystemUI 才会加载新的 Hook 代码**，顺序是先装再重启。锁屏行为异常时先比 `ps` 里 SystemUI 的 ETIME 和 APK 安装时间，再看 `logcat | grep "Elements: clock="` 有没有出现——没有就说明跑的还是旧代码。
 
 ## 最近完成
 
+- 解锁残留治本（用户截图定位）：**前景层与通知按钮从窗口根改挂锁屏根**。截图显示解锁瞬间「壁纸已出、前景组件完整残留」——背景层挂锁屏根被系统动画带走，前景挂窗口根不跟动画。挂同一容器后系统退场动画把整层一起带走，消失同步。同时实现「播放即预建」：`render()` 在桌面收到有效媒体快照且无场景时 `preCreate()`（GONE + suspended），一点播放场景就绪。`restore()` 的 removeView 判据同步改为锁屏根。
+- 暂停误判 + 解锁残留（真机日志定位）：① **暂停被当成「无会话」把场景销毁**——暂停识别原先依赖 `lastReady`，切歌失败会清空它，之后 `refresh()` 就走 `onMedia(null)` → `render-no-session` 撤层，锁屏掉回原生。改为遍历时记住第一个「允许的包 + 有 metadata + 非播放」的会话。② **解锁后前景残留桌面**——`suspend()` 把隐藏挂在 `ViewPropertyAnimator.withEndAction` 上，解锁时窗口切换、动画回调可能不推进。改为 Handler 延时兜底（`finishSuspend`），动画只负责视觉淡出。**排查手法**：`logcat -d -v time -s MeloLock | grep -v "Media ready from bitmap"` 能滤掉每 2 秒的取图噪音，直接看到状态机流转。
+- 解锁/亮屏闪屏补完（暂停保留 + 熄屏预建）：① **暂停不销毁**——`MediaSource` 区分「会话还在但暂停」和「会话消失」，暂停时交出最后一帧（`Snapshot.playing=false`、`speed=0`），并且 `current` 继续跟踪该会话以免注销回调后点播放不更新；中间键改成播放/暂停切换。② **熄屏预建**——「桌面播歌 → 熄屏 → 亮屏」这条路径上场景从未存在（桌面上 `render()` 一律 `skip("keyguard-unlocked")`），`suspend/resume` 救不了，现在 `ACTION_SCREEN_OFF` 主动触发一次媒体刷新，`render()` 在 `!isInteractive()` 时 `preCreate()`：趁着屏幕黑把场景建好并置 GONE + `suspended`，亮屏由 pre-draw 第一帧 `resume()` 秒显。`render()` 抽出 `applySnapshot()` 共用。
+- 修复上滑解锁闪屏（**淡出 + 保留实例**）：真机抓到的 5 轮「熄屏 → 亮屏 → 解锁」日志证明两个现象同源——解锁瞬间 `keyguardGuard` 见 `isKeyguardLocked()` 翻 false 就 `restore()`，而 `restore()` 会把原生壁纸层恢复 VISIBLE、系统解锁动画却还要跑 80~190ms（`USER_PRESENT` 才到），于是露壁纸；场景被销毁后下次亮屏必须 `create()` 重建 126~145ms，于是「先见原生锁屏」。改为 `suspend()`：淡出 180ms 后**保留视图实例**并置 `GONE`，`suspended` 期间 pre-draw 守卫与媒体回调都不接管界面；锁屏重现时 `resume()` 直接复用同一批视图。只有模块关闭 / 媒体不可用 / 锁屏根视图分离才真正 `restore()`。已构建、已安装，待真机验收。
+- ⚠️ **仓库存在并行编辑**：2026-10-06 20:00 前后源码从 `io/github/hypermusicscape/lock/`（TAG `HyperMusicScapeLock`）整体迁移到 `io/github/melolock/`（TAG `MeloLock`），且是在本会话改动之上做的重命名。**动 `LockScreenOverlay.java` 前必须先重新读文件。**
+- 「上滑解锁露壁纸一秒」「熄屏再亮屏先见原生锁屏一秒」两个现象真机复现仍未消除（README 第 7、9 条修复无效），本轮**只加诊断日志、不改行为**：`LockScreenOverlay.restore()` 改为 `restore(String reason)` 并打印状态快照、pre-draw 检测到解锁撤层打一次日志、`render()` 每个早退分支走去重 `skip()`、`MediaSource.refresh()` 打印取图耗时（bitmap 直出 / 缓存帧 / URI 异步解码三条路径）、`HookEntry` 打印根视图 attach/detach。抓取用 `adb -s 1b3a7d8 logcat -v time | grep MeloLock`——覆盖层在 `com.android.systemui` 进程，**配置端 App 进程的日志里不会有这些行**。
+- 首页大标题字号机制：Miuix `TopAppBar` 的大标题字号写死为 `textStyles.title1`（32sp）且 `LocalTextStyles` 是 internal，因此 `HyperIslandTheme` 暴露 `LocalThemeController`，`CollapsingPage` 新增 `largeTitleFontSize`（用同一 controller 再开一层 `MiuixTheme` 只换 `title1`，不影响颜色/深浅色模式）。改名后 `Hyper MeloLock` 只有 12 字符，32sp 已能单行，首页不再传该参数，机制保留备用。
+- 项目整体改名为 **Hyper MeloLock**：`app_name`、Gradle 根项目名、包名与 applicationId（`io.github.hypermusicscape.lock` → `io.github.melolock`，含 7 个 Java 文件的 `package`、`Config.PACKAGE`、`assets/xposed_init`、Manifest provider authorities）、日志 tag（`MeloLock` / 配置端 `MeloLock[App]`）、图标源图 `hyper-melolock.png` 与文档全部同步。**改名后是另一个应用**：不会覆盖升级旧包名，Vector 里要卸载旧模块并重新启用、重新勾选 `SystemUI` 作用域，旧配置不继承。仓库目录名仍是 `Hyper Music Scape Lock`。
+- Manifest 补声明 `com.android.permission.GET_INSTALLED_APPS`：**申请未声明的权限系统会直接拒绝、不弹授权框**，这是「音乐应用」页看不到授权框的原因；同时去掉「列表为空才申请」的额外条件，进入该页必申请。
+- 首页系统信息对 `SystemInfoProvider` 失败增加 `Build.*` 兜底与日志，实拍已恢复真值。
+- 应用名与包名统一为 `Hyper MeloLock` / `io.github.melolock`，图标 `res/drawable-nodpi/ic_hmsc.png`，开发者 `zuige` / GitHub `zuige66`。上一轮改名前的状态已提交 `f344d75 app页面配置`。
+- 音乐应用页改为列出**全部已安装应用**（进入时申请应用列表权限，另有「显示系统应用」过滤），由用户自行勾选要接管的播放器。
+- 滑条点击行为改为直接跳到点击位置：`PreferenceSlider` 新增 `allowManualInput`（默认 `true` 保持 HyperIsland 原行为，本模块传 `false` 不再弹手动输入框）。
+- 禁用启动时的检查更新（`INTERNET` 已被移除，原本必然弹「检查更新失败」）。
+- 修复首页状态卡关掉后点不回来：`OverviewStatusCard` 新增 `clickableWhenInactive`（HyperIsland 原行为是未激活不可点）。
+- 外观页新增锁屏三元素编辑器，并内置 OFL 圆体数字字体（Quicksand / Baloo 2）支持三档圆润 + 连续粗细。
 - 直接迁入 HyperIsland（MIT）的配置端主题、组件、资源和导航，入口替换为：首页、音乐应用、外观、开发者。
-- 四个根页面对齐 HyperIsland 版式：首页改成「状态卡 + 两张数据卡 + 系统信息卡 + 链接卡」；音乐应用页改成「搜索栏 + 图标行 + 开关」；作者署名与外链留空显示「待填写」并置灰，位置在 `LockScreenPages.kt` 末尾的 `TODO(作者信息)`。
-- 把 `OverviewPage.kt` 私有的 `StatusGrid` / `StatusCard` / `StatCard` / `InfoCard` / 告警卡提升为 `internal` 并参数化标题，HyperIsland 首页与模块首页共用同一批组件。状态卡新增 `clickableWhenInactive`，因为本模块把它当总开关用（HyperIsland 原版未激活时不可点，会导致关掉后点不回来）。
-- 外观页加入锁屏三元素编辑器：时间（字号/宽高/粗细/字体圆润/颜色/间距）、专辑封面（缩放或宽高/圆角/间距）、播放器（缩放或宽高/圆角/间距），另保留背景设置。尺寸用 dp，锁定比例时用缩放百分比，间距统一为「距上一个元素」。
+- 四个根页面对齐 HyperIsland 版式：首页改成「状态卡 + 两张数据卡 + 系统信息卡 + 链接卡」；作者署名与外链留空显示「待填写」并置灰，位置在 `LockScreenPages.kt` 末尾的 `TODO(作者信息)`。
+- 把 `OverviewPage.kt` 私有的 `StatusGrid` / `StatusCard` / `StatCard` / `InfoCard` / 告警卡提升为 `internal` 并参数化标题，HyperIsland 首页与模块首页共用同一批组件。
 - `Config.java` 新增 `ELEMENT_DEFAULTS` 与 `elementValues()/elementInt()/elementString()/setElementInt()`；`ConfigProvider` 新增 `/elements` 的 key/value 查询；`LockScreenOverlay.measureElements()` 负责算最终尺寸，新增 `roundTypeface()/applyClockTypeface()` 处理内置圆体字体与 `wght` 粗细。
-- 内置两个 OFL 开源可变圆体数字字体（Quicksand、Baloo 2）到 `assets/fonts/`，因为系统字体没有圆角轴也没有圆体族。对外发布前需补 OFL 全文。
-- 应用名改为 `Hyper Music Scape Lock`（`app_name` 资源），图标改为 `res/drawable-nodpi/ic_hmsc.png`，开发者 `zuige` / GitHub `zuige66`。
 - `Config.java` 新增 `selectedPackages()`、`allPackagesDisabled()`、`enabledAppCount()`、`deviceSupported()` 只读辅助，用于区分「未设置（允许全部）」与「已全部取消」；未改动任何配置键。
 - 保留媒体播放器白名单和锁屏背景外观配置，并通过 ContentProvider 同步。
 - 构建已升级至 Gradle 9.5 / AGP 9.3.1，并已用 `./gradlew.bat --no-daemon :app:assembleDebug` 验证 Debug 构建通过、安装到真机并启动验证。

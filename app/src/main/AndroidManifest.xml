@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <!-- HyperOS 上枚举全部已安装应用需要 MIUI 自己这个运行时权限；
+         不声明的话 requestPermissions 会直接被拒、连授权框都不弹。 -->
+    <uses-permission android:name="com.android.permission.GET_INSTALLED_APPS" />
     <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
     <queries>
         <intent>
@@ -19,7 +22,7 @@
         <meta-data android:name="xposeddescription" android:value="澎湃 OS 3 音乐锁屏，默认关闭" />
         <meta-data android:name="xposedminversion" android:value="93" />
         <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
-        <provider android:name="io.github.hypermusicscape.lock.ConfigProvider" android:authorities="io.github.hypermusicscape.lock.config"
+        <provider android:name="io.github.melolock.ConfigProvider" android:authorities="io.github.melolock.config"
             android:exported="true" />
         <activity android:name="io.github.hyperisland.MainActivity" android:exported="true">
             <intent-filter>
