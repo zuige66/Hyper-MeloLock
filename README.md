@@ -21,14 +21,25 @@
 
 ### 配置应用界面
 
-配置端现直接迁入并使用 HyperIsland 的 Kotlin、Jetpack Compose、Miuix 页面壳层、主题、动画和液态导航栏（MIT License），再替换为本模块的四个入口：
+配置端现直接迁入并使用 HyperIsland 的 Kotlin、Jetpack Compose、Miuix 页面壳层、主题、动画和液态导航栏（MIT License），四个入口的版式也改为直接复用 HyperIsland 原版组件，不再自绘样式：
 
-- **首页**：模块开关、当前设备适配范围、工作方式和恢复提示。
-- **音乐应用**：扫描声明 `MediaBrowserService` 的已安装应用，可勾选允许进入锁屏的播放器；全部取消后表示不允许任何播放器。
+- **首页**：对齐 HyperIsland 首页版式 —— 顶部大标题加刷新按钮，第一行是「方形激活卡（大号对勾底纹）」加右侧两张数据卡，下面是（按需出现的）适配告警卡、系统信息卡、链接卡和使用说明卡。
+  - 状态卡点击即切换模块总开关，标签在 `已激活` / `未激活` 之间切换。
+  - 左数据卡为「已开启应用」，取 `Config.enabledAppCount()`：未设置时显示 `全部`（表示允许所有播放器），全部取消时显示 `0`，否则是勾选数量；点击跳到「音乐应用」页。
+  - 右数据卡为「封面圆角」，取 `Config.cornerRadiusDp()`；点击跳到「外观」页。
+  - 告警卡仅在 `Config.deviceSupported()` 为假（设备构建指纹不在已验证列表内）时出现，与 `HookEntry` 的加载门禁同一判据。
+  - 系统信息卡四行：系统版本、应用版本、Xposed 框架、设备型号。前三行中 Xposed 框架依赖 Vector/LSPosed 服务绑定（`XposedPrefsSyncApp.awaitReady()`）；legacy 模块拿不到服务时显示 `未知`。
+- **音乐应用**：对齐 HyperIsland「应用」页 —— 搜索栏加应用行（图标、名称、包名、开关），整行点击也可切换。列表扫描声明 `MediaBrowserService` 的已安装应用；未设置表示允许全部，取消勾选后落成显式白名单，全部取消后锁屏不再接管任何播放器。
 - **外观**：设置封面圆角、深色/浅色/纯色背景、遮罩颜色和强度。配置通过只读 `ContentProvider` 同步给 SystemUI。
-- **关于**：开发者信息、许可证说明和项目链接。
+- **开发者**：开发者与联系方式、项目链接、开源说明。**作者署名与全部外链当前留空**，页面显示「待填写」并置灰不可点击。
 
-原有 Java/Xposed 锁屏适配链路保留；Compose 页面通过公开的 `Config` API 与同一 ContentProvider 配置同步。构建环境已升级到 AGP 9.3.1、Gradle 9.5、Kotlin/Compose 2.4.10。
+四页共用的卡片来自 HyperIsland 原版实现：`OverviewPage.kt` 里原先私有的 `StatusGrid` / `StatusCard` / `StatCard` / `InfoCard` / 告警卡已提升为 `internal` 的 `OverviewStatusGrid` / `OverviewStatusCard` / `OverviewStatCard` / `OverviewInfoCard` / `OverviewAlertCard`，只把标题与数值参数化，视觉与交互代码未改动。HyperIsland 自己的首页（`OverviewPage`）改为调用同一批组件，因此不存在第二份样式实现。音乐应用页的行样式沿用 HyperIsland `AppsPage` 的 `Card` + `BasicComponent` 组合，图标复用 `InstalledAppsRepository` 的缓存与解码逻辑。
+
+AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重读配置，因此从其他页改完设置回到首页，数据卡会刷新。
+
+原有 Java/Xposed 锁屏适配链路保留；Compose 页面通过公开的 `Config` API 与同一 ContentProvider 配置同步。`Config.java` 新增 `selectedPackages()`、`allPackagesDisabled()`、`enabledAppCount()`、`deviceSupported()` 四个只读辅助方法，用于区分「未设置（允许全部）」与「已全部取消」两种空集，没有改动任何配置键或读写语义。构建环境已升级到 AGP 9.3.1、Gradle 9.5、Kotlin/Compose 2.4.10。
+
+界面文案现状：这四个页面沿用原有实现，标题与说明文本直接写中文，只有导航栏、系统信息行和链接行使用 `strings.xml` 资源；`待填写` 也是硬编码中文。后续要补多语言时需要一并抽到资源。
 
 为避免把 HyperIsland 的更新内容带入本项目，当前配置端已关闭启动时环境统计，并在最终 APK 中移除 `INTERNET` 权限。HyperIsland 的更新检查、预设云端下载和外部资源链接源码仍随迁入代码保留，但当前四页不会调用；APK 不声明安装权限，也不会自动安装其他 APK。
 
@@ -41,6 +52,15 @@
 ## 构建与安装
 
 使用 JDK 17+、Android SDK 36 和 Gradle 9.4.1。执行 `./gradlew :app:assembleDebug`（Windows 为 `./gradlew.bat :app:assembleDebug`），产物为 `app/build/outputs/apk/debug/app-debug.apk`。若 SDK 未自动找到，设置 `ANDROID_HOME`。
+
+Windows 上 `:app:dexBuilderDebug` 偶尔会以 `Unable to delete directory ... project_dex_archive` 或 `desugar_graph\\...\\graph.bin (拒绝访问)` 失败：这是杀毒/索引进程仍占用刚生成的 `.dex`，不是代码问题（Kotlin 与 Java 编译此时已通过）。删掉被占用的中间目录后重跑即可，必要时降并发：
+
+```bash
+rm -rf app/build/intermediates/project_dex_archive app/build/intermediates/desugar_graph
+./gradlew.bat --no-daemon --max-workers=2 :app:assembleDebug
+```
+
+增量构建时这两个目录可能残留，建议先清理再判断是否编译失败。
 
 安装：
 
@@ -88,6 +108,8 @@ adb -s 1b3a7d8 install -r app/build/outputs/apk/debug/app-debug.apk
 
 用户确认本机 OS 3 的原生媒体头不能作为可移动组件，要求改为模块自绘、外观贴近原生的播放器卡片。当前实现已移除对 `MiuiMediaHeaderView` 的移动尝试：沉浸页在窗口顶层绘制深色圆角卡片，包含小封面、标题、歌手、上一首、暂停、下一首、进度条和时间；所有媒体数据与控制仍通过通用 `MediaSession` / `MediaController` 获取和发送。通知页继续显示系统原生播放器和通知；两页共用黑色圆角卡片、小封面、文字层级和控制行，减少切换突兀感。沉浸页每 500 ms 根据 MediaSession 的位置、速率和时长更新进度；无有效播放会话或封面时立即恢复原生锁屏。新实现不改 SystemUI 原生播放器的父子关系，Debug 构建已通过，**待安装、重启及真机验收。**
 
+用户已在真机验收“专辑封面 + 自绘播放器”布局：封面、时间、原生风格卡片、播放进度和通知入口均可显示。该验收版本已创建本地 Git 提交 `1ce2c93 feat: add immersive album and media player card`；工作目录原先没有 Git 仓库，因此该提交是新仓库的首个提交，仅包含 `README.md`、`LockScreenOverlay.java` 和 `MediaSource.java`，未纳入并行开发的 Compose 界面文件。截图同时发现底部快捷入口区域露出原壁纸。后续修复在锁屏根视图底部插入一层相同的模糊专辑图与遮罩，位于系统手电筒/相机快捷入口下方；窗口顶层交互场景仍保留底部空间，避免遮挡快捷入口和解锁手势。Debug 构建已通过，**待安装、重启及真机验收。**
+
 ## 故障恢复
 
 优先在模块应用中关闭开关。无法操作应用时，从已授权的电脑停用模块应用，随后重启设备；恢复前保持停用：
@@ -106,3 +128,10 @@ adb -s 1b3a7d8 reboot
 ## 后续
 
 先完成上面的真机验收并修复观察到的问题，再增加其他系统版本的适配器和对应构建门禁。
+
+界面部分待办：
+
+1. 2026-10-06 的首页/音乐应用/外观/开发者四页改版已构建通过并确认进入 APK（APK 内可见 `enabledAppCount`、`OverviewStatusGrid`、`已开启应用`、`待填写` 等新增符号），**但尚未做真机视觉验收**：安装时设备 `1b3a7d8` 已从 ADB 掉线。
+2. 重新连接设备后按上面的安装命令刷入，重点看：状态卡点击切换是否可靠（这是模块唯一的开关入口）、两张数据卡的数字是否与「音乐应用」页勾选状态一致、数据卡点击跳页是否正确、暗色主题下绿色/红色状态卡对比度。
+3. 作者署名与三个外链常量留在 `LockScreenPages.kt` 末尾的 `TODO(作者信息)` 处，填上后对应行会自动从「待填写」置灰恢复为可点击。
+4. 中文文案目前硬编码在这四个页面里，补多语言时需抽到 `strings.xml`。

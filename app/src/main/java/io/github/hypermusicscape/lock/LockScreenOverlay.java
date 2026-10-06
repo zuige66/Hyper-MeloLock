@@ -56,8 +56,9 @@ final class LockScreenOverlay {
     private boolean expanded;
     private View clock, secondaryClock, nativeBackgroundLayer, nativeForegroundLayer;
     private ViewGroup notifications, windowRoot;
+    private FrameLayout background;
     private FrameLayout foreground;
-    private ImageView blur, cover, cardArt;
+    private ImageView baseBlur, blur, cover, cardArt;
     private TextView title, artist, previous, playPause, next, elapsed, duration;
     private ProgressBar progress;
     private Button notificationButton;
@@ -135,6 +136,7 @@ final class LockScreenOverlay {
         if (foreground == null && !create()) return;
         registerGuard();
         shown = snapshot;
+        baseBlur.setImageBitmap(snapshot.art);
         blur.setImageBitmap(snapshot.art); cover.setImageBitmap(snapshot.art); cardArt.setImageBitmap(snapshot.art);
         title.setText(emptyAs(snapshot.title, "未知曲目")); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
         playPause.setText("Ⅱ");
@@ -156,17 +158,29 @@ final class LockScreenOverlay {
             missingViewsLogged = true;
             return false;
         }
+        // This layer is below SystemUI's shortcut row but above the stock wallpaper.
+        // It fills the bottom area that the interaction scene deliberately leaves free.
+        background = new FrameLayout(context);
+        baseBlur = new ImageView(context);
+        baseBlur.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        int blurDp = Config.overlayStyle(context) == 2 ? 0 : (Config.overlayStyle(context) == 1 ? 18 : 28);
+        if (blurDp > 0) baseBlur.setRenderEffect(RenderEffect.createBlurEffect(dp(blurDp), dp(blurDp), Shader.TileMode.CLAMP));
+        background.addView(baseBlur, new FrameLayout.LayoutParams(-1, -1));
+        View baseScrim = new View(context);
+        int color = Config.overlayColor(context);
+        baseScrim.setBackground(new ColorDrawable((color & 0x00FFFFFF) | (Config.overlayAlpha(context) << 24)));
+        background.addView(baseScrim, new FrameLayout.LayoutParams(-1, -1));
+        root.addView(background, 0, new ViewGroup.LayoutParams(-1, -1));
+
         foreground = new FrameLayout(context);
         FrameLayout.LayoutParams sceneParams = new FrameLayout.LayoutParams(-1, -1, Gravity.TOP);
         sceneParams.bottomMargin = dp(88);
         windowRoot.addView(foreground, sceneParams);
         blur = new ImageView(context);
         blur.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        int blurDp = Config.overlayStyle(context) == 2 ? 0 : (Config.overlayStyle(context) == 1 ? 18 : 28);
         if (blurDp > 0) blur.setRenderEffect(RenderEffect.createBlurEffect(dp(blurDp), dp(blurDp), Shader.TileMode.CLAMP));
         foreground.addView(blur, new FrameLayout.LayoutParams(-1, -1));
         View scrim = new View(context);
-        int color = Config.overlayColor(context);
         scrim.setBackground(new ColorDrawable((color & 0x00FFFFFF) | (Config.overlayAlpha(context) << 24)));
         foreground.addView(scrim, new FrameLayout.LayoutParams(-1, -1));
 
@@ -252,8 +266,9 @@ final class LockScreenOverlay {
     private void restore() {
         main.removeCallbacks(progressTicker); unregisterGuard(); shown = null; expanded = false; restoreChangedViews();
         if (foreground != null && foreground.getParent() == windowRoot) windowRoot.removeView(foreground);
+        if (background != null && background.getParent() == root) root.removeView(background);
         if (notificationButton != null && notificationButton.getParent() == windowRoot) windowRoot.removeView(notificationButton);
-        foreground = null; notificationButton = null; clock = null; secondaryClock = null; nativeBackgroundLayer = null; nativeForegroundLayer = null; notifications = null; windowRoot = null;
+        background = null; foreground = null; notificationButton = null; clock = null; secondaryClock = null; nativeBackgroundLayer = null; nativeForegroundLayer = null; notifications = null; windowRoot = null;
     }
 
     private void registerGuard() {
