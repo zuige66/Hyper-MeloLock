@@ -3,7 +3,7 @@
 独立的 Android Vector/LSPosed 模块；不修改 Cool Music 或其他播放器。只给 `com.android.systemui` 注入一个锁屏视图适配器。媒体发现、封面和播放控制使用 Android `MediaSessionManager` / `MediaController`。当前仅为指定真机构建开放，默认关闭。
 
 - **仓库**：<https://github.com/zuige66/Hyper-MeloLock>
-- **下载**：Releases 页 <https://github.com/zuige66/Hyper-MeloLock/releases>（`app-release.apk`，正式签名）
+- **下载**：[Releases](https://github.com/zuige66/Hyper-MeloLock/releases) → 最新版 [v0.2.0](https://github.com/zuige66/Hyper-MeloLock/releases/download/v0.2.0/Hyper-MeloLock-v0.2.0.apk)（`Hyper-MeloLock-v0.2.0.apk`，正式签名，37.1 MB）
 - **许可**：AGPL-3.0（见 `LICENSE`）
 
 > 当前唯一验证设备是下面那台 Redmi Note 9 Pro；模块按**精确构建指纹**门禁（`Config.deviceSupported()`），换机型不会生效。
@@ -420,4 +420,4 @@ adb -s 1b3a7d8 reboot
 
 19. 2026-10-06 **播放器页 ↔ 通知页共享元素切换**，并修掉三个真机反馈：① 展开通知后左下拉仍能拉出通知（`sceneShowing()` 不该带 `playerSceneVisible`）；② 桌面下拉露出原屏保时间（suspended 期间要继续按住原生时钟层，但不碰壁纸层）；③ 切回播放器时间闪一下（真凶是返回时把含时钟的 `foreground` 从 alpha 0 淡入）。附带：位移上限收到 96dp 且展开/返回复用同一值、`bringToFront()` 换成 `ensureOnTop()`（避免每帧 `requestLayout`）。
 
-20. 2026-10-07 **首个 Release**：仓库推送到 <https://github.com/zuige66/Hyper-MeloLock>，v0.2.0 正式签名 APK（v1+v2+v3）发布到 Releases。补 `.gitignore`（签名密钥、`.workbuddy/`、临时截图）。
+20. 2026-10-07 **首个 Release**：仓库推送到 <https://github.com/zuige66/Hyper-MeloLock>，v0.2.0 正式签名 APK（v1+v2+v3）发布到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases/tag/v0.2.0)。补 `.gitignore`（签名密钥、`.workbuddy/`、临时截图）。发布用 token 只活在临时文件里，用完即删（**并且应当在 GitHub 上吊销**）。
