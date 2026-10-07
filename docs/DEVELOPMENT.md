@@ -571,6 +571,16 @@ adb -s 1b3a7d8 reboot
 
 本仓库按 AGPL-3.0 发布。仅参考 HyperMusicCover 的产品思路，没有复制其源码、资源或钩子；其澎湃 OS 4 适配未用于本项目。Vector 的 legacy Xposed API 用作 `compileOnly` 依赖，不打包到 APK。
 
+**2026-10-08 补充**：本次对同类项目做了一轮源码级调研（HyperMusicCover / HyperChanger / HyperGlow CN+），产出见 [docs/RESEARCH-lockscreen-approaches.md](./RESEARCH-lockscreen-approaches.md)。调研属于**读码取经**，产品代码中没有引入它们的任何源码；调研文档里出现的少量代码片段均为**带 `文件:行号` 出处的引用**，不是本项目的实现。
+
+三个参考项目各自的许可证不同，将来若要移植具体实现必须分别核对合规（` HyperChanger` 有一个陷阱，见下）：
+
+| 参考项目 | 许可证 | 备注 |
+| --- | --- | --- |
+| `zyl6932/HyperMusicCover` | **AGPL-3.0** | 与本项目同为 AGPL，移植需同等署名 |
+| `ColdP/HyperChanger` | **Apache-2.0** | 许可证与第一层不一致：它内嵌的 `hypermusiccover/` 包是自含水的项目移植而来的 **AGPL** 代码。**照搬该包要按 AGPL 处理，不能因为仓库顶层写着 Apache-2.0 就当作 Apache 代码用** |
+| `aodianjun/com.aodianjun.hyperglow.cnplus` | **GPL-3.0** | 上游 `amarinne/hyperglow` 同为 GPL-3.0 |
+
 应用标识：应用名 `Hyper MeloLock`（`values` / `values-zh` 的 `app_name`，其他语言回落到英文），包名与 applicationId 为 `io.github.melolock`，Gradle 根项目名 `Hyper MeloLock`。
 
 **2026-10-06 做过一次整体改名**（原 `io.github.hypermusicscape.lock` / `Hyper Music Scape Lock`）：包目录与 7 个 Java 文件的 `package`、`applicationId`、`Config.PACKAGE`（`AUTHORITY` 与 `URI` 由其派生）、`assets/xposed_init`、Manifest 的 provider authorities、日志 tag（覆盖层 `HyperMusicScapeLock` → `MeloLock`，配置端 → `MeloLock[App]`）以及文档全部同步。**改名后是一个全新的应用**：不会原地覆盖升级旧的 `io.github.hypermusicscape.lock`，Vector 里会出现两个模块；必须卸载旧模块应用并重新启用本模块、重新勾选 `com.android.systemui` 作用域，旧配置数据也不会继承。仓库目录名仍是 `Hyper Music Scape Lock`（工作区路径未动）。启动器图标源图为 `docs/images/icon.png`（已复制一份到 `app/src/main/res/drawable-nodpi/ic_hmsc.png` 作为应用图标，两份 MD5 一致），它不是自适应图标，部分启动器可能加自己的遮罩。
@@ -607,6 +617,14 @@ adb -s 1b3a7d8 reboot
 7. 2026-10-06 熄屏唤醒防闪：不再在 `ACTION_SCREEN_OFF` 时移除已经渲染的沉浸层，也不会因为熄屏期间的媒体回调撤掉它；`ACTION_SCREEN_ON` 先立即恢复缓存场景，再刷新 `MediaSession`。解锁、关闭模块、锁屏根视图分离，或亮屏后确认没有有效会话时仍恢复原生锁屏。该修复已完成 Debug 构建，待真机验证首次唤醒是否消除原生锁屏的一秒闪现。
 
 8. 2026-10-06 时间裁切修复：时间字号为 91 时，用户把自定义容器高度设为 100 dp，圆体/粗体字形的实际绘制高度超过容器，导致底部被裁掉；布局剩余空间不能参与该文本控件测量。现移除时间的锁定比例、宽度和高度设置，时间始终 `MATCH_PARENT × WRAP_CONTENT`，外观页只保留字号、粗细、圆润、颜色和“距顶部”。通知入口的底部边距从 125 dp 调整为 78 dp，移动到系统底部快捷入口上方。Debug 构建通过，待真机验收。
+
+9. **2026-10-08 同类项目源码调研（只读，未改产品代码）** —— 产出 `docs/RESEARCH-lockscreen-approaches.md`。核心结论三条：
+
+   - **发现一条我们没走过的路径**：HyperMusicCover / HyperChanger 是在 **`com.miui.miwallpaper` 进程**里 hook GL 上传点（`ImageWallpaperRenderer` 的 `lambda$onSurfaceCreated$0`）把专辑图换成壁纸纹理，而不是在 SystemUI 里叠加 View。理由是 MIUI 的时钟液态玻璃与通知卡模糊**采样的是壁纸窗口，SystemUI 的 View 树永远采样不到**——也就是说我们「把背景层提升到 `windowRoot`」在结构上补不了这个洞。
+   - **本机已证实这条路可行所需的一切符号都存在**（`[机]`）：`com.miui.miwallpaper` 包与 `MiuiKeyguardPictorialWallpaper` 锁屏壁纸窗口存在；扒 dex 确认 `com.miui.miwallpaper.opengl.ImageWallpaperRenderer` 及其 `$WallpaperTexture` 存在；目标方法字符串逐字存在且带 D8 混淆后缀 `lambda$onSurfaceCreated$0$com-miui-miwallpaper-opengl-ImageWallpaperRenderer`（**按精确名 `getDeclaredMethod` 会落空，必须模糊匹配 lambda**）；`getTextureDimensions`、`AnimImageWallpaperRenderer`、`KeyguardImageEngineImpl` 也都在。
+   - **SystemUI 侧的挂载点候选得到补名单**：本机 `resources.arsc` 里 `keyguard_translation_info`、`keyguard_background_layer`、`keyguard_foreground_layer`、`keyguard_clock_container`、`keyguard_root_view` **全部存在**（注意这些名字不在 dex 里，要在 arsc 中搜）。`keyguard_background_layer` 本身就在时钟栈之后，可作为「不用把层提升出 keyguard 根」的候选。
+
+   调研文档给出了分级建议（A 立即做 / B 先验证 / C 不要照搬），其中**不建议**的有：迁移到 libxposed API 102（我们是 Vector legacy，收益划不来）；在 SystemUI 内跑 Compose（所谓 `CoverCompose.java` 其实是纯 Bitmap+Canvas 合成，名字骗人）；抄歌词子系统；用 MIUI 的渐变私有模糊（已知会 RenderThread SIGSEGV）。**代码改动尚未开始，等 zuige 决策后再动手。**
 
 9. 2026-10-06 解锁滑动背景裂缝修复：此前同一张模糊专辑图分别绘制在锁屏根视图和通知窗根视图；解锁手势期间两个根视图由 SystemUI 分别做位移/淡出动画，底部会暴露原壁纸。现删除通知窗根视图里的重复模糊图和遮罩，只保留锁屏根视图内的单一全屏背景层；窗口顶层仅放封面、播放器和通知入口。普通通知继续由守卫隐藏。Debug 构建已通过，待真机滑动解锁验收。
 
