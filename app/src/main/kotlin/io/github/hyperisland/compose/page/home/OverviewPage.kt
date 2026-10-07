@@ -3,8 +3,6 @@ package io.github.hyperisland.compose.page.home
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.widget.Toast
-import io.github.melolock.Config
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -42,14 +40,12 @@ import io.github.hyperisland.R
 import io.github.hyperisland.XposedPrefsSyncApp
 import io.github.hyperisland.compose.component.CollapsingPage
 import io.github.hyperisland.compose.component.RestartScopeDialog
-import io.github.hyperisland.compose.service.RestartScopeService
 import io.github.hyperisland.compose.component.SettingsAction
 import io.github.hyperisland.compose.data.FlutterPrefsRepository
 import io.github.hyperisland.compose.service.HomeSystemInfo
 import io.github.hyperisland.compose.service.SystemInfoProvider
 import io.github.hyperisland.compose.service.TestNotificationService
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -157,26 +153,9 @@ internal fun OverviewPage(
         title = "HyperIsland",
         actionIcon = MiuixIcons.Refresh,
         actionDescription = stringResource(R.string.restart_scope),
-        // 先探测 root 再决定走哪条路：
-        //  · 有 root → 弹出作用域列表，用 su 命令精确重启选中的进程
-        //  · 无 root → 走模块通道（广播给 SystemUI 里的模块，由它自己重启自己），
-        //    这样在 su 不可用的环境（如本机 SukiSU）里这个按钮依然有用，而不是点了没反应
-        onAction = {
-            scope.launch {
-                if (RestartScopeService.hasRoot()) {
-                    showRestartDialog = true
-                    return@launch
-                }
-                context.sendBroadcast(
-                    Intent(Config.ACTION_RESTART_SYSTEMUI).setPackage(Config.SYSTEMUI_PACKAGE)
-                )
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.restart_scope_requested),
-                    Toast.LENGTH_LONG,
-                ).show()
-            }
-        },
+        // 本模块的真实首页是 LockScreenPages.LockHomePage，重启作用域的逻辑在那边；
+        // 这里保持上游 HyperIsland 的原样，避免同一份逻辑出现两个版本。
+        onAction = { showRestartDialog = true },
         horizontalContentPadding = 12.dp,
         topContentPadding = 12.dp,
         bottomContentPadding = 16.dp,

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -45,6 +46,7 @@ import io.github.hyperisland.compose.component.CollapsingPage
 import io.github.hyperisland.compose.component.PreferenceDropdown
 import io.github.hyperisland.compose.component.PreferenceSlider
 import io.github.hyperisland.compose.component.PreferenceSwitch
+import io.github.hyperisland.compose.component.RestartScopeDialog
 import io.github.hyperisland.compose.component.SectionTitle
 import io.github.hyperisland.compose.component.SettingsAction
 import io.github.hyperisland.compose.data.InstalledAppsRepository
@@ -52,6 +54,7 @@ import io.github.hyperisland.compose.page.home.OverviewAlertCard
 import io.github.hyperisland.compose.page.home.OverviewInfoCard
 import io.github.hyperisland.compose.page.home.OverviewStatusGrid
 import io.github.hyperisland.compose.service.HomeSystemInfo
+import io.github.hyperisland.compose.service.RestartScopeService
 import io.github.hyperisland.compose.service.SystemInfoProvider
 import io.github.melolock.Config
 import kotlinx.coroutines.Dispatchers
@@ -95,6 +98,8 @@ internal fun LockHomePage(
     var systemInfo by remember { mutableStateOf<HomeSystemInfo?>(null) }
     var framework by remember { mutableStateOf<FrameworkDetails?>(null) }
     var refreshToken by remember { mutableIntStateOf(0) }
+    val scope = rememberCoroutineScope()
+    var showRestartDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(isActive, refreshToken) {
         if (!isActive && refreshToken == 0) return@LaunchedEffect
@@ -134,8 +139,29 @@ internal fun LockHomePage(
     CollapsingPage(
         title = stringResource(R.string.app_name),
         actionIcon = MiuixIcons.Refresh,
-        actionDescription = "刷新状态",
-        onAction = { refreshToken++ },
+        actionDescription = stringResource(R.string.restart_scope),
+        // 重启作用域：先探测 root 再决定走哪条路。
+        //  · 有 root → 弹出作用域列表，用 su 精确重启选中的进程；
+        //  · 无 root → 走模块通道，广播给 SystemUI 里的模块让它自杀重启（等价一次
+        //    SystemUI 重启）。本机 SukiSU 下 adb/app 侧拿不到 su，必须走这条，
+        //    否则这个按钮点了就完全没反应。
+        onAction = {
+            scope.launch {
+                if (RestartScopeService.hasRoot()) {
+                    showRestartDialog = true
+                    return@launch
+                }
+                context.sendBroadcast(
+                    Intent(Config.ACTION_RESTART_SYSTEMUI).setPackage(Config.SYSTEMUI_PACKAGE)
+                )
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.restart_scope_requested),
+                    Toast.LENGTH_LONG,
+                ).show()
+                refreshToken++
+            }
+        },
         horizontalContentPadding = 12.dp,
         topContentPadding = 12.dp,
         bottomContentPadding = 16.dp,
@@ -200,11 +226,16 @@ internal fun LockHomePage(
             Card {
                 InfoText(
                     "请在 Vector 中仅勾选 SystemUI。更新 APK 后需重新确认模块总开关；" +
-                        "点击上方状态卡可随时开关模块，关闭后立即恢复原生锁屏。",
+                        "点击上方状态卡可随时开关模块，关闭后立即恢复原生锁屏。" +
+                        "右上角按钮用于重启作用域（SystemUI）。",
                 )
             }
         }
     }
+    RestartScopeDialog(
+        show = showRestartDialog,
+        onDismiss = { showRestartDialog = false },
+    )
 }
 
 // ── 音乐应用 ─────────────────────────────────────────────────────────────────
@@ -334,8 +365,8 @@ internal fun LockMusicAppsPage() {
             SectionTitle("说明")
             Card {
                 InfoText(
-                    "这里列出全部已安装应用，勾选允许进入锁屏的播放器即可。" +
-                        "首次进入默认允许全部；全部取消后锁屏不再接管任何播放器。",
+                    "这里列出全部已安装应用。默认一个都不勾选，必须显式勾选播放器，" +
+                        "锁屏才会接管它的播放信息；全部取消后锁屏不再接管任何播放器。",
                 )
             }
         }
@@ -709,8 +740,12 @@ private data class MusicSelection(val unrestricted: Boolean, val packages: Set<S
  * [Config.packageAllowed] 对齐：默认空勾选＝不启用，用户必须显式勾选；
  * 「全部应用」仍作为一个可切换的选项留在界面上，但不再是默认值。
  */
-private fun loadMusicSelection(context: Context): MusicSelection =
-    MusicSelection(unrestricted = false, packages = Config.selectedPackages(context))
+private fun loadMusicSelection(context: Context): MusicSelection {
+    val packages = Config.selectedPackages(context)
+    // 排查「默认是不是全勾上了」时全靠这一行：0 就是真的一个都没勾。
+    Log.i(APP_LOG_TAG, "Music apps: ${packages.size} selected by default")
+    return MusicSelection(unrestricted = false, packages = packages)
+}
 
 /** 从 Vector/LSPosed 服务读取框架信息；legacy 模块拿不到服务时返回 null。 */
 private fun loadFrameworkDetails(context: Context): FrameworkDetails? {

@@ -34,13 +34,15 @@
 
 配置端现直接迁入并使用 HyperIsland 的 Kotlin、Jetpack Compose、Miuix 页面壳层、主题、动画和液态导航栏（MIT License），四个入口的版式也改为直接复用 HyperIsland 原版组件，不再自绘样式：
 
-- **首页**：对齐 HyperIsland 首页版式 —— 顶部大标题加刷新按钮，第一行是「方形激活卡（大号对勾底纹）」加右侧两张数据卡，下面是（按需出现的）适配告警卡、系统信息卡、链接卡和使用说明卡。
+- **首页**：对齐 HyperIsland 首页版式 —— 顶部大标题加右上角按钮，第一行是「方形激活卡（大号对勾底纹）」加右侧两张数据卡，下面是（按需出现的）适配告警卡、系统信息卡、链接卡和使用说明卡。
+  - **实现在 `LockScreenPages.kt` 的 `LockHomePage`**。`page/home/OverviewPage.kt` 只提供共享卡片组件，它这个 `OverviewPage` Composable 本身**没有任何调用点（死代码）**——改首页行为务必改 `LockHomePage`。
+  - 右上角按钮是「重启作用域」：先 `RestartScopeService.hasRoot()` 探测 root，有权限才弹 `RestartScopeDialog`，无权限走模块通道发 `Config.ACTION_RESTART_SYSTEMUI` 显式广播并 Toast `restart_scope_requested`，顺便 `refreshToken++` 刷新首页数据。
   - 状态卡点击即切换模块总开关，标签在 `已激活` / `未激活` 之间切换。
-  - 左数据卡为「已开启应用」，取 `Config.enabledAppCount()`：未设置时显示 `全部`（表示允许所有播放器），全部取消时显示 `0`，否则是勾选数量；点击跳到「音乐应用」页。
+  - 左数据卡为「已开启应用」，取 `Config.enabledAppCount()`（实际勾选数量，未勾选为 `0`）；点击跳到「音乐应用」页。
   - 右数据卡为「封面圆角」，取 `Config.cornerRadiusDp()`；点击跳到「外观」页。
   - 告警卡仅在 `Config.deviceSupported()` 为假（设备构建指纹不在已验证列表内）时出现，与 `HookEntry` 的加载门禁同一判据。
   - 系统信息卡四行：系统版本、应用版本、Xposed 框架、设备型号。前三行中 Xposed 框架依赖 Vector/LSPosed 服务绑定（`XposedPrefsSyncApp.awaitReady()`）；legacy 模块拿不到服务时显示 `未知`。
-- **音乐应用**：对齐 HyperIsland「应用」页 —— 搜索栏加应用行（图标、名称、包名、开关），整行点击也可切换。**列表是全部已安装应用**（含系统应用，可用「显示系统应用」开关过滤），由用户自行勾选哪些是音乐播放器。首次进入表示允许全部；取消勾选后落成显式白名单，全部取消后锁屏不再接管任何播放器。HyperOS 上枚举全部应用需要 `com.android.permission.GET_INSTALLED_APPS`，**该权限必须在 Manifest 里显式声明**：申请一个未声明的权限，系统会直接返回拒绝、连授权框都不弹（这正是 2026-10-06 第一次改完列表为空、看不到授权框的原因）。进入该页时会自动申请，实测弹出 MIUI 的「获取已安装的应用信息」授权框。
+- **音乐应用**：对齐 HyperIsland「应用」页 —— 搜索栏加应用行（图标、名称、包名、开关），整行点击也可切换。**列表是全部已安装应用**（含系统应用，可用「显示系统应用」开关过滤），由用户自行勾选哪些是音乐播放器。**默认一个都不勾选，且默认不显示系统应用**——必须显式勾选播放器锁屏才会接管它（与 `Config.packageAllowed()` 对齐）；全部取消后锁屏不再接管任何播放器。该页进入时会打一行 `Music apps: N selected by default`，`N=0` 才是真的一个都没勾。HyperOS 上枚举全部应用需要 `com.android.permission.GET_INSTALLED_APPS`，**该权限必须在 Manifest 里显式声明**：申请一个未声明的权限，系统会直接返回拒绝、连授权框都不弹（这正是 2026-10-06 第一次改完列表为空、看不到授权框的原因）。进入该页时会自动申请，实测弹出 MIUI 的「获取已安装的应用信息」授权框。
 - **外观**：锁屏三元素（时间 / 专辑封面 / 播放器）的编辑器，外加原有的背景设置。配置通过只读 `ContentProvider` 同步给 SystemUI。
 - **开发者**：应用图标 + 名称 + 版本、开发者 `zuige`、GitHub `zuige66`、开源说明。**联系方式与捐赠/教程/资源外链仍留空**，对应行显示「待填写」并置灰不可点击。
 

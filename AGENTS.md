@@ -8,6 +8,7 @@
 - 界面只做「复用 HyperIsland 原版组件 + 换数据源」，不新写样式；同名卡片直接提升 `OverviewPage.kt` 里的实现为 `internal` 共享，禁止复制第二份。
 - `LockScreenOverlay.java` 由 Hook 注入 SystemUI 进程：任何改动都必须失败关闭（异常退回原生锁屏），并且**不要与其他会话/人工编辑并行改这个文件**。
 - 新增锁屏可调参数时：键名与默认值加到 `Config.java` 的 `ELEMENT_DEFAULTS`，Provider 走 `/elements` 的 key/value 通道，**不要**再去改 `ConfigProvider` 的列投影。
+- **首页的真身是 `LockScreenPages.kt` 的 `LockHomePage`，不是 `page/home/OverviewPage.kt`**：后者只提供共享卡片组件（`OverviewStatusGrid` / `OverviewInfoCard` / `OverviewAlertCard` / `HomeOverviewState`），`OverviewPage` 这个 Composable **没有任何调用点、是死代码**。改首页（含右上角按钮）必须改 `LockHomePage`；改 `OverviewPage` 真机上不会有任何反应（2026-10-07 已踩过一次）。
 - **装完 APK 必须重启 SystemUI 才会加载新的 Hook 代码**，顺序是先装再重启。**无 root 重启法**：`adb -s 1b3a7d8 shell am crash com.android.systemui`（实测有效，SystemUI 崩掉后自动重启、PID 立刻变化；`am force-stop` 无效、`su` 从 adb 不可用）。锁屏行为异常时先比 `ps` 里 SystemUI 的 ETIME 和 APK 安装时间，再看 `logcat | grep "Elements: clock="` 有没有出现——没有就说明跑的还是旧代码。
 
 ## 仓库与发布
@@ -20,6 +21,7 @@
 
 ## 最近完成
 
+- **重启按钮改到真正的首页（2026-10-07）**：上一轮把 root 预检 + 无 root 广播重启加在了 `OverviewPage`，但那个 Composable 没有调用点，`AppShell` 的首页是 `LockHomePage`，右上角的圆圈是它的「刷新状态」（`onAction = { refreshToken++ }`）——所以改完点了照样没反应，抓日志时 App 进程一条 `MeloLock` 都没有。现在逻辑搬到 `LockHomePage`，`OverviewPage` 退回上游原样（同一份逻辑不保留两个版本）。音乐应用页补一行诊断日志 `Music apps: N selected by default`，并改掉与新默认值矛盾的说明文案。**自测无 root 通道**：`adb -s 1b3a7d8 shell am broadcast -a io.github.melolock.action.RESTART_SYSTEMUI -p com.android.systemui` → SystemUI PID 30613→10033，可用（不需要 UI 点击，也不依赖 root）。
 - **重启小圈修复 + 默认不勾选（2026-10-07）**，三件事：
   1. **点击无反应的根因**：`RestartScopeService` 用 `Runtime.exec("su")` + 无超时的 `waitFor()`。本机实测 `adb shell su -c id` 返回 **`su: inaccessible or not found`**（`/data/adb/ksu/bin/su` 存在但 Permission denied），也就是说 SukiSU 环境下 App 侧 `su` 根本不可用——`exec` 要么抛 IOException、要么挂起等一个永不响应的 root 管理器，`waitFor()` 卡死 → 既无弹窗也无提示，表现就是点了没反应。现在 `su` 统一走 `SU_TIMEOUT_MS = 3000` 超时（`waitFor(timeout, MILLISECONDS)` 后 `destroy()`），并打日志 `RestartScope: hasRoot=`。
   2. **无 root 也能重启作用域**：新增 `Config.ACTION_RESTART_SYSTEMUI` 广播通道——配置端发现无 root 时发一条 `setPackage("com.android.systemui")` 的显式广播，模块（`LockScreenOverlay`）用 `RECEIVER_EXPORTED` 注册接收，收到后 `Process.killProcess(myPid())` 自杀重启。与 `am crash com.android.systemui` 等价但**不需要 root 也不需要 adb**。有 root 时仍走原来的作用域列表（su 命令）。Toast 用新增的 `restart_scope_requested`。
