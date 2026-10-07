@@ -58,34 +58,38 @@ final class LockScreenOverlay {
      */
     private static final long RESUME_AFTER_SCREEN_OFF_MS = 500;
     /**
-     * 解锁信号的覆盖层时序：**先全程压住不透明，等系统解锁动画跑完再淡出**。
+     * 解锁时封面的淡出曲线：**压住系统动画的开头，再跟着动画做交叉溶解**。
      *
-     * **2026-10-07 深夜定稿（历经 hold 130/240 → 240/130 → 280/90 → 700/90 → 720/140 → 760/160）**。
-     * 前几版都在猜「桌面窗口什么时候上屏」（+111~205ms），猜来猜去总还有闪烁，原因是**盯错了对象**：
-     * 真正决定「什么时候可以掀盖」的不是桌面窗口，而是**系统自己的解锁退场动画有多长**。
+     * **2026-10-08 定稿（hold/fade 历经 130/240 → 240/130 → 280/90 → 700/90 → 720/140 → 760/160 → 200/460）**。
      *
-     * 一次真实解锁的完整时间线（23:43:47，以系统 `keyguardGoingAway` 为 0 点，全部来自真机日志）：
+     * 一次真实解锁的完整时间线（以系统 `keyguardGoingAway` 为 0 点，全部来自真机日志）：
      * ```
      *   +47ms   wms.showSurfaceRobustly …ImageWallpaper     ← 桌面壁纸窗口被拉起
-     *  +127ms   wms.showSurfaceRobustly …Launcher           ← 桌面窗口上屏
+     *  +127ms   wms.showSurfaceRobustly …Launcher           ← 桌面窗口上屏（图标已画好）
      *  +148ms   KeyguardService Starts IRemoteAnimationRunner ← 系统解锁动画**开始**
-     *  +340ms   updateKeyguardWallpaperStateAnim anim=true   ← MIUI 开始收锁屏壁纸
-     *  +540ms   （我们的 pre-draw 守卫发现 keyguard 不锁了）
      *  +685ms   updateKeyguardWallpaperStateAnim onAnimationFinished ← 动画**结束**
      *  +742ms   WallpaperWindowToken{…true} isVisible=false / {…false} isVisible=true ← 换壁纸落地
      * ```
-     * 旧版 280ms 就开始淡、370ms 撤层——**正好落在系统动画（+148~685ms）中间**，露出的就是系统
-     * 正在展示的原生壁纸。这就是用户反复说的「解锁闪一帧原生壁纸，很清晰、不是模糊版本」。
      *
-     * 所以：0 ~ 760ms 完全不透明（压住整个过渡期）→ 760ms 起 160ms 淡出 → 约 920ms 摘层。
-     * 此时系统动画已结束（+685ms）、换壁纸已落地（+742ms），渐显出来的是**已经合成好的桌面**，
-     * 不存在任何「中间态的原生壁纸」。
+     * **前几版为什么一直闪**：① 一直在猜「桌面窗口何时上屏」，而该对齐的是**系统动画有多长**；
+     * ② 更致命的是封面挂在锁屏根**里面**，系统会把整棵锁屏根置 `INVISIBLE + alpha 0`，
+     * 我们连绘制都不参与 —— 参数怎么调都无效（见 `liftCoverToWindowRoot`）。
      *
-     * 补充：我们的层在锁屏根里，系统对锁屏根的退场动画**本来也会带着我们淡出**——那条路径与原生
-     * 完全同步，是免费的。这两个常数真正的职责是「万一系统没动我们」时的兜底与收尾，因此宁可取长。
+     * **这一版为什么改成早淡、慢淡**：上面两条修掉之后，「压到 760ms 再一次性让开」暴露了新的观感问题 ——
+     * 桌面入场动效是 +148~685ms，我们压到 760ms 才让开，等于**把整段桌面动效都挡在盖子后面**，
+     * 用户看到的是「音乐界面定住不动将近 0.7 秒，然后桌面已经站好了」＝「观感有点卡」。
+     *
+     * 所以改成 **200ms 起、460ms 线性淡出、约 660ms 淡完**：淡出窗口（200~660ms）
+     * 基本**覆盖系统动画的后 2/3**，用户能一路看到桌面渐显的过程；同时前 200ms 仍是不透明的，
+     * 避开动画开头「桌面还没完全合成」的那一段。
+     *
+     * 代价与调参方向（这是两个可以左右手的旋钮）：
+     * - **早淡 / 快淡** → 越看得到桌面动效，但中间态可能混进壁纸（交叉溶解下最多约 25% 混合，是软的、不闪）；
+     * - **晚淡 / 慢淡** → 越不可能露出壁纸，但越像「定住一下才进桌面」。
+     * 淡出用 `LinearInterpolator`：默认的加减速曲线会在中段掉得比桌面渐显更快，反而更容易露出中间态。
      */
-    private static final long UNLOCK_COVER_HOLD_MS = 760;
-    private static final long UNLOCK_COVER_FADE_MS = 160;
+    private static final long UNLOCK_COVER_HOLD_MS = 200;
+    private static final long UNLOCK_COVER_FADE_MS = 460;
     /**
      * SCREEN_OFF 之后等面板**黑透**再"预显"场景的延时（避开熄屏动画）。
      *
@@ -1071,19 +1075,24 @@ final class LockScreenOverlay {
 
     /**
      * 淡出交接：此刻系统解锁动画已结束（+685ms）、换壁纸已落地（+742ms），渐显出来的是合成好的桌面，
-     * 不存在任何「中间态的原生壁纸」。前景与背景一起淡（旧版只淡背景，前景单独在 suspend() 里淡，
-     * 两个节拍对不齐）。
+     * 淡出交接：淡出窗口（+200~660ms）覆盖系统解锁动画（+148~685ms）的后 2/3，
+     * 用户能一路看到桌面渐显的过程，而不是「盖子定住半天、让开时桌面已经站好」。
+     * 前 200ms 保持不透明，避开动画开头桌面还没完全合成的那一段。
+     * 前景与背景一起淡（旧版只淡背景，前景单独在 suspend() 里淡，两个节拍对不齐）。
      */
     private final Runnable finishCoverFade = () -> {
         if (background == null || !unlockSignalled) return;
-        // 三个采样点（信号 +0ms / 淡出起点 +760ms / 摘层 +920ms）记录锁屏根的可见性，
-        // 用来确认「系统到底什么时候把锁屏根置 INVISIBLE」——这是本轮最关键的一问。
+        // 三个采样点（信号 +0ms / 淡出起点 / 摘层）记录锁屏根的可见性，
+        // 用来确认「系统到底什么时候把锁屏根置 INVISIBLE」。
         Log.i(TAG, "unlock fade starts; " + nativeCensus());
+        // 线性淡出：ViewPropertyAnimator 默认是加减速曲线，中段掉得比桌面渐显更快，
+        // 反而更容易在中间态露出壁纸。交叉溶解就该用线性（理由见 UNLOCK_COVER_FADE_MS 的注释）。
+        android.view.animation.LinearInterpolator linear = new android.view.animation.LinearInterpolator();
         background.animate().cancel();
-        background.animate().alpha(0f).setDuration(UNLOCK_COVER_FADE_MS).start();
+        background.animate().alpha(0f).setDuration(UNLOCK_COVER_FADE_MS).setInterpolator(linear).start();
         if (foreground != null) {
             foreground.animate().cancel();
-            foreground.animate().alpha(0f).setDuration(UNLOCK_COVER_FADE_MS).start();
+            foreground.animate().alpha(0f).setDuration(UNLOCK_COVER_FADE_MS).setInterpolator(linear).start();
         }
         // 隐藏不能只挂 ViewPropertyAnimator 的回调：解锁期间窗口正在切换，动画回调可能根本不推进。
         // 用 Handler 兜底摘层（项目既定规矩），并打一行带原生侧普查的自证日志，便于下一轮对账。
