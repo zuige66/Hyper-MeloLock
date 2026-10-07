@@ -494,3 +494,21 @@ adb -s 1b3a7d8 reboot
 29. 2026-10-07 **解锁时「沉浸式壁纸停顿一下」（时有时无）**。背景层为修「上滑露壁纸」挂在**窗口根**，不会随锁屏根被系统带走；而真机采样显示锁屏根在 `t=+36ms` 就已经 `INVISIBLE / alpha=0`，我们却要等 `finishSuspend`（`+150ms`）才把背景 `GONE`。中间那 100 多毫秒里屏幕上是**一张静止不动的模糊封面** —— 这就是那一下停顿；系统退场动画时长每次都不同，所以时有时无。改法：`suspend()` 里让背景跟前景**同节奏淡出 120ms**（硬隐藏仍由 `finishSuspend` 兜底），`resume()` / `finishSuspend` 复位 `alpha=1f`。**注意 `resume()` 必须把背景 alpha 复位**，否则锁屏重现时背景是透明的。
 
 30. 2026-10-07 **「读不到配置」≠「模块被关掉」**。`Config.enabled()` 在 SystemUI 侧靠 ContentProvider 读，查询**偶发**失败（配置端正在写盘、Provider 被整理）时旧代码 catch 后 `return false`，于是「改一次外观」就有一小段概率把模块判成关闭 → `restore()` 撤场景 → 用户看到「改完没反应 / 改完锁屏上什么都没有」，而且时好时坏。改为新增 `Config.enabledOrNull()`：**读不到返回 `null`**；`updateSwitch()` 与 `render()` 收到 `null` 时**保持现状不动**（读到 `false` 才真的撤层，失败关闭原则不变）。同一轮把三档背景样式做出区别（见第 27 条）：`深色玻璃` blur 28dp 遮罩原样、`浅色玻璃` blur 14dp 遮罩×0.55、`纯色沉浸` 不铺封面铺纯色 —— 之前只差 28/18dp 模糊，肉眼等于没差。
+
+31. 2026-10-07 **解锁卡顿 + 「息屏后快速解锁闪原生壁纸」**（用户反复锁解锁后抓日志定位）：
+
+    ```
+    17:39:41.547  SCREEN_OFF kept=… suspended=true interactive=false
+    17:39:41.576  resume reused scene        ← 熄屏动画里就 resume（屏幕正在黑）
+    17:39:42.089  SCREEN_ON
+    17:39:43.449  suspend reason=predraw-keyguard-unlocked
+    ```
+
+    **卡顿**：`unlockWatch` 探针每 30ms 采样一次、**每次解锁打 50 行 logcat**，实测把采样间隔拖成 87~157ms（12 次超过 60ms）——logcat 写入是同步的，这个诊断本身就在制造用户看到的卡顿。它给出的结论早已拿到（系统把 keyguard 根直接置 `INVISIBLE` + `alpha 0`、全程无位移），**整个删掉**；现象定位靠 `suspend reason=` 与 `native layers handed back at t=+Nms` 两行就够。
+
+    **闪原生壁纸**：第 27 条那版「外观变了就整场重建」的路径在 `restore()` 之后**提前 return，没走到 `showMusic()`**，而隐藏原生壁纸层/时钟层的动作正在 `showMusic()` 里 —— 重建那一百来毫秒里原生壁纸是可见的。改法是把外观指纹**拆成两份**：
+
+    - `backdropSignature`（背景样式 / 遮罩颜色 / 遮罩强度 / 封面圆角）→ 只调 `applyBackdrop()` **就地更新三层背景，不动视图树**（背景的纯色层与遮罩层提为字段 `solidFill` / `baseScrim`）；
+    - `elementSignature`（三元素参数）→ 才 `restore("elements-changed")` 并在下一帧 `render()` 重建。
+
+    顺带收益：改背景样式不再重建场景，锁屏重现时直接生效，也不会再有露出原生壁纸的那一瞬。

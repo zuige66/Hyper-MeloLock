@@ -21,6 +21,9 @@
 
 ## 最近完成
 
+- **解锁卡顿 + 息屏后快速解锁闪原生壁纸（2026-10-07）**：
+  1. **删掉 `unlockWatch` 探针**。它每 30ms 采样、每次解锁打 50 行 logcat，实测把采样间隔拖成 87~157ms（12 次 >60ms）——**logcat 写入是同步的，诊断本身在制造卡顿**。它要验证的结论早已拿到（系统把 keyguard 根直接置 `INVISIBLE`+`alpha 0`、全程无位移）。**教训：临时探针用完必须删，「只打日志」不等于零成本**；定位现象靠 `suspend reason=` 与 `native layers handed back at t=+Nms`。
+  2. **外观指纹拆两份**：背景类（样式/遮罩/圆角）→ `applyBackdrop()` **就地更新三层背景、不动视图树**（`solidFill` / `baseScrim` 因此提为字段）；三元素类（尺寸/字号/间距）→ 才 `restore("elements-changed")` + 下一帧重建。旧写法只有一个指纹、改了就整场重建，而那条路径 `restore()` 后**提前 return 跳过了 `showMusic()`**——隐藏原生壁纸层的动作正在 `showMusic()` 里，于是重建那一百来毫秒原生壁纸可见（用户看到的「息屏后快速解锁闪一下」）。
 - **解锁停顿 + 配置读取容错 + 背景样式分档（2026-10-07）**：
   1. **解锁时「沉浸式壁纸停顿一下」（时有时无）**：背景层挂在窗口根（为了盖住桌面壁纸），却要等 `finishSuspend`（+150ms）才 `GONE`，而锁屏根在 +36ms 就已 `alpha=0` —— 中间那张**静止的模糊封面**就是停顿。现在 `suspend()` 里背景跟前景同节奏淡出 120ms，硬隐藏仍由 `finishSuspend` 兜底；**`resume()` 必须复位 `background.alpha=1f`**。
   2. **`Config.enabled()` 把「读不到」当成「关了」**：SystemUI 侧配置靠 ContentProvider 读，偶发查询失败时旧代码 `return false` → 模块被判成关闭、场景被 `restore()` 撤掉，表现为「改完外观没反应 / 锁屏上东西没了」且时好时坏。新增 `Config.enabledOrNull()`（读不到返回 `null`），`updateSwitch()` 与 `render()` 遇到 `null` **保持现状不动**；读到 `false` 才撤层。

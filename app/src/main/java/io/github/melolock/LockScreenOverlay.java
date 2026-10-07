@@ -108,13 +108,15 @@ final class LockScreenOverlay {
     private long suspendStartedAtMs;
     private int createAttempts;
     /**
-     * 建场景那一瞬的外观配置指纹（三元素参数 + 背景样式/颜色/强度 + 封面圆角）。
+     * 建场景那一瞬的外观配置指纹，**分成两份**：
+     * `elementSignature` 是三元素参数（尺寸/间距/字号…），变了要整场重建；
+     * `backdropSignature` 是背景样式/遮罩/圆角，变了只需 [applyBackdrop] 就地更新。
      *
      * 场景实例现在跨锁屏周期复用（suspend / resume），`create()` 一辈子只跑一次，
-     * 而它又是唯一读取外观配置的地方 —— 于是「背景样式调了没反应」成了必然结果。
-     * 复用之前先比一次指纹，不同就撤掉旧场景重建，把「灭屏再亮屏一次生效」这条约定重新兑现。
+     * 而它又是唯一读取外观配置的地方 —— 于是「外观改了没反应」成了必然结果。
+     * 复用之前先比一次指纹，把「灭屏再亮屏一次生效」这条约定重新兑现。
      */
-    private String appearanceSignature;
+    private String elementSignature, backdropSignature;
     /** findBottomCornerIcon 的遍历预算：SystemUI 的窗口树很深，不容许每次 resume 全扫一遍。 */
     private int scanBudget;
     /** 「展开通知」入口是否已经和系统底部快捷栏对齐过（对齐成功后不再重复扫树）。 */
@@ -155,6 +157,8 @@ final class LockScreenOverlay {
     private LinearLayout content;
     private LinearLayout playerCard;
     private ImageView baseBlur, cover, cardArt;
+    /** 背景三层：模糊封面 / 纯色底（style==2 才可见）/ 遮罩。提为字段以便 resume() 就地更新。 */
+    private View solidFill, baseScrim;
     private TextView title, artist, previous, playPause, next, elapsed, duration;
     private ProgressBar progress;
     private TextClock immersiveClock;
@@ -224,10 +228,13 @@ final class LockScreenOverlay {
             @Override public void onChange(boolean ignored) {
                 updateSwitch();
                 // 诊断：确认「配置端写盘 → SystemUI 收到 → 与当前场景不一致」这条链路是通的。
-                // 只在真的不一致时打一行，滑块拖动commit 几次也不会刷屏。
-                if (foreground != null && appearanceSignature != null
-                        && !appearanceSignature.equals(currentAppearanceSignature())) {
-                    Log.i(TAG, "Appearance differs from current scene; will rebuild on next lock");
+                // 只在真的不一致时打一行，滑块拖动 commit 几次也不会刷屏。
+                if (foreground == null || backdropSignature == null) return;
+                boolean elements = !elementSignature.equals(currentElementSignature());
+                boolean backdrop = !backdropSignature.equals(currentBackdropSignature());
+                if (elements || backdrop) {
+                    Log.i(TAG, "Config differs from scene (elements=" + elements + " backdrop=" + backdrop
+                            + "); will apply on next lock");
                 }
             }
         };
@@ -393,27 +400,12 @@ final class LockScreenOverlay {
         background = new FrameLayout(context);
         baseBlur = new ImageView(context);
         baseBlur.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        // 三档背景样式，**必须一眼看得出换了东西**：
-        //   0 深色玻璃 —— 封面强模糊（28dp）+ 遮罩按「遮罩强度」原样铺
-        //   1 浅色玻璃 —— 封面轻模糊（14dp）+ 遮罩乘 0.55，封面透出来更亮
-        //   2 纯色沉浸 —— 不铺封面，整块背景就是「遮罩颜色」那一个纯色值
-        // 之前三档只差 28dp/18dp 的模糊半径（约等于没差），用户反馈「调了不生效」就出在这。
-        int style = Config.overlayStyle(context);
-        int color = Config.overlayColor(context);
-        int alpha = Config.overlayAlpha(context);
-        int blurDp = style == 2 ? 0 : (style == 1 ? 14 : 28);
-        if (blurDp > 0) baseBlur.setRenderEffect(RenderEffect.createBlurEffect(dp(blurDp), dp(blurDp), Shader.TileMode.CLAMP));
         background.addView(baseBlur, new FrameLayout.LayoutParams(-1, -1));
-        View solidFill = new View(context);
-        solidFill.setBackground(new ColorDrawable(color | 0xFF000000));
-        solidFill.setVisibility(style == 2 ? View.VISIBLE : View.GONE);
+        solidFill = new View(context);
         background.addView(solidFill, new FrameLayout.LayoutParams(-1, -1));
-        View baseScrim = new View(context);
-        int scrimAlpha = style == 1 ? Math.round(alpha * 0.55f) : alpha;
-        baseScrim.setBackground(new ColorDrawable((color & 0x00FFFFFF) | (clamp(scrimAlpha, 0, 255) << 24)));
+        baseScrim = new View(context);
         background.addView(baseScrim, new FrameLayout.LayoutParams(-1, -1));
-        Log.i(TAG, "Backdrop: style=" + style + " blur=" + blurDp + "dp color=" + Integer.toHexString(color)
-                + " alpha=" + alpha + " scrim=" + scrimAlpha);
+        applyBackdrop();
         // 挂窗口根而不是锁屏根：真机采样（Unlock watch）显示系统解锁时是把整个
         // HyperOSKeyguardRootView 直接置 INVISIBLE + alpha 0，且动作发生在 suspend()
         // 触发之前——挂在它内部的层没有过渡窗口，父控件 alpha 归零就一起消失，露出的是桌面壁纸。
@@ -467,7 +459,8 @@ final class LockScreenOverlay {
         createAttempts = 0;
         unlockRestoreLogged = false;
         entryAligned = false; entryAlignAttempts = 0;
-        appearanceSignature = currentAppearanceSignature();
+        backdropSignature = currentBackdropSignature();   // applyBackdrop() 已写过一次，这里兜底
+        elementSignature = currentElementSignature();
         // 底部快捷栏要等一次布局才量得到坐标，排到下一帧再对齐；拿不到就沿用 dp(10)。
         foreground.post(this::alignEntryWithShortcutRow);
         return true;
@@ -476,6 +469,36 @@ final class LockScreenOverlay {
     private static int elem(Map<String, Integer> elements, String key) {
         Integer value = elements.get(key);
         return value == null ? Config.elementDefault(key) : value;
+    }
+
+    /**
+     * 就地更新背景三层（模糊封面 / 纯色底 / 遮罩），**不动视图树**。
+     *
+     * create() 与 resume() 共用：背景类设置（样式 / 遮罩颜色 / 遮罩强度）改了就调这里，
+     * 只有三元素（尺寸、字号、间距…）才值得整场重建。三档样式必须一眼看得出换了东西：
+     *   0 深色玻璃 —— 封面强模糊 28dp + 遮罩按「遮罩强度」原样铺
+     *   1 浅色玻璃 —— 封面轻模糊 14dp + 遮罩乘 0.55，封面透出来更亮
+     *   2 纯色沉浸 —— 不铺封面，整块背景就是「遮罩颜色」那一个纯色值
+     * （早先三档只差 28dp 与 18dp 的模糊半径，肉眼等于没差，用户反馈「调了不生效」就出在这。）
+     */
+    private void applyBackdrop() {
+        if (background == null || baseBlur == null) return;
+        int style = Config.overlayStyle(context);
+        int color = Config.overlayColor(context);
+        int alpha = Config.overlayAlpha(context);
+        int blurDp = style == 2 ? 0 : (style == 1 ? 14 : 28);
+        baseBlur.setRenderEffect(blurDp > 0
+                ? RenderEffect.createBlurEffect(dp(blurDp), dp(blurDp), Shader.TileMode.CLAMP) : null);
+        if (solidFill != null) {
+            solidFill.setBackground(new ColorDrawable(color | 0xFF000000));
+            solidFill.setVisibility(style == 2 ? View.VISIBLE : View.GONE);
+        }
+        int scrimAlpha = style == 1 ? Math.round(alpha * 0.55f) : alpha;
+        if (baseScrim != null)
+            baseScrim.setBackground(new ColorDrawable((color & 0x00FFFFFF) | (clamp(scrimAlpha, 0, 255) << 24)));
+        backdropSignature = currentBackdropSignature();
+        Log.i(TAG, "Backdrop: style=" + style + " blur=" + blurDp + "dp color=" + Integer.toHexString(color)
+                + " alpha=" + alpha + " scrim=" + scrimAlpha);
     }
 
     private static int clamp(int value, int min, int max) { return Math.max(min, Math.min(max, value)); }
@@ -782,6 +805,7 @@ final class LockScreenOverlay {
         if (background != null && background.getParent() instanceof ViewGroup) ((ViewGroup) background.getParent()).removeView(background);
         if (notificationButton != null && notificationButton.getParent() == foreground) foreground.removeView(notificationButton);
         background = null; foreground = null; content = null; immersiveClock = null; playerCard = null; notificationButton = null; clock = null; secondaryClock = null; nativeBackgroundLayer = null; nativeForegroundLayer = null; notifications = null; windowRoot = null; leftShadePanel = null;
+        solidFill = null; baseScrim = null; elementSignature = null; backdropSignature = null;
         unlockRestoreLogged = false; lastSkipReason = null; suspended = false;
     }
 
@@ -798,10 +822,8 @@ final class LockScreenOverlay {
         suspended = true;
         main.removeCallbacks(progressTicker);
         main.removeCallbacks(finishSuspend);
-        main.removeCallbacks(unlockWatch);
         suspendStartedAtMs = android.os.SystemClock.elapsedRealtime();
         Log.i(TAG, "suspend reason=" + reason + " " + state());
-        main.post(unlockWatch);   // 诊断：采样系统退场动画进度，只打日志不影响行为
         foreground.animate().cancel();
         if (cover != null) cover.animate().cancel();
         if (playerCard != null) playerCard.animate().cancel();
@@ -841,28 +863,12 @@ final class LockScreenOverlay {
     };
 
     /**
-     * 诊断：解锁期间每 30ms 采样一次锁屏根视图，看清系统退场动画到底对整棵树做了什么
-     * （是否位移、是否淡出、何时 GONE、何时 detach）。
-     *
-     * 用来回答两件事：① 我们的层挂在根视图里，能不能**完全交给系统带走**——如果系统确实
-     * 在给整棵树做 alpha/位移动画，那我们就没必要自己淡出，自己淡出反而是「比系统早退场」
-     * 从而露出原生壁纸的元凶；② 若交给系统，兜底超时该设多久（观察什么时候彻底静止）。
-     *
-     * **只打日志，不改任何行为**。
+     * 曾经有个 `unlockWatch` 探针（解锁期间每 30ms 采样锁屏根、每次解锁打 50 行日志），
+     * **已删除**：它给出的结论早已拿到（系统把整个 keyguard 根直接置 INVISIBLE + alpha 0、
+     * 全程无位移，所以「交给系统带走」这条路不成立），而真机实测解锁期间 30ms 的采样间隔
+     * 反复飙到 87~157ms（12 次）——logcat 写入是同步的，这个诊断本身就在制造用户看到的卡顿。
+     * 定位现象靠 `suspend reason=` 与 `native layers handed back at t=+Nms` 两行就够。
      */
-    private final Runnable unlockWatch = new Runnable() {
-        @Override public void run() {
-            if (!suspended || foreground == null) return;   // resume()/restore() 过后自动停
-            long t = android.os.SystemClock.elapsedRealtime() - suspendStartedAtMs;
-            if (t > 1500) { Log.i(TAG, "Unlock watch: end after " + t + "ms"); return; }
-            Log.i(TAG, "Unlock watch t=+" + t + "ms root=[" + visibilityName(root) + " attached=" + root.isAttachedToWindow()
-                    + " alpha=" + fmt(root.getAlpha()) + " ty=" + fmt(root.getTranslationY()) + "]"
-                    + " fg=[" + visibilityName(foreground) + " alpha=" + fmt(foreground.getAlpha()) + "]"
-                    + " bg=[" + (background == null ? "null" : visibilityName(background)) + "]");
-            main.postDelayed(this, 30);
-        }
-    };
-
     private static String fmt(float value) { return String.format(java.util.Locale.US, "%.2f", value); }
     private static String visibilityName(View view) {
         switch (view.getVisibility()) {
@@ -879,12 +885,17 @@ final class LockScreenOverlay {
         main.removeCallbacks(finishSuspend);
         Log.i(TAG, "resume reused scene " + state());
         // 复用之前先验指纹：这一批视图是照着上次的配置量出来的，直接恢复就是把旧外观又端出来。
-        // 场景跨周期复用之后 create() 不再重跑，配置读不到第二次，这是「背景样式/尺寸改了没反应」的根因；
-        // 这里统一处理——外观动过就撤掉旧场景，用同一个快照当场重建（只多一次 create，约 100ms）。
+        // 场景跨周期复用之后 create() 不再重跑，配置读不到第二次，这是「外观改了没反应」的根因。
+        // 分两级处理，**顺序不能反**：
+        //   ① 背景（样式/遮罩/圆角）变了 → 就地更新这三层，不动视图树；
+        //   ② 三元素（字号/间距/圆角…）变了 → 才撤掉重建。
+        // 早先只有一个指纹、改了就整场重建，结果那条路径在 restore() 之后**没走到 showMusic()**，
+        // 而隐藏原生壁纸层/时钟层的动作正在 showMusic() 里 —— 于是重建那一百来毫秒里
+        // 原生壁纸是可见的，用户看到「息屏后快速解锁闪一下原生壁纸」。
         MediaSource.Snapshot keep = shown;
-        if (appearanceSignature != null && appearanceSignature.equals(currentAppearanceSignature()) == false) {
-            Log.i(TAG, "Appearance changed while scene kept; rebuilding with current values");
-            restore("appearance-changed");
+        if (elementSignature != null && !elementSignature.equals(currentElementSignature())) {
+            Log.i(TAG, "Elements changed while scene kept; rebuilding with current values");
+            restore("elements-changed");
             if (keep != null) {
                 // 排队到下一帧重建：此刻正站在 pre-draw 回调里，直接 addView 改视图树会让
                 // 当前这一帧的绘制与紧接着的 layout 互相打断。
@@ -895,6 +906,7 @@ final class LockScreenOverlay {
             }
             return;
         }
+        if (backdropSignature != null && !backdropSignature.equals(currentBackdropSignature())) applyBackdrop();
         foreground.animate().cancel();
         foreground.setAlpha(1f);
         foreground.setVisibility(View.VISIBLE);
@@ -910,22 +922,21 @@ final class LockScreenOverlay {
     }
 
     /**
-     * 当前外观配置的指纹：三元素参数 + 背景样式 / 遮罩颜色 / 遮罩强度 + 封面圆角。
+     * 三元素参数指纹（尺寸 / 间距 / 字号 / 圆角 / 是否锁比例 …）。
      *
-     * SystemUI 进程里 `Config.elementValues()` 只有一次 ContentResolver 查询，
-     * 但 `overlayStyle/Color/Alpha` 和 `cornerRadiusDp` 各自再查一次，所以只在这两处调用：
-     * create() 收尾 与 resume() 比对，一次锁屏周期最多一次。
+     * SystemUI 侧一次 `Config.elementValues()` 查询即可，调用点只有 create() 收尾与 resume()。
      */
-    private String currentAppearanceSignature() {
-        Map<String, Integer> values = Config.elementValues(context);
-        StringBuilder text = new StringBuilder(256);
-        text.append("style=").append(Config.overlayStyle(context))
-                .append(";color=").append(Config.overlayColor(context))
-                .append(";alpha=").append(Config.overlayAlpha(context))
-                .append(";radius=").append(Config.cornerRadiusDp(context));
-        for (String key : new java.util.TreeSet<>(values.keySet()))
-            text.append(';').append(key).append('=').append(values.get(key));
+    private String currentElementSignature() {
+        StringBuilder text = new StringBuilder(192);
+        for (String key : new java.util.TreeSet<>(Config.elementValues(context).keySet()))
+            text.append(key).append('=').append(Config.elementInt(context, key)).append(';');
         return text.toString();
+    }
+
+    /** 背景指纹：背景样式 + 遮罩颜色 + 遮罩强度 + 封面圆角（`Config.cornerRadiusDp` 每次查询一次）。 */
+    private String currentBackdropSignature() {
+        return Config.overlayStyle(context) + "|" + Config.overlayColor(context) + "|"
+                + Config.overlayAlpha(context) + "|" + Config.cornerRadiusDp(context);
     }
 
     /**
