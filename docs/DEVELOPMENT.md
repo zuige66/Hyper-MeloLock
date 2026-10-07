@@ -158,6 +158,26 @@ hook 装不上时会打 `none on <类名> (methods=N, GoingAway*=…)` —— �
 `KeyguardViewMediator`(无) 找到 `statusbar.policy.KeyguardStateControllerImpl#notifyKeyguardGoingAway` 的）。
 **铁律仍然成立**：`suspend()` 里那个硬隐藏是兜底，别为了"好看"往里加淡出。
 
+**补充（2026-10-07）：解锁时不再「立刻交还原生层」，改为延迟到 `restore()`。**
+系统自己的解锁退场动画在 `keyguardGoingAway` 之后还要跑 ~350ms：
+
+```
+07.089  我们: Unlock signalled; cover holds 130ms then fades 240ms
+07.366  系统: updateKeyguardWallpaperState: show=false anim:true     ← 系统开始把锁屏壁纸动走
+07.654  我们: native layers handed back（旧行为）                     ← 交还动作落在动画进行中
+07.715  系统: updateKeyguardWallpaperStateAnim onAnimationFinished
+```
+
+三次解锁的「交还 → 系统动画结束」只差 **3 / 61 / 62ms** —— `restoreChangedViews()` 会在动画进行中
+把原生壁纸层置回 `VISIBLE`，和系统「正在藏它」打架，用户看到的就是「解锁时闪一下原生锁屏」。
+现在 `finishSuspend` **不交还**（那些层都在锁屏根里，而锁屏根此时已被系统置 `GONE`，继续按住没有副作用），
+交还给 `restore()`（模块关闭 / 场景销毁）。日志改成
+`native layers stay hidden (hand-back deferred to restore); t=+Nms native[keyguardRoot=… wallpaper=… clock=…]`。
+
+最后那段 `native[…]` 是**诊断普查**：排查「闪原生锁屏」时最关键的一问是**闪的只是壁纸层，还是整个原生锁屏**
+（时钟/图标都出来）—— 只有壁纸＝交还时机问题；连时钟都出来＝另有路径在放原生内容。
+用可见性 + alpha 打出来，比让用户回忆「看清没看清」可靠。
+
 ### 亮屏第一帧必须是我们的界面（暗期预显）
 
 `suspend()` 之后场景是 `GONE`，而 `resume()` 只能等两件事：`SCREEN_ON` 广播（**送达时面板已经亮了**）或亮屏后第一帧 pre-draw。于是「息屏 → 快速亮屏」中间那几十~两百毫秒露出的就是**原生锁屏** —— 用户反馈的「息屏快速亮屏又出现原生」。
@@ -175,8 +195,96 @@ hook 装不上时会打 `none on <类名> (methods=N, GoingAway*=…)` —— �
 
 日志：`Pre-showing scene while display is dark so the first lit frame is ours` / `Cover was not visible while the scene shows; restoring it`。
 
+**补充（2026-10-07，第 1 轮）：预显的触发点从「固定延时」换成「系统唤醒信号」。**
+一次性 220ms 的延时要赌用户的按键节奏：**快速连按两下电源键**时时序会反过来 ——
+实测 `KeyguardViewMediator` 的唤醒回调(08.925) 比 `onScreenTurnedOn`(09.165) 早 240ms，
+而我们的 `SCREEN_OFF` 广播反而晚到 53ms、预显比亮屏晚 50ms → **前几帧就是原生锁屏**。
+现在在 `HookEntry.hookWakeSignal()` 里钩系统自己的唤醒回调（预显是幂等的，多挂几个无害）：
+
+| 真实落点（dex 解析核实） | 相对亮屏 |
+|---|---|
+| `KeyguardPanelViewController$wakeObserver$1#onStartedWakingUp` | 早 ~224ms |
+| `KeyguardViewMediator#-$$Nest$mhandleNotifyStartedWakingUp` | 早 ~240ms |
+
+**踩坑（重要）**：日志里那两行 `onStartedWakingUp` / `handleNotifyWakingUp` **只是 Log 文案，不是方法名** ——
+第一版按它们精确匹配，四个候选类全部落空（真机上 `KeyguardViewMediator` 连 `handleNotifyWakingUp`
+这个方法都没有）。**正确做法**：用 dex 解析「谁引用了这段字符串」，才能拿到真名
+（`-$$Nest$m…` 是 Kotlin/R8 生成的 nest 访问器，说明该方法被内部类调用）。
+`WAKE_SIGNAL_CLASSES` 现在按**名字模糊匹配**（小写含 `wakingup`）+ 覆盖匿名内部类 + 接口 default 方法，
+并把**实际挂上的方法名**打进日志（`Wake signal hook armed on <类> -> <方法…>`）。
+
 **踩坑**：把 `preShowForWake` 写成字段初始化器里的 lambda 时，用**简单名**引用后面声明的字段（`foreground`/`background`/`main`…）会被 javac 判为「非法前向引用」。
 本项目的规矩：**改方法引用 `this::runPreShowForWake`**，把实现体放进普通方法。
+
+**补充（2026-10-07，第 2 轮）：唤醒信号触发还不够，预显必须「同步」摆可见性。**
+第 1 轮装上后用户复现：**「快速开屏还是闪原生壁纸，只有壁纸在」**。日志把根因钉死了（22:17:34 一次完整快开屏）：
+```
+34.505  Wake signal (KeyguardViewMediator) → 我们 main.post(preShowForWake)（本应 ~34.521 跑）
+34.643  SCREEN_OFF 广播到达 → main.removeCallbacks(preShowForWake)  ← ✗ 把上面提前排好的预显撤销了！
+                                           + postDelayed(220) → 排到 34.863
+34.755  onScreenTurnedOn（面板亮）
+34.762  KeyguardService 唤醒信号 → post pre-show
+34.781  Pre-showing scene                          ← ✗ 比亮屏晚 26ms，中间那几帧就是原生壁纸
+```
+两处叠加的时序错：
+1. **`SCREEN_OFF` 的 `removeCallbacks(preShowForWake)` 把唤醒信号提前排好的预显撤掉了** ——
+   快速开屏时 `SCREEN_OFF` 晚于唤醒信号到达（顺序反了），那次 remove 正好删掉最早的预显。
+2. **即便没被删，`main.post` 的 runnable 会被唤醒那 ~250ms 的主线程重活饿死**，等到亮屏后才跑。
+
+修法：
+- `SCREEN_OFF` 里**删掉 `removeCallbacks(preShowForWake)`**，只留 `postDelayed(…, 220)` 作兜底
+  （万一唤醒信号没来，仍按原延时摆回；它不再能撤销唤醒信号排好的预显）。
+- `onSystemWakingUp()` 改成：**主线程上同步调 `applyPreShow()`**（钩子跑在 MIUI 唤醒序列最前端、主线程还没被
+  占满时，同步摆可见性才能抢在亮屏第一帧之前）；非主线程（个别 binder 回调）才退回 `main.post`。
+  整个调用包 `try/catch`——失败就当没预显（退化成原生），不崩 SystemUI。
+- `applyPreShow()` 抽出 `runPreShowForWake` 的可见性逻辑，**额外在预显时把原生壁纸层再按一次**
+  （`hideNativeWallpaperLayers(root)` + `hideNativeClockLayers(root)`）：唤醒时 MIUI 会把
+  `keyguard_background_layer` / `wallpaper_des` / AOD 超级壁纸重新置回可见，必须提前兜一道，
+  否则「我们的封面还没盖上去、原生壁纸先露出来」正是用户看到的「只有壁纸」。
+- 验证判据：修复后 `Pre-showing scene` 必须出现在 `onScreenTurnedOn` **之前**（面板还黑着时），
+  且 `Wake signal pulled the pre-show forward … suspended=true` 应在亮屏前 ~250ms。
+
+**第 3 轮（2026-10-07，用户拍板方向）：第 1/2 轮都是「抢那一帧」的治标，根因是 z 序错配。**
+用户原话：「改的不对，应该是要提前画好这个页面，就可以直接覆盖」。
+- 旧结构：`background`（全屏模糊封面）挂在 `windowRoot` 第 0 位（最底层）；原生锁屏壁纸
+  `keyguard_background_layer` 同在 `root`（锁屏根）里、且层级在 `background` **之上**。
+  于是原生壁纸一重显就盖住我们、从 `foreground`（播放器 UI，有透明缝隙）漏出来 —— 即「只有壁纸」。
+  之前靠「唤醒瞬间切可见性 + 躲 MIUI 重显」永远是在和 z 序对抗，治标不治本。
+- 修法（结构性）：`create()` 里把 `background` 从 `windowRoot.addView(background, 0)` 改成
+  `root.addView(background, root.indexOfChild(foreground))`——**插在原生壁纸之上、`foreground` 之下**。
+  我们的全屏封面现在提前画好、且层级压住原生壁纸，解锁/亮屏时直接覆盖，不再依赖任何可见性时序。
+- 桌面（上滑解锁）的覆盖不受影响：`background` 在 `suspend()`/`finishSuspend()` 里照常立即 `GONE`，
+  桌面由 `foreground` 跟随系统退场动画淡出揭示（与前景层同理，不残留到桌面）。
+  上滑露壁纸那条旧约束（background 挂窗口根盖桌面）已不再适用——那时 background 还在窗口根最底层，
+  现在移进 root 后由 root 跟随系统 dismiss；若真机复现上滑露桌面，再补一层窗口根纯色兜底。
+- 第 1/2 轮的唤醒预显（同步 `applyPreShow`）保留：它让 `foreground`/`background` 在亮屏前就 VISIBLE，
+  配合 z 序修正等于「可见且压住原生壁纸」双保险。
+
+**第 4 轮（2026-10-07 深夜，用户复现「还是闪」后的完整收尾）——两类根因叠加，且上一轮改动曾被 IDE 旧缓冲区覆盖：**
+
+1. **「快速开屏还闪」＝唤醒守卫误拦 + 固定延时赌输**。日志（22:43:43 一次快开屏）：
+   `唤醒信号 43.666 → 我们 post 预显 → SCREEN_OFF 43.731 的 removeCallbacks 把它撤掉 →
+   面板实际亮起 43.846（Unblocked screen on after 582ms）→ 预显 43.889 才跑`。
+   两个错：① `SCREEN_OFF` 里的 `removeCallbacks(preShowForWake)` 会撤掉唤醒信号提前排好的预显
+   （快开屏时 SCREEN_OFF 晚于唤醒信号到）——删掉它，只留 `postDelayed(220)` 兜底；
+   ② `onSystemWakingUp` 的守卫里有 `lockscreenCycle`——快速开屏时它还挂着上一轮 USER_PRESENT
+   留下的 false（SCREEN_OFF 广播晚到），把最早一次预显拦掉了。改成只认 `keyguardLocked()`（权威），
+   并在预显前把 `lockscreenCycle` 就地扶正；且**主线程上同步调 `applyPreShow()`**
+   （`Looper.myLooper()==main.getLooper()` 时直接调，不走 post——唤醒那 250ms 主线程重活会把
+   post 的 runnable 饿死到亮屏后）。
+2. **「解锁还闪」＝我们自己在系统编排前掀了盖子**。`dumpsys window` + 日志证实：解锁过渡时系统
+   **主动把壁纸窗口拉起来显示**（`wms.showSurfaceRobustly … com.miui.miwallpaper.wallpaperservice.ImageWallpaper`，
+   keyguardGoingAway 后 ~53ms）——它是**独立窗口**，不在任何视图树里，我们普查/隐藏都碰不到它。
+   旧版 `suspend()` 在解锁一开始就 `foreground 淡出 120ms + background 立即 GONE`、
+   `startUnlockCoverFade()` 又自定节拍（压 240ms 淡 130ms）——都比系统编排快，淡出/摘层期间
+   正好露出系统正在过渡展示的壁纸窗口。改法（贯彻「提前画好、直接覆盖」）：
+   **解锁交接期间完全不动可见性**——`suspend()` 只停 ticker、标记状态，`startUnlockCoverFade()` 只留
+   误触发兜底；我们的层全是 keyguard 根的子视图，系统收 keyguard 根时自然一起收走（原生节奏）。
+   硬隐藏兜底 `finishSuspend` 延时 150→600ms，等编排走完再摘。
+3. **事故：上一轮两处编辑被 IDE 旧缓冲区覆盖**（`LockScreenOverlay.java` 在 Android Studio 里开着，
+   外部保存把盘上文件写回旧内容）。表象是「装了新包行为没变」——实际跑的是半套代码。
+   **验证手段**：改完必 `grep` 逐项核对盘上内容再构建；装机日志要能自证新行为（如 `hands off` 日志行）。
+   红线「不要并行编辑此文件」再+1：**测试前不要在 IDE 里保存这个文件**。
 
 ### 手电筒 / 相机转场：改 MIUI 那层遮罩的背景（**不新增视图**）
 

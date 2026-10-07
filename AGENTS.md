@@ -15,6 +15,8 @@
 - **钩子别按类名去找 MIUI 插件类**：`com.miui.keyguard.shortcuts.*` 是插件化动态加载的，在 SystemUI 基础 `param.classLoader` 里 `findClassIfExists` 全部 NOT FOUND；要动插件窗口就按**窗口标题**认（`WindowManagerImpl.addView`；本 ROM 上 `WindowManagerGlobal.addView` 签名对不上）。`com.android.keyguard.*`（含 `shortcut.MiuiShortcutController`）在 SystemUI 自己那边，可以直接钩。
 - **钩子别用 `param.classLoader` 找模块自己的类**：legacy Xposed 下模块类由模块自己的 ClassLoader 加载，字符串查找会 `ClassNotFoundException`；要钩自己人就用类字面量或反射读字段。
 - **撤销/回滚这类「一次动很多文件」的 git 操作，做完立刻 `git status` 复核**：2026-10-07 `git revert` 后出现过 `app/` 整树 ~300 项被删（我这条命令只动 4 个文件，疑并行会话所致），恢复命令是 `git checkout -- app`（HEAD 里全在，10 秒恢复）。
+- **要钩 ROM 的方法时，「日志文案 ≠ 方法名」**（2026-10-07 踩过）：日志里 `onStartedWakingUp` / `handleNotifyWakingUp` 只是 `Log` 的字符串，按它们精确匹配会让四个候选类全部落空（`KeyguardViewMediator` 真机上根本没有 `handleNotifyWakingUp` 这个方法）。**正确做法**：用 dex 解析找「引用了该字符串的方法」（见 DEVELOPMENT.md 的 DEX 小节），拿到真名后再钩；或者按**名字模糊匹配**（如小写含 `wakingup`）+ 覆盖匿名内部类与接口 default 方法，并把**实际挂上的方法名**打进日志。
+- **构建偶发 `BUILD FAILED` 不要先怀疑代码**（2026-10-07 多次）：改动后第一次构建可能失败（与本机杀毒/索引锁 dex 同源），**直接重跑一次，通常 1~2 分钟就过**；真正的编译错误会在 `^e:` / `.java:N: 错误` 里明确给出文件名与行号，先看错误落在谁的文件上。
 - **装完 APK 必须重启 SystemUI 才会加载新的 Hook 代码**，顺序是先装再重启。**无 root 重启法**：`adb -s 1b3a7d8 shell am crash com.android.systemui`（实测有效，SystemUI 崩掉后自动重启、PID 立刻变化；`am force-stop` 无效、`su` 从 adb 不可用）。锁屏行为异常时先比 `ps` 里 SystemUI 的 ETIME 和 APK 安装时间，再看 `logcat | grep "Elements: clock="` 有没有出现——没有就说明跑的还是旧代码。
 
 ## 仓库与发布

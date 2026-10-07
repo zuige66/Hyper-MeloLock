@@ -42,6 +42,9 @@ public final class HookEntry implements IXposedHookLoadPackage {
             // 解锁信号单独 try：它装不上绝不能影响上面已经装好的主 hook。
             try { hookUnlockSignal(param.classLoader); }
             catch (Throwable error) { Log.w(TAG, "Unlock signal hook install failed", error); }
+            // 唤醒信号同理：装不上只是「快速息屏亮屏」退回固定延时预显。
+            try { hookWakeSignal(param.classLoader); }
+            catch (Throwable error) { Log.w(TAG, "Wake signal hook install failed", error); }
             XposedBridge.log(TAG + ": hook armed for exact OS3 build");
             Log.i(TAG, "SystemUI root constructor hook installed");
         } catch (Throwable error) {
@@ -130,6 +133,106 @@ public final class HookEntry implements IXposedHookLoadPackage {
         for (Class<?> level = type; level != null && level != Object.class; level = level.getSuperclass())
             total += level.getDeclaredMethods().length;
         return total;
+    }
+
+    /**
+     * 「屏幕正在被唤醒」的系统侧信号。
+     *
+     * 真机实测（2026-10-07，快速连按两下电源键那次）：
+     * ```
+     * 08.905 onFinishedGoingToSleep
+     * 08.925 KeyguardViewMediator: handleNotifyWakingUp        ← 系统已经开始唤醒（比亮屏早 240ms）
+     * 08.978 我们的 SCREEN_OFF 广播才到（晚 53ms）
+     * 09.165 onScreenTurnedOn                                  ← 面板亮
+     * 09.215 我们的预显才跑（晚 50ms）→ 前几帧是原生锁屏
+     * ```
+     * 所以预显不能只靠 `SCREEN_OFF + 220ms`，要把触发点换成系统自己的唤醒回调。
+     *
+     * **重要经验：日志文案 ≠ 方法名**。第一版按 `onStartedWakingUp` / `handleNotifyWakingUp`
+     * 精确匹配，四个类全部落空（真机上那两个只是 `Log` 的文案）。真正的落点是用 dex 解析挖出来的
+     * （逐个 dex 搜「引用了该字符串的方法」）：见 `WAKE_SIGNAL_CLASSES` 注释。
+     * 现在改成**按名字模糊匹配**（小写含 `wakingup`）+ 覆盖匿名内部类，并打印实际挂上了哪些方法名。
+     */
+    private static void hookWakeSignal(ClassLoader loader) {
+        XC_MethodHook callback = new XC_MethodHook() {
+            @Override protected void beforeHookedMethod(MethodHookParam hook) {
+                Log.i(TAG, "Wake signal from system: " + hook.method.getDeclaringClass().getSimpleName()
+                        + "#" + hook.method.getName());
+                notifySystemWakingUp();
+            }
+        };
+        int armed = 0;
+        for (String name : WAKE_SIGNAL_CLASSES) {
+            try {
+                Class<?> type = XposedHelpers.findClass(name, loader);
+                java.util.Set<java.lang.reflect.Method> targets = wakeCandidates(type);
+                if (targets.isEmpty()) {
+                    Log.w(TAG, "Wake signal hook: none on " + name + " (methods=" + declaredMethodCount(type)
+                            + ", wake*=" + namesContaining(type, "wak") + ")");
+                    continue;
+                }
+                StringBuilder armedNames = new StringBuilder();
+                for (java.lang.reflect.Method method : targets) {
+                    XposedBridge.hookMethod(method, callback);
+                    armedNames.append(method.getName()).append(' ');
+                    armed++;
+                }
+                Log.i(TAG, "Wake signal hook armed on " + name + " -> " + armedNames.toString().trim());
+            } catch (Throwable error) {
+                Log.w(TAG, "Wake signal hook: " + name + " unavailable (" + error + ")");
+            }
+        }
+        if (armed == 0) Log.w(TAG, "Wake signal hook unavailable; pre-show keeps the SCREEN_OFF+delay timing");
+    }
+
+    /**
+     * 唤醒信号的候选宿主。前三个是**dex 解析核实过的真实落点**（日志文案与实际方法名不同）：
+     *   - `KeyguardPanelViewController$wakeObserver$1#onStartedWakingUp` —— 面板的唤醒观察者（实测早亮屏 224ms）
+     *   - `KeyguardViewMediator#-$$Nest$mhandleNotifyStartedWakingUp` —— 就是打 `handleNotifyWakingUp` 那行日志的方法
+     *   - `KeyguardService$3#onStartedWakingUp` —— 最早的一个（实测早 562ms）
+     * 后面两个是 AOSP 常见宿主，顺手一起试，挂上多一个也无害（下游幂等）。
+     */
+    private static final String[] WAKE_SIGNAL_CLASSES = {
+            "com.android.keyguard.panel.KeyguardPanelViewController$wakeObserver$1",
+            "com.android.systemui.keyguard.KeyguardViewMediator",
+            "com.android.systemui.keyguard.KeyguardService$3",
+            "com.android.systemui.keyguard.KeyguardUpdateMonitor",
+            "com.android.keyguard.KeyguardUpdateMonitor",
+            "com.android.systemui.statusbar.policy.KeyguardStateControllerImpl",
+    };
+
+    /** 收集一个类（含父类、接口 —— 唤醒回调常是接口的 default 方法）里名字含 `wakingup` 的方法。 */
+    private static java.util.Set<java.lang.reflect.Method> wakeCandidates(Class<?> type) {
+        java.util.Set<java.lang.reflect.Method> out = new java.util.HashSet<>();
+        for (Class<?> level = type; level != null && level != Object.class; level = level.getSuperclass()) {
+            collectWake(level, out);
+            for (Class<?> itf : level.getInterfaces()) collectWake(itf, out);
+        }
+        return out;
+    }
+
+    private static void collectWake(Class<?> type, java.util.Set<java.lang.reflect.Method> out) {
+        for (java.lang.reflect.Method method : type.getDeclaredMethods())
+            if (matchesWakeSignal(method)) out.add(method);
+    }
+
+    private static boolean matchesWakeSignal(java.lang.reflect.Method method) {
+        return method.getName().toLowerCase(java.util.Locale.ROOT).contains("wakingup");
+    }
+
+    /** 诊断用：列出声明方法里名字含某片段的方法名（第一版就是靠它发现「精确匹配全落空」的）。 */
+    private static String namesContaining(Class<?> type, String needle) {
+        StringBuilder out = new StringBuilder();
+        for (Class<?> level = type; level != null && level != Object.class; level = level.getSuperclass())
+            for (java.lang.reflect.Method method : level.getDeclaredMethods())
+                if (method.getName().toLowerCase(java.util.Locale.ROOT).contains(needle))
+                    out.append(method.getName()).append(' ');
+        return out.length() == 0 ? "(none)" : out.toString().trim();
+    }
+
+    private static void notifySystemWakingUp() {
+        for (LockScreenOverlay overlay : overlays.values())
+            if (overlay != null) overlay.onSystemWakingUp();
     }
 
     /** 诊断用：列出所有名字里带 `GoingAway` 的声明方法，一眼看出真实的方法叫什么、在哪个类。 */
