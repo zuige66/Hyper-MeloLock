@@ -68,7 +68,8 @@ final class LockScreenOverlay {
                 // unlocked notification shade.  On this ROM isKeyguardLocked()
                 // can still briefly report true while the home shade is opening.
                 lockscreenCycle = false;
-                Log.i(TAG, "USER_PRESENT " + state());
+                Log.i(TAG, "USER_PRESENT " + state()
+                        + (suspended && suspendStartedAtMs > 0 ? " (+" + (android.os.SystemClock.elapsedRealtime() - suspendStartedAtMs) + "ms after suspend)" : ""));
                 // 解锁完成。正常路径是 pre-draw 守卫在解锁动画一开始就 suspend() 淡出；
                 // 这里只兜底补一次，仍然保留实例，不再销毁场景。
                 if (!suspended && foreground != null) suspend("user-present");
@@ -91,6 +92,8 @@ final class LockScreenOverlay {
     private boolean unlockRestoreLogged;
     /** 诊断用：render 早退原因去重，只在原因变化时打日志。 */
     private String lastSkipReason;
+    /** 诊断用：本次 suspend 的起点时间戳，配合 unlockWatch 输出相对毫秒数。 */
+    private long suspendStartedAtMs;
     private int createAttempts;
     /**
      * 解锁后场景是否处于「已淡出但保留」状态。
@@ -342,7 +345,13 @@ final class LockScreenOverlay {
         int color = Config.overlayColor(context);
         baseScrim.setBackground(new ColorDrawable((color & 0x00FFFFFF) | (Config.overlayAlpha(context) << 24)));
         background.addView(baseScrim, new FrameLayout.LayoutParams(-1, -1));
-        root.addView(background, 0, new ViewGroup.LayoutParams(-1, -1));
+        // 挂窗口根而不是锁屏根：真机采样（Unlock watch）显示系统解锁时是把整个
+        // HyperOSKeyguardRootView 直接置 INVISIBLE + alpha 0，且动作发生在 suspend()
+        // 触发之前——挂在它内部的层没有过渡窗口，父控件 alpha 归零就一起消失，露出的是桌面壁纸。
+        // 改挂窗口根最底层后，keyguard 被撤走时这一层留在原地，下面露出的就是我们的模糊封面，
+        // 收尾仍由 suspend/finishSuspend 负责（GONE），不会残留到桌面。
+        // 注：前景层必须留在 keyguard 根里跟着系统走，否则会「壁纸已出、组件还在」。
+        windowRoot.addView(background, 0, new ViewGroup.LayoutParams(-1, -1));
 
         foreground = new FrameLayout(context);
         FrameLayout.LayoutParams sceneParams = new FrameLayout.LayoutParams(-1, -1, Gravity.TOP);
@@ -693,7 +702,8 @@ final class LockScreenOverlay {
         if (notifications != null) { notifications.animate().cancel(); endNotificationsLayer(); notifications.setAlpha(1f); notifications.setTranslationY(0f); }
         cancelArtworkFallback(); unregisterGuard(); shown = null; expanded = false; playerSceneVisible = false; restoreChangedViews();
         if (foreground != null && foreground.getParent() == root) root.removeView(foreground);
-        if (background != null && background.getParent() == root) root.removeView(background);
+        // background 挂在窗口根（见 create()），这里按实际父容器移除。
+        if (background != null && background.getParent() instanceof ViewGroup) ((ViewGroup) background.getParent()).removeView(background);
         if (notificationButton != null && notificationButton.getParent() == foreground) foreground.removeView(notificationButton);
         background = null; foreground = null; content = null; immersiveClock = null; playerCard = null; notificationButton = null; clock = null; secondaryClock = null; nativeBackgroundLayer = null; nativeForegroundLayer = null; notifications = null; windowRoot = null; leftShadePanel = null;
         unlockRestoreLogged = false; lastSkipReason = null; suspended = false;
@@ -712,7 +722,10 @@ final class LockScreenOverlay {
         suspended = true;
         main.removeCallbacks(progressTicker);
         main.removeCallbacks(finishSuspend);
+        main.removeCallbacks(unlockWatch);
+        suspendStartedAtMs = android.os.SystemClock.elapsedRealtime();
         Log.i(TAG, "suspend reason=" + reason + " " + state());
+        main.post(unlockWatch);   // 诊断：采样系统退场动画进度，只打日志不影响行为
         foreground.animate().cancel();
         if (cover != null) cover.animate().cancel();
         if (playerCard != null) playerCard.animate().cancel();
@@ -732,9 +745,43 @@ final class LockScreenOverlay {
         if (background != null) background.setVisibility(View.GONE);
         if (notificationButton != null) notificationButton.setVisibility(View.GONE);
         // 原生壁纸/时钟交还系统：桌面期间我们完全不碰这些层。
+        long handedBackAtMs = android.os.SystemClock.elapsedRealtime() - suspendStartedAtMs;
         restoreChangedViews();
+        Log.i(TAG, "native layers handed back at t=+" + handedBackAtMs + "ms");
         Log.i(TAG, "suspend done; scene kept for reuse");
     };
+
+    /**
+     * 诊断：解锁期间每 30ms 采样一次锁屏根视图，看清系统退场动画到底对整棵树做了什么
+     * （是否位移、是否淡出、何时 GONE、何时 detach）。
+     *
+     * 用来回答两件事：① 我们的层挂在根视图里，能不能**完全交给系统带走**——如果系统确实
+     * 在给整棵树做 alpha/位移动画，那我们就没必要自己淡出，自己淡出反而是「比系统早退场」
+     * 从而露出原生壁纸的元凶；② 若交给系统，兜底超时该设多久（观察什么时候彻底静止）。
+     *
+     * **只打日志，不改任何行为**。
+     */
+    private final Runnable unlockWatch = new Runnable() {
+        @Override public void run() {
+            if (!suspended || foreground == null) return;   // resume()/restore() 过后自动停
+            long t = android.os.SystemClock.elapsedRealtime() - suspendStartedAtMs;
+            if (t > 1500) { Log.i(TAG, "Unlock watch: end after " + t + "ms"); return; }
+            Log.i(TAG, "Unlock watch t=+" + t + "ms root=[" + visibilityName(root) + " attached=" + root.isAttachedToWindow()
+                    + " alpha=" + fmt(root.getAlpha()) + " ty=" + fmt(root.getTranslationY()) + "]"
+                    + " fg=[" + visibilityName(foreground) + " alpha=" + fmt(foreground.getAlpha()) + "]"
+                    + " bg=[" + (background == null ? "null" : visibilityName(background)) + "]");
+            main.postDelayed(this, 30);
+        }
+    };
+
+    private static String fmt(float value) { return String.format(java.util.Locale.US, "%.2f", value); }
+    private static String visibilityName(View view) {
+        switch (view.getVisibility()) {
+            case View.VISIBLE: return "VISIBLE";
+            case View.INVISIBLE: return "INVISIBLE";
+            default: return "GONE";
+        }
+    }
 
     /** 锁屏重新出现：复用 suspend 保留的场景，跳过 create() 重建。 */
     private void resume() {

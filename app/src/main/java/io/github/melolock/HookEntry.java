@@ -20,6 +20,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
         try {
             Class<?> root = XposedHelpers.findClass(
                     "com.android.keyguard.widget.HyperOSKeyguardRootView", param.classLoader);
+            Log.i(TAG, "Root class resolved via loader=" + param.classLoader + " -> " + root.getClassLoader());
             XposedHelpers.findAndHookConstructor(root, android.content.Context.class,
                     android.util.AttributeSet.class, new XC_MethodHook() {
                         @Override protected void afterHookedMethod(MethodHookParam hook) {
@@ -41,8 +42,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
             XposedBridge.log(TAG + ": hook armed for exact OS3 build");
             Log.i(TAG, "SystemUI root constructor hook installed");
         } catch (Throwable error) {
-            XposedBridge.log(TAG + ": incompatible hook; native lock screen retained: " + error);
-            Log.e(TAG, "SystemUI hook unavailable", error);
+            XposedBridge.log(TAG + ": incompatible hook; native lock screen retained (loader=" + param.classLoader + "): " + error);
+            Log.e(TAG, "SystemUI hook unavailable; loader=" + param.classLoader, error);
         }
     }
     private static void attach(View root) {

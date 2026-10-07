@@ -423,6 +423,20 @@ adb -s 1b3a7d8 reboot
 
 18. 2026-10-06 **切歌不再退回原生锁屏**。真机日志显示换歌时 App 会先摘掉 metadata 里的封面 bitmap、只留 URI（且是 `https://`，`ContentResolver` 读不了 → `FileNotFoundException`），约 300ms 后才补齐；期间会话也可能短暂不合格。旧代码三条路径一起撤层：解码失败清空 `lastReady`、会话一不合格立刻下发 null（→ `restore("render-no-session")`）、置空 `current` 注销回调。改为**失败/超时保留上一帧** + **1500ms 宽限期** + **空窗期按包名重新挂回会话**。
 
+21. 2026-10-07 **上滑解锁不再露原生壁纸**。用户反馈上滑解锁时会看到原生壁纸。加探针（`unlockWatch`，suspend 后每 30ms 采样一次锁屏根视图，持续 1500ms）后实测三次复现，得到决定性数据：
+
+    ```
+    t=+36ms   root=[INVISIBLE attached=true alpha=0.00 ty=0.00] fg=[VISIBLE alpha=1.00] bg=[VISIBLE]
+    t=+131ms  root=[INVISIBLE attached=true alpha=0.00 ty=0.00] fg=[VISIBLE alpha=0.07]  bg=[VISIBLE]
+    t=+221ms  root=[INVISIBLE attached=true alpha=0.00 ty=0.00] fg=[GONE]                bg=[GONE]
+    ```
+
+    **根因不是原先猜的那样**：① 系统**没有**给整棵树做「跟随的退场动画」——它在 `suspend()` 触发**之前**就把 `HyperOSKeyguardRootView` 直接置 `INVISIBLE + alpha 0`，且全程 `ty=0.00`（无位移）；挂在它内部的任何层都没有过渡窗口，父控件 alpha 归零即一同消失，因此「让系统动画带走我们的层」这条思路**不成立**。② 用户看到的也**不是** `restoreChangedViews()` 交还的那个锁屏壁纸层（它还在 `alpha=0` 的容器里，根本不可见），而是**桌面底下那张系统壁纸**——keyguard 一撤就露出来了。③ 我们自己的 120ms 淡出（`fg alpha 1.00 → 0.07`）是**白淡**：期间父控件已不可见。④ 本次 `USER_PRESENT` 在 suspend 后仅 16ms 到达（旧记录的 80~190ms 来自另一批采样），不是关键变量。
+
+    **改法**：把 `background`（模糊封面底图 + 遮罩）从 `root.addView(background, 0, ...)` 挪到 **`windowRoot.addView(background, 0, ...)`** —— 挂窗口根最底层、位于 keyguard 根**之外**。keyguard 被系统撤走时这一层留在原地，下面露出的就是沉浸背景而不是桌面壁纸；收尾仍由 `suspend` / `finishSuspend` 置 `GONE`，不会残留到桌面。`restore()` 改为按实际父容器移除。**前景层（`foreground`）必须留在锁屏根**跟着系统走，否则会退回「壁纸已出、组件还在」的旧问题。
+
+    **排查教训**：真机 logcat 行格式是 `I/MeloLock(6507):`（**标签后跟 PID，不是冒号**），`grep "MeloLock:"` 会漏掉全部有效行，据此误判过「模块没运行」，并连带让用户白勾 Vector 作用域、白重启一次设备。正确过滤是 `grep -E "/MeloLock\("`。另外 `adb logcat > file` 走块缓冲、不实时落盘，抓现场要用 `adb logcat -d -v time -t 'MM-DD HH:MM:SS.mmm'` 一次性 dump。
+
 19. 2026-10-06 **播放器页 ↔ 通知页共享元素切换**，并修掉三个真机反馈：① 展开通知后左下拉仍能拉出通知（`sceneShowing()` 不该带 `playerSceneVisible`）；② 桌面下拉露出原屏保时间（suspended 期间要继续按住原生时钟层，但不碰壁纸层）；③ 切回播放器时间闪一下（真凶是返回时把含时钟的 `foreground` 从 alpha 0 淡入）。附带：位移上限收到 96dp 且展开/返回复用同一值、`bringToFront()` 换成 `ensureOnTop()`（避免每帧 `requestLayout`）。
 
 20. 2026-10-07 **首个 Release**：仓库推送到 <https://github.com/zuige66/Hyper-MeloLock>，v0.2.0 正式签名 APK（v1+v2+v3）发布到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases/tag/v0.2.0)。补 `.gitignore`（签名密钥、`.workbuddy/`、临时截图）。发布用 token 只活在临时文件里，用完即删（**并且应当在 GitHub 上吊销**）。
