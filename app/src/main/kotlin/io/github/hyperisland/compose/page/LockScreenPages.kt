@@ -538,7 +538,7 @@ internal fun LockAppearancePage() {
             Card {
                 PreferenceDropdown(
                     title = "背景样式",
-                    summary = "深色玻璃＝强模糊封面，浅色玻璃＝轻模糊封面，纯色沉浸＝不用封面、整块底色",
+                    summary = "深色玻璃＝强模糊封面 + 遮罩原样；浅色玻璃＝轻模糊 + 遮罩更淡；纯色沉浸＝不用封面，整块底色",
                     icon = null,
                     items = listOf("深色玻璃", "浅色玻璃", "纯色沉浸"),
                     selectedIndex = style,
@@ -570,7 +570,7 @@ internal fun LockAppearancePage() {
             SectionTitle("说明")
             Card {
                 InfoText(
-                    "以上尺寸、圆角、间距和字体设置都由锁屏覆盖层在**创建场景时**读取，" +
+                    "以上尺寸、圆角、间距、字体和背景样式都由锁屏覆盖层在创建场景时读取，" +
                         "改完需要灭屏再亮屏一次才会生效（模块会自己重建，不用重启 SystemUI）。",
                 )
             }
