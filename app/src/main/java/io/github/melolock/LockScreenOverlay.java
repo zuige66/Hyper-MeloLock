@@ -108,6 +108,20 @@ final class LockScreenOverlay {
     private long suspendStartedAtMs;
     private int createAttempts;
     /**
+     * 建场景那一瞬的外观配置指纹（三元素参数 + 背景样式/颜色/强度 + 封面圆角）。
+     *
+     * 场景实例现在跨锁屏周期复用（suspend / resume），`create()` 一辈子只跑一次，
+     * 而它又是唯一读取外观配置的地方 —— 于是「背景样式调了没反应」成了必然结果。
+     * 复用之前先比一次指纹，不同就撤掉旧场景重建，把「灭屏再亮屏一次生效」这条约定重新兑现。
+     */
+    private String appearanceSignature;
+    /** findBottomCornerIcon 的遍历预算：SystemUI 的窗口树很深，不容许每次 resume 全扫一遍。 */
+    private int scanBudget;
+    /** 「展开通知」入口是否已经和系统底部快捷栏对齐过（对齐成功后不再重复扫树）。 */
+    private boolean entryAligned;
+    /** 对齐尝试次数：只在头几次输出诊断清单，免得每次 resume 都刷一行。 */
+    private int entryAlignAttempts;
+    /**
      * 解锁后场景是否处于「已淡出但保留」状态。
      *
      * true 时 pre-draw 守卫完全不介入（不隐藏原生层、不 bringToFront、不撤销），
@@ -358,13 +372,23 @@ final class LockScreenOverlay {
         background = new FrameLayout(context);
         baseBlur = new ImageView(context);
         baseBlur.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        int blurDp = Config.overlayStyle(context) == 2 ? 0 : (Config.overlayStyle(context) == 1 ? 18 : 28);
+        // 0 深色玻璃 / 1 浅色玻璃：同一张封面做不同半径的高斯模糊；
+        // 2 纯色沉浸：干脆不用封面，整块背景就是「遮罩颜色」那一个色值 —— 这是三个选项里
+        // 唯一看得出「换了个东西」的一档（少 10dp 模糊肉眼基本分辨不出来）。
+        int style = Config.overlayStyle(context);
+        int blurDp = style == 2 ? 0 : (style == 1 ? 18 : 28);
         if (blurDp > 0) baseBlur.setRenderEffect(RenderEffect.createBlurEffect(dp(blurDp), dp(blurDp), Shader.TileMode.CLAMP));
         background.addView(baseBlur, new FrameLayout.LayoutParams(-1, -1));
+        View solidFill = new View(context);
+        solidFill.setBackground(new ColorDrawable(Config.overlayColor(context) | 0xFF000000));
+        solidFill.setVisibility(style == 2 ? View.VISIBLE : View.GONE);
+        background.addView(solidFill, new FrameLayout.LayoutParams(-1, -1));
         View baseScrim = new View(context);
         int color = Config.overlayColor(context);
         baseScrim.setBackground(new ColorDrawable((color & 0x00FFFFFF) | (Config.overlayAlpha(context) << 24)));
         background.addView(baseScrim, new FrameLayout.LayoutParams(-1, -1));
+        Log.i(TAG, "Backdrop: style=" + style + " blur=" + blurDp + "dp color=" + Integer.toHexString(color)
+                + " alpha=" + Config.overlayAlpha(context));
         // 挂窗口根而不是锁屏根：真机采样（Unlock watch）显示系统解锁时是把整个
         // HyperOSKeyguardRootView 直接置 INVISIBLE + alpha 0，且动作发生在 suspend()
         // 触发之前——挂在它内部的层没有过渡窗口，父控件 alpha 归零就一起消失，露出的是桌面壁纸。
@@ -417,6 +441,10 @@ final class LockScreenOverlay {
         Log.i(TAG, "Custom media card overlay created in " + createAttempts + " attempt(s)");
         createAttempts = 0;
         unlockRestoreLogged = false;
+        entryAligned = false; entryAlignAttempts = 0;
+        appearanceSignature = currentAppearanceSignature();
+        // 底部快捷栏要等一次布局才量得到坐标，排到下一帧再对齐；拿不到就沿用 dp(10)。
+        foreground.post(this::alignEntryWithShortcutRow);
         return true;
     }
 
@@ -558,6 +586,9 @@ final class LockScreenOverlay {
         immersiveClock.setVisibility(View.VISIBLE); immersiveClock.setAlpha(1f);
         // 返回时复用展开时那一次的位移：现场测量两个方向量出来的值不同（真机日志 -605px vs -228px），
         // 卡片会「去一趟、从别处回来」，看起来就是跳。
+        // 顺便再试一次和系统快捷栏对齐：场景经常是在「桌面/灭屏」时先建好的，那一刻
+        // keyguard 底部什么都没有，只有真的站到锁屏上才量得到手电筒/相机那一排。
+        alignEntryWithShortcutRow();
         int shared = returning ? (lastSwapOffset != 0 ? lastSwapOffset : measureSwapOffset()) : 0;
         if (returning) {
             // 通知**直接收起**，不再淡出：淡出层正好盖在时钟区域上，那一层任何合成抖动
@@ -809,12 +840,201 @@ final class LockScreenOverlay {
         suspended = false;
         main.removeCallbacks(finishSuspend);
         Log.i(TAG, "resume reused scene " + state());
+        // 复用之前先验指纹：这一批视图是照着上次的配置量出来的，直接恢复就是把旧外观又端出来。
+        // 场景跨周期复用之后 create() 不再重跑，配置读不到第二次，这是「背景样式/尺寸改了没反应」的根因；
+        // 这里统一处理——外观动过就撤掉旧场景，用同一个快照当场重建（只多一次 create，约 100ms）。
+        MediaSource.Snapshot keep = shown;
+        if (appearanceSignature != null && appearanceSignature.equals(currentAppearanceSignature()) == false) {
+            Log.i(TAG, "Appearance changed while scene kept; rebuilding with current values");
+            restore("appearance-changed");
+            if (keep != null) {
+                // 排队到下一帧重建：此刻正站在 pre-draw 回调里，直接 addView 改视图树会让
+                // 当前这一帧的绘制与紧接着的 layout 互相打断。
+                main.post(() -> {
+                    if (foreground != null || suspended || !lockscreenCycle || !keyguardLocked()) return;
+                    render(keep);
+                });
+            }
+            return;
+        }
         foreground.animate().cancel();
         foreground.setAlpha(1f);
         foreground.setVisibility(View.VISIBLE);
         if (background != null) background.setVisibility(View.VISIBLE);
         if (notificationButton != null) notificationButton.setVisibility(View.VISIBLE);
+        main.post(this::alignEntryWithShortcutRow);
         showMusic();
+    }
+
+    /**
+     * 当前外观配置的指纹：三元素参数 + 背景样式 / 遮罩颜色 / 遮罩强度 + 封面圆角。
+     *
+     * SystemUI 进程里 `Config.elementValues()` 只有一次 ContentResolver 查询，
+     * 但 `overlayStyle/Color/Alpha` 和 `cornerRadiusDp` 各自再查一次，所以只在这两处调用：
+     * create() 收尾 与 resume() 比对，一次锁屏周期最多一次。
+     */
+    private String currentAppearanceSignature() {
+        Map<String, Integer> values = Config.elementValues(context);
+        StringBuilder text = new StringBuilder(256);
+        text.append("style=").append(Config.overlayStyle(context))
+                .append(";color=").append(Config.overlayColor(context))
+                .append(";alpha=").append(Config.overlayAlpha(context))
+                .append(";radius=").append(Config.cornerRadiusDp(context));
+        for (String key : new java.util.TreeSet<>(values.keySet()))
+            text.append(';').append(key).append('=').append(values.get(key));
+        return text.toString();
+    }
+
+    /**
+     * 「展开通知 / 返回播放器」入口与系统底部快捷栏（左手的电筒、右手的相机）对齐高度。
+     *
+     * 这两个图标是 MIUI 自己的 keyguard 布局，**资源 id 换版本就改名**（网上流传的那些名字
+     * 在 16.03 上对不上），所以不写死 id，改成按几何特征认：可见、图标量级（高 32~72dp、
+     * 宽 ≤ 96dp）、落在窗口底部 22% 的带子里、并且横向贴边（中心点在左右 22% 之外）。
+     * 「底部两角 + 图标尺寸 + 贴边」三条一起，很难撞到别的控件。
+     * 从 windowRoot 开始扫：不确定快捷栏挂在 keyguard 根的哪一层。
+     * 拿不到锚点时保留默认的 dp(10)，绝不因为对齐失败让入口跑出屏幕。
+     */
+    private void alignEntryWithShortcutRow() {
+        // 已经对齐过就别再扫树了；几何不变，重复测量只是白花钱。
+        // 最多试 5 次：showMusic() 每次媒体回调都会走到（播放时约每秒一次），
+        // 拿不到锚点时不能让它一直滚窗口树。
+        if (entryAligned || entryAlignAttempts >= 5) return;
+        if (notificationButton == null || foreground == null || windowRoot == null) return;
+        // 只有真正站在锁屏上才量得准：桌面上、或屏幕还黑着的时候，keyguard 底部那一排
+        // 快捷图标压根没显示（真机 log 里那次「band 里一个控件都没有」就是这么来的）。
+        if (!keyguardLocked() || !interactive()) return;
+        entryAlignAttempts++;
+        View anchor = findShortcutAnchor();
+        int height = foreground.getHeight();
+        if (anchor == null || height <= 0) {
+            // 头三次尝试会附带一次「底部带子里到底有什么」的清单，方便换机型/换版本时改判据。
+            if (entryAlignAttempts <= 3) {
+                Log.i(TAG, "Shortcut anchor not found (attempt " + entryAlignAttempts + "); entry keeps dp(10). " + bottomBandCensus());
+            }
+            return;
+        }
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) notificationButton.getLayoutParams();
+        if (params == null) return;
+        int[] anchorPos = new int[2], hostPos = new int[2];
+        anchor.getLocationOnScreen(anchorPos);
+        foreground.getLocationOnScreen(hostPos);
+        int anchorCenterY = anchorPos[1] + anchor.getHeight() / 2 - hostPos[1];
+        int margin = height - anchorCenterY - params.height / 2;
+        if (margin < 0 || margin > dp(160)) {
+            Log.i(TAG, "Shortcut anchor rejected: centerY=" + anchorCenterY + " margin=" + margin + "px");
+            return;
+        }
+        entryAligned = true;
+        if (margin == params.bottomMargin) return;
+        params.bottomMargin = margin;
+        notificationButton.setLayoutParams(params);
+        Log.i(TAG, "Entry aligned to shortcut row: anchor=" + anchor.getHeight() + "px centerY=" + anchorCenterY + " margin=" + margin + "px");
+    }
+
+    /**
+     * 诊断用：把窗口底部一带的可见控件列出来（类名 / id / 屏幕矩形），最多 30 条。
+     *
+     * 底部快捷栏（手电筒 / 相机）的 id 在 MIUI 各版本里都不一样，只能先看清楚真机上到底
+     * 长什么样，再决定锚点怎么认。只在找不到锚点、且每个场景一次时输出。
+     */
+    private String bottomBandCensus() {
+        if (windowRoot == null) return "no windowRoot";
+        int[] hostPos = new int[2];
+        windowRoot.getLocationOnScreen(hostPos);
+        StringBuilder out = new StringBuilder("host=[" + windowRoot.getWidth() + "x" + windowRoot.getHeight()
+                + " top=" + hostPos[1] + "] bottom band:");
+        collectBottomViews(windowRoot, hostPos[1] + (int) (windowRoot.getHeight() * 0.70f), out, 0);
+        return out.toString();
+    }
+
+    private void collectBottomViews(ViewGroup group, int bandTop, StringBuilder out, int depth) {
+        if (group == null || depth > 12 || out.length() > 1400) return;
+        for (int i = 0; i < group.getChildCount() && out.length() < 1400; i++) {
+            View child = group.getChildAt(i);
+            if (child == null || child.getVisibility() != View.VISIBLE || child.getAlpha() < 0.5f) continue;
+            if (child == foreground || child == background) continue;
+            int[] pos = new int[2];
+            child.getLocationOnScreen(pos);
+            if (pos[1] + child.getHeight() / 2 >= bandTop && child.getHeight() > 0) {
+                out.append(' ').append(describe(child, pos));
+                if (out.length() > 1400) return;
+            }
+            if (child instanceof ViewGroup) collectBottomViews((ViewGroup) child, bandTop, out, depth + 1);
+        }
+    }
+
+    private String describe(View view, int[] pos) {
+        String id = "";
+        try { id = view.getResources().getResourceEntryName(view.getId()); } catch (Throwable ignored) { }
+        int[] self = new int[2];
+        view.getLocationOnScreen(self);
+        return (id.isEmpty() ? view.getClass().getSimpleName() : id)
+                + "[" + view.getWidth() + "x" + view.getHeight() + " @" + pos[0] + "," + pos[1] + "]";
+    }
+
+    private View findShortcutAnchor() {
+        // 真机视图树（`adb` 抓取 hierarchy 确认，OS3 16.03）：keyguard 根下面挂着
+        // keyguard_shortcut_container，里面是 shortcut_view_left_layout（手电筒）和
+        // shortcut_view_right_layout（相机），三者都是 289×289 的一方，顶边 y=2111。
+        // 按 id 找最稳；资源可能属于 SystemUI 本体也可能属于 miui.systemui.plugin，逐个试。
+        String[] names = { "shortcut_view_left_layout", "shortcut_view_left", "keyguard_shortcut_container", "keyguard_shortcut_layout" };
+        View container = windowRoot != null ? windowRoot : root;
+        for (String name : names) {
+            View view = findByIdInAnyPackage(container, name);
+            if (view != null && view.getVisibility() == View.VISIBLE && view.getWidth() > 0) return view;
+        }
+        return findBottomCornerIcon();   // 换版本、id 改名时的几何兜底
+    }
+
+    private View findByIdInAnyPackage(View container, String name) {
+        if (container == null) return null;
+        // 空串表示「在本 Resources 里找」，省得猜包名；最后一个候选必查，别担心重复。
+        for (String pkg : new String[] { "com.android.systemui", "miui.systemui.plugin", "" }) {
+            try {
+                int id = context.getResources().getIdentifier(name, "id", pkg);
+                if (id == 0) continue;
+                View found = container.findViewById(id);
+                if (found != null) return found;
+            } catch (Throwable ignored) { /* 包名不存在就换下一个 */ }
+        }
+        return null;
+    }
+
+    private View findBottomCornerIcon() {
+        int hostHeight = windowRoot.getHeight(), hostWidth = windowRoot.getWidth();
+        if (hostHeight <= 0 || hostWidth <= 0) return null;
+        int[] hostPos = new int[2];
+        windowRoot.getLocationOnScreen(hostPos);
+        scanBudget = 900;
+        return scanForCornerIcon(windowRoot, hostPos[1] + (int) (hostHeight * 0.78f), hostWidth, 0);
+    }
+
+    private View scanForCornerIcon(ViewGroup group, int bandTop, int hostWidth, int depth) {
+        if (group == null || depth > 12 || scanBudget <= 0) return null;
+        for (int i = 0; i < group.getChildCount() && scanBudget > 0; i++) {
+            View child = group.getChildAt(i);
+            scanBudget--;
+            if (child == null || child.getVisibility() != View.VISIBLE || child.getAlpha() < 0.5f) continue;
+            if (child == foreground || child == background) continue;   // 别把自己当成锚点
+            if (isCornerIcon(child, bandTop, hostWidth)) return child;
+            if (child instanceof ViewGroup) {
+                View hit = scanForCornerIcon((ViewGroup) child, bandTop, hostWidth, depth + 1);
+                if (hit != null) return hit;
+            }
+        }
+        return null;
+    }
+
+    private boolean isCornerIcon(View view, int bandTop, int hostWidth) {
+        int width = view.getWidth(), height = view.getHeight();
+        // 尺寸上限按真机量到的 289×289px（≈105dp）放宽：MIUI 把整个触控热区做成了贴边的方块。
+        if (width <= 0 || height <= 0 || width > dp(120) || height < dp(32) || height > dp(120)) return false;
+        int[] pos = new int[2];
+        view.getLocationOnScreen(pos);
+        if (pos[1] + height / 2 < bandTop) return false;
+        float centerX = pos[0] + width / 2f;
+        return centerX < hostWidth * 0.22f || centerX > hostWidth * 0.78f;
     }
 
     /** 诊断用：一行描述覆盖层与系统状态，配合 restore/skip 日志定位闪屏路径。 */

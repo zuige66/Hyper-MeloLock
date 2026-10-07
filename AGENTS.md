@@ -5,7 +5,7 @@
 - 完成代码改动后同步更新相关 Markdown 文档。**`README.md` 只做面向使用者的项目介绍**（简介、功能、截图、适配、安装、构建、许可），实现细节 / 排查手册 / 变更日志写进 `docs/DEVELOPMENT.md`，工程约定写进本文件。改到截图或图标时同步 `docs/images/`。
 - 本项目是 Java Android + Vector/LSPosed 模块，配置端已迁入 HyperIsland 的 Kotlin/Compose/Miuix `app` 源码；修改配置字段时必须同时检查 `Config.java`、`ConfigProvider.java`、Compose 页面和 SystemUI 侧读取逻辑。
 - 锁屏覆盖层默认失败关闭：找不到目标 SystemUI 视图或媒体数据无效时恢复原生界面。
-- 界面只做「复用 HyperIsland 原版组件 + 换数据源」，不新写样式；同名卡片直接提升 `OverviewPage.kt` 里的实现为 `internal` 共享，禁止复制第二份。
+- 界面只做「复用 HyperIsland 原版组件 + 换数据源」，不新写样式；同名卡片直接提升 `OverviewPage.kt` 里的实现为 `internal` 共享，禁止复制第二份。**照搬上游组件时要把配套的 `graphicsLayer` 一起搬**：凡是内部用 `BlendMode`（尤其 `DstIn`/`SrcIn` 蒙版）的绘制，必须带 `compositingStrategy = CompositingStrategy.Offscreen`，否则会拿整块 surface 当混合目标——表现为蒙版底边留硬边、颜色染到相邻页面（2026-10-07 开发者页/外观页已踩过）。
 - `LockScreenOverlay.java` 由 Hook 注入 SystemUI 进程：任何改动都必须失败关闭（异常退回原生锁屏），并且**不要与其他会话/人工编辑并行改这个文件**。
 - 新增锁屏可调参数时：键名与默认值加到 `Config.java` 的 `ELEMENT_DEFAULTS`，Provider 走 `/elements` 的 key/value 通道，**不要**再去改 `ConfigProvider` 的列投影。
 - **首页的真身是 `LockScreenPages.kt` 的 `LockHomePage`，不是 `page/home/OverviewPage.kt`**：后者只提供共享卡片组件（`OverviewStatusGrid` / `OverviewInfoCard` / `OverviewAlertCard` / `HomeOverviewState`），`OverviewPage` 这个 Composable **没有任何调用点、是死代码**。改首页（含右上角按钮）必须改 `LockHomePage`；改 `OverviewPage` 真机上不会有任何反应（2026-10-07 已踩过一次）。
@@ -21,6 +21,10 @@
 
 ## 最近完成
 
+- **外观改完不生效 / 底部入口对齐 / 渐变背景漏色（2026-10-07）**：
+  1. **外观参数（含「背景样式」三项）改完不生效** —— 场景跨锁屏周期复用带来的回归：`create()` 是唯一读配置的地方，而解锁后场景只 `suspend()` 保留、`resume()` 复用，于是 `create()` 一辈子只跑一次。改法：`create()` 收尾算 `appearanceSignature`（元素参数 + 背景样式/颜色/强度 + 封面圆角），`resume()` 比对，不同就 `restore("appearance-changed")` 再用保留的快照重建（**必须 `main.post` 到下一帧**，`resume()` 站在 pre-draw 里不能当场 `addView`）。「纯色沉浸」顺带做出区别：`style == 2` 不铺封面、改铺一层 `overlayColor` 纯色（原来三档只差模糊半径，肉眼分不出来）。
+  2. **底部「展开通知 / 返回播放器」入口与手电筒/相机对齐** —— 那两个图标属于 MIUI 的 `com.miui.keyguard.shortcuts`，id 与网上流传的名字对不上。做法是先 `adb shell uiautomator dump /sdcard/ui.xml` + `adb pull` 抓真机视图树（**屏幕熄灭时抓不到 keyguard，必须锁屏亮着抓**），看清后再写判据：真机是 `keyguard_shortcut_container` 里挂 `shortcut_view_left_layout` / `shortcut_view_right_layout`（均 289×289，顶边 y=2111，中心 2255）。实现按 id 优先（两个 resource 包都试）+ 几何兜底；**只在 `keyguardLocked() && interactive()` 时量**（场景常在桌面/灭屏时预建，那会儿底部没有东西），**尝试次数封顶**（`showMusic()` 每秒都会走到）。
+  3. **开发者页底边硬边 + 外观页泛蓝** —— 同一处根因：`AnimatedAboutBackground` 用 `BlendMode.DstIn` 画渐隐，照搬时漏了上游的 `compositingStrategy = CompositingStrategy.Offscreen`。**结论：复用上游 Compose 组件时，凡是带 `BlendMode` 的 `graphicsLayer`，`Offscreen` 必须一起搬**，否则蒙版会拿整块 surface 当目标，既留硬边又会染到 `HorizontalPager` 的相邻页。
 - **音乐应用「全选」+ 开发者页重做 + 统一新图标（2026-10-07）**：
   1. **全选开关**：音乐应用页新增 `PreferenceSwitch("全选")`，作用范围＝**当前列表**（受搜索与「显示系统应用」过滤影响），勾上＝批量加入这些包名，再点一次＝批量移除；`checked` 由 `filtered.all { selection.isSelected(...) }` 推导，不是独立状态。
   2. **开发者页（`LockAboutPage`）参照上游 `AboutPage` 重做**：整屏滚动列表 + 顶部 hero（图标/应用名/版本号），上滑时 `backgroundAlpha = 1 - offset/389dp` 淡掉、`logoProgress = (offset - 0.25·hero)/0.35·hero` 让 hero 缩小淡出，列表内容看起来「盖上来」。为此把 `AboutPage.kt` 的 `AnimatedAboutBackground` / `rememberAboutAnimationTime` / `animatedGradientColors` 从 `private` 提升为 `internal` 共享（同包，不复制样式）。hero 的逐帧渐变动画只在 `isActive`（`AppShell` 传 `currentPage == 3`）时跑。开发者卡片：圆形头像 `res/drawable-nodpi/dev_avatar.jpg`（`Crop` + `CircleShape`，**不要用上游那张 `about_developer_avatar.jpg`**）+ `zuige` + `@zuige66`，整卡点击开 GitHub；**没有的功能（Telegram 讨论 / 备份恢复 / 检查更新 / 引用 / 隐私政策）一律 `enabled = false` 灰度**，为此给 `SettingsActionWithArrow` 补了 `enabled` 参数。

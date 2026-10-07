@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
@@ -537,7 +538,7 @@ internal fun LockAppearancePage() {
             Card {
                 PreferenceDropdown(
                     title = "背景样式",
-                    summary = "影响锁屏背景的模糊效果",
+                    summary = "深色玻璃＝强模糊封面，浅色玻璃＝轻模糊封面，纯色沉浸＝不用封面、整块底色",
                     icon = null,
                     items = listOf("深色玻璃", "浅色玻璃", "纯色沉浸"),
                     selectedIndex = style,
@@ -569,8 +570,8 @@ internal fun LockAppearancePage() {
             SectionTitle("说明")
             Card {
                 InfoText(
-                    "以上尺寸、圆角、间距和字体设置都由锁屏覆盖层在创建时读取，" +
-                        "改完需要灭屏再亮屏一次才会生效。",
+                    "以上尺寸、圆角、间距和字体设置都由锁屏覆盖层在**创建场景时**读取，" +
+                        "改完需要灭屏再亮屏一次才会生效（模块会自己重建，不用重启 SystemUI）。",
                 )
             }
         }
@@ -627,7 +628,14 @@ internal fun LockAboutPage(isActive: Boolean) {
                 .fillMaxWidth()
                 .height(heroHeight + 180.dp)
                 .alpha(backgroundAlpha)
-                .graphicsLayer { translationY = -listState.firstVisibleItemScrollOffset * 0.12f },
+                .graphicsLayer {
+                    // 必须开离屏合成：`AnimatedAboutBackground` 内部用 `BlendMode.DstIn` 做
+                    // 竖直淡出蒙版，没有独立图层时它会拿整块 surface 当目标去混合，
+                    // 结果是背景底边留下一条硬边、并且把相邻页面也染上颜色。
+                    // 上游 AboutPage 也是同样的写法（compositingStrategy = Offscreen），别删。
+                    compositingStrategy = CompositingStrategy.Offscreen
+                    translationY = -listState.firstVisibleItemScrollOffset * 0.12f
+                },
         )
         LazyColumn(
             state = listState,

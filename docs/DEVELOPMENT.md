@@ -466,3 +466,27 @@ adb -s 1b3a7d8 reboot
     **改法（两条）**：① `su` 统一走 `SU_TIMEOUT_MS = 3000` 超时（`waitFor(3000, MILLISECONDS)`，超时或失败一律 `process.destroy()`），并打日志 `RestartScope: hasRoot=`，避免再次出现「静默卡死」。② **新增一条不需要 root 的重启通道**：`Config.ACTION_RESTART_SYSTEMUI` 广播——配置端发现无 root 时发一条 `setPackage("com.android.systemui")` 的**显式**广播，模块 `LockScreenOverlay` 用 `Context.RECEIVER_EXPORTED` 注册（显式广播才能穿过 `NOT_EXPORTED`），收到后 `Process.killProcess(Process.myPid())` 自杀重启，与 `am crash com.android.systemui` 等价但不需要 root 也不需要 adb。有 root 时仍走原来的作用域列表（su 命令）。Toast 文案用新增的 `restart_scope_requested`（「已请求重启系统界面」）。
 
 25. 2026-10-07 **音乐应用页两个默认项**：① `showSystemApps` 默认由 `true` 改 `false`——列表里绝大多数是系统组件，默认打开只会让用户找不到自己装的播放器；② `loadMusicSelection` 去掉 `unrestricted = packages.isEmpty()`，改为恒 `false`，**默认任何应用都不勾选**，与第 23 条 `Config.packageAllowed` 的语义对齐。「全部应用」仍作为可切换选项保留在界面上，但不再是默认值。
+
+26. 2026-10-07 **开发者页底边硬边 + 外观页泛蓝**：同一处根因。`AnimatedAboutBackground` 内部用 `BlendMode.DstIn` 画竖直渐隐蒙版（白 → 透明），而 `LockAboutPage` 复用它时**漏了上游 `AboutPage` 的那句 `compositingStrategy = CompositingStrategy.Offscreen`**。没有独立图层时 `DstIn` 会拿整块 surface 当混合目标：一方面蒙版底边压不住、留下一条硬边（用户看到「底部又蓝又黑」），另一方面 `HorizontalPager` 的相邻页（外观页）也被染上渐变色（用户看到「右半部分泛蓝」）。**照搬上游组件时，`graphicsLayer { compositingStrategy = Offscreen }` 必须一起搬**，否则 `BlendMode` 类绘制会越界。
+
+27. 2026-10-07 **外观参数（含「背景样式」三项）改完不生效** —— 场景跨锁屏周期复用带来的回归。`create()` 是**唯一**读取外观配置的地方（元素参数、`overlayStyle/Color/Alpha`、`cornerRadiusDp`），而解锁后场景不再销毁、只 `suspend()` 保留实例等 `resume()` 复用（见第 20 条），于是 `create()` 一辈子只跑一次 → 改什么都不会重读，只能重启 SystemUI。
+
+    改法：**记指纹 + 复用前比对**。`create()` 收尾算一份 `appearanceSignature`（元素参数 + 背景样式/颜色/强度 + 封面圆角，SystemUI 侧一次 `Config.elementValues()` 查询 + 三次 `readInt`），`resume()` 里比对：不同就 `restore("appearance-changed")`，再用保留下来的同一个 `MediaSource.Snapshot` 现场 `render()` 重建（只多一次 `create`，约 100ms）。重建**必须 `main.post()` 到下一帧**：`resume()` 站在 pre-draw 回调里，当场 `addView` 会让这一帧的绘制和紧随的 layout 互相打断。
+
+    配套把「纯色沉浸」做出区别：三档原本只差模糊半径（28 / 18 / 0），18dp 与 28dp 肉眼几乎分不出来，用户会以为「没生效」。现在 `style == 2` 直接**不铺封面**，改为在遮罩下面加一层 `overlayColor` 的纯色，背景就是一整块色值。界面上「背景样式」的 summary 也写成三档各自的效果。
+
+28. 2026-10-07 **「展开通知 / 返回播放器」入口与系统底部快捷栏对齐**。这两个图标属于 MIUI 的 `com.miui.keyguard.shortcuts`，**id 在网上传的名字对不上**，所以先打一次视图树清单再决定判据（`adb shell uiautomator dump /sdcard/ui.xml` 后 `adb pull`；屏幕熄灭时抓不到 keyguard，要在锁屏亮着时抓）。真机清单（1080×2400）：
+
+    ```
+    keyguard_shortcut_container[1080x289 @0,2111]
+      keyguard_shortcut_layout[1080x289 @0,2111]
+        shortcut_view_left_layout[289x289 @0,2111]    ← 手电筒
+        shortcut_view_right_layout[289x289 @791,2111] ← 相机
+    keyguard_indication_text_bottom[160x54 @460,2230]
+    ```
+
+    即底部 289px 高的带子，中心 y=2255（与底部提示文案中心 2257 基本一致）。实现上 `findShortcutAnchor()` **按 id 优先**（依次试 `shortcut_view_left_layout` / `shortcut_view_left` / `keyguard_shortcut_container` / `keyguard_shortcut_layout`，资源在 `com.android.systemui` 与 `miui.systemui.plugin` 两个包里都试一遍），加上**按几何特征兜底**（可见、32~120dp 见方、落在窗口底部 22% 带子里、中心点横向贴边 22% 之外）。对齐结果：入口 `bottomMargin` 由固定 `dp(10)` 改为 `height - anchorCenterY - 入口高度/2`，实测由 26px 变 79px，中心正好落在 2255。
+
+    两个坑：① **必须在真的站在锁屏上时才量**——场景经常是在桌面或灭屏时 `preCreate()` 好的，那一刻 keyguard 底部什么都没有（`keyguardLocked() && interactive()` 两个条件都过才量）；② `showMusic()` 每次媒体回调都会走（播放时约每秒一次），所以**尝试次数要封顶**（`entryAligned` 成功后直接返回，失败最多 5 次，诊断清单只打前 3 次）。
+
+    注：这两个快捷图标所在的层在窗口根里，和我们的 `background` 一样；`background` 插在它们**下面**（`windowRoot.addView(background, 0)`），所以背景不会盖住手电筒/相机。
