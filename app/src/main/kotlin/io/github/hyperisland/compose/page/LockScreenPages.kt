@@ -9,7 +9,6 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,6 +43,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -787,21 +787,15 @@ private fun DeveloperCard() {
             modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            // 作者头像还没有：先用灰色圆底加占位图标，避免误用上游那张头像。
-            Box(
+            // 作者头像：`res/drawable-nodpi/dev_avatar.jpg`（圆裁展示）。
+            Image(
+                painter = painterResource(R.drawable.dev_avatar),
+                contentDescription = "开发者头像",
+                contentScale = ContentScale.Crop,
                 modifier = Modifier
                     .size(56.dp)
-                    .clip(CircleShape)
-                    .background(MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.18f)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = MiuixIcons.Info,
-                    contentDescription = null,
-                    modifier = Modifier.size(26.dp),
-                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-            }
+                    .clip(CircleShape),
+            )
             Column(modifier = Modifier.padding(start = 14.dp)) {
                 Text(
                     text = DEVELOPER_NAME,

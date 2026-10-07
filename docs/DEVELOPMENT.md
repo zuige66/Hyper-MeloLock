@@ -47,7 +47,7 @@
 - **开发者**（第 4 个根页面，`LockAboutPage`）：版式参考上游 `AboutPage.kt` —— 整屏一个滚动列表，hero（应用图标 + 应用名 + 版本号）叠在顶部，**上滑时 hero 淡出并轻微缩小、动画渐变背景同时淡掉**，列表内容看起来是「盖上来」的。背景动画直接复用同包的 `AnimatedAboutBackground` / `rememberAboutAnimationTime` / `animatedGradientColors`（从 `private` 提升为 `internal` 共享，没有第二份实现）。最外层 `Box` 里 hero 画在 `LazyColumn` 之后（更上层），列表首项用 `Spacer(heroHeight + 16.dp)` 给 hero 留位。
   - 滚动映射与上游同一套：`backgroundAlpha = 1 - offset/389dp`、`logoProgress = (offset - 0.25·hero) / 0.35·hero`、缩放 `1 - 0.1·progress`。
   - 顶部的渐变背景动画是逐帧的，`isActive`（由 `AppShell` 传 `pagerState.currentPage == 3`）为假时**不跑**，避免在别的页面白耗电。
-  - 开发者卡片：灰色圆底 + 图标作头像占位（**不借用上游那张作者头像**）、名称 `zuige`、GitHub 号 `@zuige66`，整卡点击直达 `github.com/zuige66`。
+  - 开发者卡片：圆形头像（`res/drawable-nodpi/dev_avatar.jpg`，`Crop` + `CircleShape` 裁切）、名称 `zuige`、GitHub 号 `@zuige66`，整卡点击直达 `github.com/zuige66`。
   - **没有的功能一律灰度**：讨论（Telegram）、备份与恢复、检查更新、引用、隐私政策都是 `enabled = false` 占位。为此给 `SettingsActionWithArrow` 补了 `enabled` 参数（与 `SettingsAction` 对齐）。项目区里 GitHub（`zuige66/Hyper-MeloLock`）与更新日志（GitHub Releases）是真实链接。
 
 四页共用的卡片来自 HyperIsland 原版实现：`OverviewPage.kt` 里原先私有的 `StatusGrid` / `StatusCard` / `StatCard` / `InfoCard` / 告警卡已提升为 `internal` 的 `OverviewStatusGrid` / `OverviewStatusCard` / `OverviewStatCard` / `OverviewInfoCard` / `OverviewAlertCard`，只把标题与数值参数化，视觉与交互代码未改动。HyperIsland 自己的首页（`OverviewPage`）改为调用同一批组件，因此不存在第二份样式实现。音乐应用页的行样式沿用 HyperIsland `AppsPage` 的 `Card` + `BasicComponent` 组合，图标复用 `InstalledAppsRepository` 的缓存与解码逻辑。
