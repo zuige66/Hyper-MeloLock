@@ -178,7 +178,50 @@ hook 装不上时会打 `none on <类名> (methods=N, GoingAway*=…)` —— �
 **踩坑**：把 `preShowForWake` 写成字段初始化器里的 lambda 时，用**简单名**引用后面声明的字段（`foreground`/`background`/`main`…）会被 javac 判为「非法前向引用」。
 本项目的规矩：**改方法引用 `this::runPreShowForWake`**，把实现体放进普通方法。
 
-### 切歌的空窗期：保住上一帧，不撤层
+### 快捷方式转场（手电筒 / 相机）：把露出的系统壁纸换成我们的封面
+
+**现象**：点左下角手电筒或右下角相机，跳转过程中会看到**原生壁纸**一闪。**不是我们的代码干的** —— 那段时间里 `MeloLock` 一行日志都没有（缺失证据同样算证据）。
+
+**根因（日志 + 离线 dex 解析双重支撑）**：MIUI 的快捷方式转场会把整个 `NotificationShadeWindowView`（窗口标题 `NotificationShade`，**type=2040**）的 alpha 动到 0：
+
+```
+MiuiShortcut-ShortcutMoveController: ACTION_UP
+MiuiShortcut-ShortcutOccludedAnimController: startFullScreenAnim
+KeyguardPanelViewController: set notificationShadeWindowView.alpha animator to 0   ← 根因
+```
+
+唯一调用点是 `com.android.keyguard.shortcut.MiuiShortcutController.onShortcutPluginCallbackWrap()` 的 `onFullscreenAnimationStart` 分支 → `KeyguardPanelViewController.hideWindowViewByOccludedAnim()`，而后者本体只有一句 `Folme.useAt(notificationShadeWindowView).state().to(0f, hideEase)`。我们的背景层（挂窗口根 index 0）与前景层（挂锁屏根）都在这扇窗里，于是一起消失，露出最底层的系统壁纸 surface。
+
+**为什么不去拦那次淡出**：被 app 遮挡期间「该窗口必须透明」是 ROM 自己的硬约束（`onUnoccludedAnimationEnd` 在 occluded 时会再补一次 `setTo(0f)`），拦掉有反过来盖住相机的风险，还会丢掉 MIUI 的图标放大动画。所以改成**不拦淡出，但把淡出后露出的东西换掉**。
+
+**真机实测到的目标窗口结构**（`[probe]` 日志，OS3 16.03）：
+
+```
+Window{miui_keyguard_shortcut  type=2017(TYPE_STATUS_BAR_SUB_PANEL)  flags=0xd010718(HW加速/半透明)}
+ └─ FrameLayout           1080x2400   ← 窗口内容视图（addView 的入参）
+     └─ ShortcutOccludedAnimView 1080x2400   ← MIUI 的动画视图（插件类）
+         ├─ View 1080x2400 bg=ColorDrawable  ← 全屏遮罩
+         └─ ScaleShortcutImageView 289x289   ← 与快捷栏图标同尺寸，放大到全屏
+```
+
+**实现**：`ShortcutAnimBackdrop`（独立 Xposed 入口，见 `assets/xposed_init`）挂 `WindowManagerImpl.addView`，按窗口标题认出 `miui_keyguard_shortcut`，把自绘的三层背景（模糊封面 / 纯色底 / 遮罩，参数与 `LockScreenOverlay.applyBackdrop()` 完全一致）插到**窗口内容视图的 index 0** —— 在 MIUI 那棵子树之下，遮罩照样压在我们上面（亮度和锁屏上一致），图标继续放大，底下不再是壁纸。
+
+**但这层必须「按时收工」（第一版就栽在这里）**：那扇动画窗**在 app 窗口之上**，我们这层只要还可见就会盖住相机/手电筒界面 —— 表现为「一片深蓝纯色、什么都没有，点中间还能开关手电筒」（深蓝正是 style=2 的 `#111827`；点得动是因为该窗口带 `FLAG_NOT_TOUCHABLE`，事件照旧穿透）。所以：
+
+- 这层**默认 `GONE`**，只在 ROM 把 shade 淡到 0 的那一刻显示 —— 就是同一个 `onShortcutPluginCallbackWrap` 的 `onFullscreenAnimationStart`（与根因同源，时机天然对齐，不依赖任何自定义计时）；
+- 收到 **`onOccludedAnimationEnd`**（相机/手电筒的「遮挡动画结束」= app 已经起来）/ `onUnoccludedAnimation*` / `onBackAnimationEnd` / `onDismissAnimationEnd` 之一就立刻撤掉；
+- 另外挂 **6s 兜底定时器**，任何回调缺失都不会让它长期压着 app。**这个数只能长不能短**：真机实测（19:26:07.368 点相机 → 12.705 才收到 `onOccludedAnimationEnd`）相机**冷启动**时该回调会拖到点后 **5.34s**；原先写 2.5s，只是**靠主线程被冷启动堵住**（定时器实际 12.544 才执行）才没提前把壁纸放出来。主路径永远是这个回调，定时器只是「回调一次都没来」时的网。
+  （另一条更早的时间轴：点相机 → 16.096 `onFullscreenAnimationStart` → 16.432 `occludedChanged mOccluded=true`（相机窗口已可见）→ 16.502 `onFullscreenAnimationEnd` → 16.588 `onOccludedAnimationStart` → **17.078 `onOccludedAnimationEnd`**。所以选择「撤在 `onOccludedAnimationEnd`」而不是「撤在 `onFullscreenAnimationEnd`」：后者会让相机自己的入场动画播出半秒壁纸。代价是相机入场那段时间被我们这层盖住，换来全程零壁纸。）
+
+**踩过的坑（都写在这里免得下次再踩）**：
+
+1. **注入点对了不等于体验对了**：注入进「透明的动画窗」听起来安全，但那扇窗盖在 app 之上，必须自己管显隐，不能指望 ROM 会替我们收拾。
+2. **模块自己的类不在 `param.classLoader` 里**。legacy Xposed 下模块类由模块自己的 ClassLoader 加载，`XposedHelpers.findAndHookMethod("io.github.melolock.LockScreenOverlay", param.classLoader, …)` 会抛 `ClassNotFoundException`（真机日志 `[backdrop] artwork hook failed`）。要钩自己人就用**类字面量**（`HookEntry.class` / `LockScreenOverlay.class`），或者干脆反射读字段 —— 本项目读封面走的是后者（反射 `HookEntry.overlays` → `shownArtwork` / `shown.art`）。
+3. **`WindowManagerGlobal.addView` 在本 ROM 上找不到**（`NoSuchMethodError: …#addView(View, ViewGroup.LayoutParams, Display, Window)#exact`），必须退回 `WindowManagerImpl.addView(View, ViewGroup.LayoutParams)`，后者同样能拿到进程里所有窗口。
+4. 别按类名去挂 MIUI 那族快捷方式类：`com.miui.keyguard.shortcuts.*` 是**插件化动态加载**的，在 SystemUI 基础 loader 里 `findClassIfExists` 全部 NOT FOUND（`com.miui.keyguard.shortcuts.view.BaseShortcutAnimView` / `manager.ShortcutWindowManager` / `controller.ShortcutOccludedAnimController` / `ShortcutPluginImpl` 四个都验过）。只有控制器 `MiuiShortcutController` 在 SystemUI 自己那边。
+
+**诊断日志**：`[backdrop] armed via WindowManagerImpl.addView` / `armed: …onShortcutPluginCallbackWrap` / `injected into … title=miui_keyguard_shortcut type=2017` / `backdrop params: style=… blur=…dp color=… scrim=… cover=yes|no` / `shown (hold<=6000ms)` / `hidden by onOccludedAnimationEnd|hold timeout`。取不到封面时会降级成「只有遮罩/纯色」，不会退回露壁纸；两个钩子任一装不上就**永远不显示**（失败关闭）。
+
 
 真机日志显示，换歌时 App 会先**摘掉 metadata 里的封面 bitmap、只留 URI**，约 300ms 后才补齐新封面；这段时间内会话也可能短暂不合格（playbackState 为空或非 PLAYING）。三条旧的处理会把这个过渡态当成「播放停了」：
 
