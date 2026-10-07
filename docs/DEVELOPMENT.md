@@ -281,7 +281,17 @@ hook 装不上时会打 `none on <类名> (methods=N, GoingAway*=…)` —— �
    **解锁交接期间完全不动可见性**——`suspend()` 只停 ticker、标记状态，`startUnlockCoverFade()` 只留
    误触发兜底；我们的层全是 keyguard 根的子视图，系统收 keyguard 根时自然一起收走（原生节奏）。
    硬隐藏兜底 `finishSuspend` 延时 150→600ms，等编排走完再摘。
-3. **事故：上一轮两处编辑被 IDE 旧缓冲区覆盖**（`LockScreenOverlay.java` 在 Android Studio 里开着，
+3. **解锁的完整定稿（hold 280 / fade 90，别再改回去）**：`hands-off`（全程不动、交给系统）虽然彻底压住壁纸，
+   但实测 keyguard 根要到 **+533ms** 才 INVISIBLE，而桌面窗口 **+205ms** 就上屏 —— 我们的封面会多压住桌面
+   **约 330ms**，正是用户以前抱怨的「上滑进桌面卡一下」。所以正确节拍是：
+   **0~280ms 完全不动（不透明、压死系统拉起的壁纸窗口）→ 280ms 起 90ms 快速淡出（此时桌面已上屏，
+   渐显出来的是桌面而不是壁纸）→ 370ms 摘层 GONE**。前段「不动」是「提前画好直接覆盖」，
+   后段「快速交接」避免挡桌面；两者缺一不可。淡出必须**前景与背景一起淡**（旧版只淡背景、
+   前景在 `suspend()` 里单独淡，两个节拍对不齐）。摘层用 `hideSceneAfterUnlock`（Handler 兜底，
+   不挂动画回调），且 **`suspend()` 不许 cancel 它**——否则会在桌面留一层「alpha=0 仍 VISIBLE」挡触摸。
+   自证日志：`unlock cover removed at t=+Nms after goingAway; native[...]`。
+
+4. **事故：上一轮两处编辑被 IDE 旧缓冲区覆盖**（`LockScreenOverlay.java` 在 Android Studio 里开着，
    外部保存把盘上文件写回旧内容）。表象是「装了新包行为没变」——实际跑的是半套代码。
    **验证手段**：改完必 `grep` 逐项核对盘上内容再构建；装机日志要能自证新行为（如 `hands off` 日志行）。
    红线「不要并行编辑此文件」再+1：**测试前不要在 IDE 里保存这个文件**。
@@ -755,3 +765,61 @@ adb -s 1b3a7d8 reboot
 
     另外给 `SCREEN_ON` 补了 `offFor=Nms`（熄屏到亮屏的毫秒数），下次这类问题可以直接和用户的
     按键节奏对账，不用再靠猜。
+
+33. 2026-10-07 深夜 ~ 10-08 凌晨 **解锁时闪「一帧原生壁纸」——两处根因，一次说清**。
+
+    用户给了一张解锁瞬间的截图：屏幕上是**一张清晰的原生壁纸**，我们的界面只剩一层淡影。
+    抓日志（23:43:47 一次真实解锁，以系统 `keyguardGoingAway` 为 0 点）后真相很干净：
+
+    ```
+      +47ms  wms.showSurfaceRobustly …ImageWallpaper        ← 桌面壁纸窗口被拉起
+     +127ms  wms.showSurfaceRobustly …Launcher              ← 桌面窗口上屏
+     +148ms  KeyguardService Starts IRemoteAnimationRunner  ← 系统解锁动画**开始**
+     +340ms  updateKeyguardWallpaperStateAnim anim=true     ← MIUI 开始收锁屏壁纸
+     +540ms  （我们的 pre-draw 守卫发现 keyguard 不锁了）
+     +685ms  updateKeyguardWallpaperStateAnim onAnimationFinished ← 动画**结束**
+     +742ms  WallpaperWindowToken{lock} isVisible=false / {desktop} isVisible=true ← 换壁纸落地
+    ```
+
+    **根因 ①（时序盯错了对象）**：前几版一直在猜「桌面窗口什么时候上屏」（+111~205ms），
+    从 hold 130/240 一路调到 280/90，总还闪。因为真正该对齐的不是桌面窗口，而是
+    **系统自己的解锁退场动画有多长**——它从 +148ms 跑到 +685ms。我们 280ms 就开始淡、370ms 撤层，
+    正好落在动画中间，露出的就是系统正在展示的原生壁纸。
+    **改法**：`UNLOCK_COVER_HOLD_MS = 760`（越过动画结束 +685ms 与换壁纸落地 +742ms）、
+    `UNLOCK_COVER_FADE_MS = 160`，约 920ms 摘层。
+
+    **根因 ②（时间线之外，更要命的结构问题）**：`suspend()` 里原本有一句
+    `main.removeCallbacks(finishCoverFade)`，它把「压到 760ms 再淡」那条链路**当场掐掉**，
+    于是实际撤层时间由 `finishSuspend` 的 600ms 决定 —— 参数怎么调都不会生效。
+    **改法**：有解锁信号时**绝不** cancel `finishCoverFade`；`finishSuspend` 退化成兜底，
+    延时按「剩余保持期」动态计算（`HOLD + FADE + 150 - elapsed`），保证永远落在淡出之后；
+    并在 `finishSuspend` 开头加「链路已收尾就直接 return」，避免谁收的尾看不出来。
+    同时把 `restoreCoverIfStillLocked` 兜底从写死的 800ms 改成 `HOLD + FADE + 300`，
+    否则它会在淡出中途把不透明封面又贴回去。
+
+    **顺带修掉「手电筒/相机图标消失」**：同一处 z 序问题。上一轮为了盖住原生壁纸，把封面插到了
+    锁屏根**最顶层**，而底部快捷栏（`KeyguardBottomAreaView` → `keyguard_shortcut_container`）
+    也在锁屏根里 → 图标被这层不透明封面压住（还能点进去，但看不见）。
+    **改法**：锚点改成「原生锁屏壁纸层」，插在它后面一位。真机普查确认（`keyguardRoot children`
+    + `ancestorChain` 两行诊断）：
+
+    ```
+    HyperOSKeyguardRootView#keyguard_root_view[7]
+      ├─ [0] KeyguardPanelView#keyguard_panel_view
+      │        └─ [0] FrameLayout#keyguard_background_layer   ← 原生锁屏壁纸
+      ├─ [1] FrameLayout  ← 我们的 background  ✅ 壁纸之上
+      ├─ [2] MiuiKeyguardStatusBarView#keyguard_header
+      ├─ [4] KeyguardBottomAreaView#keyguard_bottom_area
+      │        └─ [5] FrameLayout#keyguard_shortcut_container  ← 手电筒/相机图标
+      └─ [6] FrameLayout  ← 我们的 foreground
+    ```
+
+    两条 z 序约束（**原生壁纸之上、底部快捷栏之下**）由「紧跟 `keyguard_background_layer`」一条锚点
+    同时满足；`nativeBackgroundLayer` 不是锁屏根直接子视图（挂在 `panel_view` 里），所以使用
+    `indexOfChild` 判断父容器、失败才退到第 1 位。另加 `ensureBackgroundOrder()`，在 `resume()` /
+    `applyPreShow()` 里按需纠正 z 序（顺序对就不动视图树）。
+
+    **踩坑**：改完后 `./gradlew.bat :app:assembleDebug` 报 `compileDebugJavaWithJavac UP-TO-DATE`、
+    `packageDebug UP-TO-DATE`，装上去的还是上一版 —— 源码明明已改（`grep` 确认过）。
+    强制办法：删掉 `app/build/intermediates/javac` 再构建；**装完务必验证 dex**：
+    解包 APK 逐个 `classes*.dex` 搜特征字符串（本轮搜 `ancestorChain`，命中在 `classes16.dex`）。

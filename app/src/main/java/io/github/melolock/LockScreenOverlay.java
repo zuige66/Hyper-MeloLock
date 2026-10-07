@@ -58,19 +58,34 @@ final class LockScreenOverlay {
      */
     private static final long RESUME_AFTER_SCREEN_OFF_MS = 500;
     /**
-     * 解锁信号的覆盖层时序：先压住 [UNLOCK_COVER_HOLD_MS]，再用 [UNLOCK_COVER_FADE_MS] 淡出。
+     * 解锁信号的覆盖层时序：**先全程压住不透明，等系统解锁动画跑完再淡出**。
      *
-     * 两个数都是从真机实测的窗口挑的（15 次解锁）：
-     * `keyguardGoingAway` → 桌面窗口 `wms.showSurfaceRobustly` 可见 = **+111~205ms**。
+     * **2026-10-07 深夜定稿（历经 hold 130/240 → 240/130 → 280/90 → 700/90 → 720/140 → 760/160）**。
+     * 前几版都在猜「桌面窗口什么时候上屏」（+111~205ms），猜来猜去总还有闪烁，原因是**盯错了对象**：
+     * 真正决定「什么时候可以掀盖」的不是桌面窗口，而是**系统自己的解锁退场动画有多长**。
      *
-     * **2026-10-07 修正（原来 hold 130 / fade 240）**：原来从 +130ms 就开始淡出，而桌面窗口要到
-     * +205ms 才可能上屏 —— 也就是**有一段我们半透明、桌面又还没上来的窗口**，用户从那层半透明的封面
-     * 底下直接看到**桌面壁纸**（他描述为「解锁时闪一下原生锁屏／只有壁纸在」）。
-     * 现在把**不透明期**拉长到 240ms（盖住桌面窗口出现的整个区间），淡出缩到 130ms 只做「揭开」这一个动作；
-     * **总时长仍是 370ms 不变**（不牺牲既有的解锁节奏），只是把「半透明」这段挪到了桌面已经上屏之后。
+     * 一次真实解锁的完整时间线（23:43:47，以系统 `keyguardGoingAway` 为 0 点，全部来自真机日志）：
+     * ```
+     *   +47ms   wms.showSurfaceRobustly …ImageWallpaper     ← 桌面壁纸窗口被拉起
+     *  +127ms   wms.showSurfaceRobustly …Launcher           ← 桌面窗口上屏
+     *  +148ms   KeyguardService Starts IRemoteAnimationRunner ← 系统解锁动画**开始**
+     *  +340ms   updateKeyguardWallpaperStateAnim anim=true   ← MIUI 开始收锁屏壁纸
+     *  +540ms   （我们的 pre-draw 守卫发现 keyguard 不锁了）
+     *  +685ms   updateKeyguardWallpaperStateAnim onAnimationFinished ← 动画**结束**
+     *  +742ms   WallpaperWindowToken{…true} isVisible=false / {…false} isVisible=true ← 换壁纸落地
+     * ```
+     * 旧版 280ms 就开始淡、370ms 撤层——**正好落在系统动画（+148~685ms）中间**，露出的就是系统
+     * 正在展示的原生壁纸。这就是用户反复说的「解锁闪一帧原生壁纸，很清晰、不是模糊版本」。
+     *
+     * 所以：0 ~ 760ms 完全不透明（压住整个过渡期）→ 760ms 起 160ms 淡出 → 约 920ms 摘层。
+     * 此时系统动画已结束（+685ms）、换壁纸已落地（+742ms），渐显出来的是**已经合成好的桌面**，
+     * 不存在任何「中间态的原生壁纸」。
+     *
+     * 补充：我们的层在锁屏根里，系统对锁屏根的退场动画**本来也会带着我们淡出**——那条路径与原生
+     * 完全同步，是免费的。这两个常数真正的职责是「万一系统没动我们」时的兜底与收尾，因此宁可取长。
      */
-    private static final long UNLOCK_COVER_HOLD_MS = 240;
-    private static final long UNLOCK_COVER_FADE_MS = 130;
+    private static final long UNLOCK_COVER_HOLD_MS = 760;
+    private static final long UNLOCK_COVER_FADE_MS = 160;
     /**
      * SCREEN_OFF 之后等面板**黑透**再"预显"场景的延时（避开熄屏动画）。
      *
@@ -163,6 +178,8 @@ final class LockScreenOverlay {
     private String lastSkipReason;
     /** 诊断用：本次 suspend 的起点时间戳。 */
     private long suspendStartedAtMs;
+    /** 最近一次 `keyguardGoingAway` 的时刻，用来在摘层时打「解锁后多久才撤」，和用户观感对账。 */
+    private long unlockSignalledAtMs;
     /** 最近一次 SCREEN_OFF 的时刻，用来在亮屏时打出「熄屏了多久」，和用户操作对账。 */
     private long screenOffAtMs;
     private int createAttempts;
@@ -491,9 +508,6 @@ final class LockScreenOverlay {
         baseScrim = new View(context);
         background.addView(baseScrim, new FrameLayout.LayoutParams(-1, -1));
         applyBackdrop();
-        // 挂窗口根而不是锁屏根：真机采样（Unlock watch）显示系统解锁时是把整个
-        // HyperOSKeyguardRootView 直接置 INVISIBLE + alpha 0，且动作发生在 suspend()
-        // 触发之前——挂在它内部的层没有过渡窗口，父控件 alpha 归零就一起消失，露出的是桌面壁纸。
         foreground = new FrameLayout(context);
         FrameLayout.LayoutParams sceneParams = new FrameLayout.LayoutParams(-1, -1, Gravity.TOP);
         // 挂在锁屏根视图而不是窗口根：解锁时系统的退场动画作用在锁屏根上，
@@ -501,13 +515,13 @@ final class LockScreenOverlay {
         // 通知栈仍在窗口根，展开通知时它自然盖在锁屏根之上。
         root.addView(foreground, sceneParams);
 
-        // 全屏封面（模糊背景）必须插在「原生锁屏壁纸 keyguard_background_layer 之上、foreground 之下」。
-        // 原生壁纸同在 root 里、且层级在我们这层之上——之前挂在 windowRoot 第 0 位（最底层）导致
-        // 原生壁纸一重显就盖住我们、从 foreground 的透明缝隙漏出（用户看到的「只有壁纸」）。
-        // 现在它在原生壁纸之上、提前画好，解锁/亮屏时直接覆盖，不再依赖「唤醒瞬间切可见性 + 躲 MIUI 重显」抢帧。
-        // 桌面（上滑解锁）由 foreground 跟随系统退场动画淡出揭示；background 在 suspend/finishSuspend 里照常立即 GONE，
-        // 不会残留到桌面（与前景层同理）。
-        root.addView(background, root.indexOfChild(foreground), new ViewGroup.LayoutParams(-1, -1));
+        // 全屏封面（模糊背景）的 z 序是本项目最容易翻车的地方，两条约束都是从真机踩出来的：
+        //   ① 必须在**原生锁屏壁纸** `keyguard_background_layer` 之上 —— 否则原生壁纸一重显就盖住我们
+        //      （旧版挂窗口根最底层就是这么翻车的：用户看到「只有一张原生壁纸」）。
+        //   ② 必须在**底部快捷栏**容器之下 —— 把封面插到锁屏根最顶层之后，手电筒/相机图标整片消失
+        //      （还能点进去，但图标看不见）：图标也在锁屏根里，被这层不透明封面压住了。
+        // 所以锚点选「原生壁纸层」，紧贴它后面插，不碰它上面的任何原生控件。
+        attachBackgroundLayer();
 
         content = new LinearLayout(context);
         content.setOrientation(LinearLayout.VERTICAL); content.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -799,6 +813,7 @@ final class LockScreenOverlay {
         if (!suspended || foreground == null || !lockscreenCycle || !keyguardLocked()) return;
         Log.i(TAG, "Pre-showing scene while display is dark so the first lit frame is ours");
         main.removeCallbacks(finishSuspend); main.removeCallbacks(finishCoverFade);
+        main.removeCallbacks(hideSceneAfterUnlock);
         main.removeCallbacks(restoreCoverIfStillLocked);
         suspended = false;
         unlockSignalled = false;
@@ -811,6 +826,7 @@ final class LockScreenOverlay {
             background.setVisibility(View.VISIBLE);
         }
         if (notificationButton != null) notificationButton.setVisibility(View.VISIBLE);
+        ensureBackgroundOrder();
         if (root != null) { hideNativeWallpaperLayers(root); hideNativeClockLayers(root); }
     }
 
@@ -995,34 +1011,72 @@ final class LockScreenOverlay {
     }
 
     /**
-     * 让背景层跟着系统退场动画走：先压住一小段，再淡出，桌面从盖子底下**渐显**出来。
+     * 让封面一直压住，等系统解锁退场动画跑完（+685ms）与换壁纸落地（+742ms）之后，再淡出交接。
      *
      * 旧版是等 pre-draw 守卫发现解锁（实测比 `keyguardGoingAway` 晚 **277~491ms**）才硬隐藏，
      * 于是「前景层随 keyguard 根先消失 → 屏幕上只剩一块纯色 → 再过两三百毫秒才进桌面」，
      * 就是用户说的「看到纯色壁纸然后才进入桌面」「解锁没有原生快」。
-     * 拿到真正的起点后这段延迟被压掉：桌面窗口在 +111~205ms 已可见，而我们的盖子在 130ms 时
-     * 仍不透明、随后 240ms 渐隐，正好把桌面接上来（详见 UNLOCK_COVER_HOLD_MS 的注释）。
+     * 中间几版又想靠「桌面窗口何时上屏（+111~205ms）」来决定掀盖时机，仍然闪 ——
+     * 因为真正该对齐的是**系统动画的结束时刻**，完整时间线见 [UNLOCK_COVER_HOLD_MS] 的注释。
      */
     private void startUnlockCoverFade() {
         if (background == null || foreground == null) return;
-        // 2026-10-07：改成「完全不动可见性」（方法名沿用，别被误导）。
-        // 系统在解锁过渡时自己把壁纸窗口（ImageWallpaper）拉起来再收掉、并动画收走 keyguard 根；
-        // 我们的层都在 keyguard 根里，跟着系统动画走就是原生节奏。旧版在这里自定节拍
-        // （压 240ms 再淡 130ms），比编排快，淡出期间露出正在过渡的壁纸窗口 ——
-        // 用户看到的「解锁闪原生壁纸」。我们只负责一直在（提前画好、直接覆盖），交接交给系统。
-        Log.i(TAG, "Unlock signalled (keyguardGoingAway); hands off, system transition carries the scene");
-        // 误触发兜底保留：notifyKeyguardGoingAway 不只在真解锁时发，回头核对一次。
+        unlockSignalledAtMs = android.os.SystemClock.elapsedRealtime();
+        // 「提前画好、直接覆盖」的完整含义：**全程压住不透明**，把系统过渡期拉起来的壁纸窗口
+        // （独立窗口，keyguardGoingAway +47ms 被 showSurfaceRobustly 拉起）与锁屏壁纸收尾动画
+        // 都死死盖住；等系统解锁动画结束（+685ms）、换壁纸落地（+742ms）之后才淡出。
+        // 断不能在系统动画还在跑的时候自己淡——那就是用户看到的「解锁闪一帧清晰原生壁纸」。
+        Log.i(TAG, "Unlock signalled (keyguardGoingAway); cover stays opaque for " + UNLOCK_COVER_HOLD_MS
+                + "ms (till system unlock anim + wallpaper swap finish), then fades " + UNLOCK_COVER_FADE_MS + "ms");
+        main.removeCallbacks(finishCoverFade);
+        main.postDelayed(finishCoverFade, UNLOCK_COVER_HOLD_MS);
+        // 误触发兜底：notifyKeyguardGoingAway 不只在真解锁时发，回头核对一次 ——
+        // 只要 suspend() 没被叫到（守卫确认过 keyguard 真的不锁了），就说明这次不是解锁。
+        // 时点必须排在淡出之后，否则它会在淡出中途把不透明封面又贴回去。
         main.removeCallbacks(restoreCoverIfStillLocked);
-        main.postDelayed(restoreCoverIfStillLocked, 800);
+        main.postDelayed(restoreCoverIfStillLocked, UNLOCK_COVER_HOLD_MS + UNLOCK_COVER_FADE_MS + 300);
     }
 
-    /** 淡出收尾兜底：把背景层真正摘掉，绝不只留一层全透明视图挡在桌面上。 */
+    /**
+     * 摘层收尾：绝不只留一层「alpha=0 但仍 VISIBLE」的全透明视图挡在桌面上（会挡触摸）。
+     *
+     * 声明顺序有讲究：它必须排在 [finishCoverFade] **之前**——字段初始化器里用简单名引用
+     * 后声明的字段会被 javac 判为「非法前向引用」（本项目已踩过两次的坑）。
+     */
+    private final Runnable hideSceneAfterUnlock = () -> {
+        if (!unlockSignalled || foreground == null) return;
+        if (background != null) {
+            background.animate().cancel();
+            background.setAlpha(1f);
+            background.setVisibility(View.GONE);
+        }
+        foreground.animate().cancel();
+        foreground.setAlpha(1f);
+        foreground.setVisibility(View.GONE);
+        if (notificationButton != null) notificationButton.setVisibility(View.GONE);
+        long since = unlockSignalledAtMs > 0 ? android.os.SystemClock.elapsedRealtime() - unlockSignalledAtMs : -1;
+        Log.i(TAG, "unlock cover removed at t=+" + since + "ms after goingAway; " + nativeCensus());
+    };
+
+    /**
+     * 淡出交接：此刻系统解锁动画已结束（+685ms）、换壁纸已落地（+742ms），渐显出来的是合成好的桌面，
+     * 不存在任何「中间态的原生壁纸」。前景与背景一起淡（旧版只淡背景，前景单独在 suspend() 里淡，
+     * 两个节拍对不齐）。
+     */
     private final Runnable finishCoverFade = () -> {
         if (background == null || !unlockSignalled) return;
         background.animate().cancel();
-        background.setAlpha(1f);
-        background.setVisibility(View.GONE);
+        background.animate().alpha(0f).setDuration(UNLOCK_COVER_FADE_MS).start();
+        if (foreground != null) {
+            foreground.animate().cancel();
+            foreground.animate().alpha(0f).setDuration(UNLOCK_COVER_FADE_MS).start();
+        }
+        // 隐藏不能只挂 ViewPropertyAnimator 的回调：解锁期间窗口正在切换，动画回调可能根本不推进。
+        // 用 Handler 兜底摘层（项目既定规矩），并打一行带原生侧普查的自证日志，便于下一轮对账。
+        main.removeCallbacks(hideSceneAfterUnlock);
+        main.postDelayed(hideSceneAfterUnlock, UNLOCK_COVER_FADE_MS + 60);
     };
+
 
     /** 误触发兜底：淡出之后若解锁并没有真的发生（`suspend()` 没被叫到），把盖子放回去。 */
     private final Runnable restoreCoverIfStillLocked = () -> {
@@ -1047,9 +1101,24 @@ final class LockScreenOverlay {
         if (suspended || foreground == null) return;
         suspended = true;
         main.removeCallbacks(progressTicker);
-        // 解锁信号那条链路的回调在这里作废：收尾已经由 suspend() 承担，留着它们只会在下一轮
-        // 锁屏周期里把刚摆好的背景层又摘掉。
-        main.removeCallbacks(finishSuspend); main.removeCallbacks(finishCoverFade);
+        // 解锁信号那条链路的回调在这里**分两种**处理：
+        // ① 有解锁信号：`finishCoverFade → hideSceneAfterUnlock` 是主角 —— 它知道要压到系统解锁动画
+        //    跑完（UNLOCK_COVER_HOLD_MS）才淡出。**绝不能 cancel**（旧版就是在这儿掐掉它，导致 540ms
+        //    就硬撤层、正好落在系统动画 +148~685ms 中间，露出壁纸窗口）。`finishSuspend` 退化成兜底，
+        //    延时按「剩余保持期」算，保证它永远落在淡出之后。
+        // ② 没有解锁信号（守卫发现 keyguard 不锁了，但不是走解锁信号那条路）：照旧 600ms 后硬隐藏。
+        // 另外：**不要**在这里 cancel `hideSceneAfterUnlock` —— 它负责把淡完的层真正 GONE 掉，
+        // 取消它会在桌面上留一层「alpha=0 但仍 VISIBLE」的全屏透明层挡触摸（旧代码明确忌讳这点）。
+        long unlockElapsed = unlockSignalled && unlockSignalledAtMs > 0
+                ? android.os.SystemClock.elapsedRealtime() - unlockSignalledAtMs : -1;
+        main.removeCallbacks(finishSuspend);
+        if (unlockSignalled) {
+            long remain = UNLOCK_COVER_HOLD_MS + UNLOCK_COVER_FADE_MS + 150 - unlockElapsed;
+            main.postDelayed(finishSuspend, Math.max(300, remain));
+        } else {
+            main.removeCallbacks(finishCoverFade);
+            main.postDelayed(finishSuspend, 600);
+        }
         main.removeCallbacks(restoreCoverIfStillLocked);
         suspendStartedAtMs = android.os.SystemClock.elapsedRealtime();
         Log.i(TAG, "suspend reason=" + reason + " " + state());
@@ -1059,19 +1128,21 @@ final class LockScreenOverlay {
         // 2026-10-07（解锁闪原生壁纸收尾版）：交接期间**完全不动可见性**。
         // 旧版在这里 foreground 淡出 120ms + background 立即 GONE —— 比系统的退场编排快了一截，
         // 等于自己提前掀盖子，露出系统正在过渡展示的壁纸窗口（com.miui.miwallpaper…ImageWallpaper，
-        // 独立窗口，keyguardGoingAway 后 ~53ms 被 `wms.showSurfaceRobustly` 主动拉起；我们不掀它就不露）。
-        // 我们的层现在全是 keyguard 根的子视图，系统收 keyguard 根时自然一起收走 ——
-        // 这正是「提前画好、直接覆盖」：我们只负责一直在，交接交给系统编排。
-        // （旧注释「背景层晚撤一帧桌面就晚出现」是 background 还挂窗口根时的约束；
-        //  移进 keyguard 根后它跟着根走，不存在「多盖桌面」的问题了。）
-        // 硬隐藏仍由 finishSuspend 兜底，但延时放宽到 600ms：等编排走完（壁纸窗口收掉、
-        // keyguard 根 INVISIBLE）再摘，中途摘等于又掀一次盖。resume()/applyPreShow() 都会取消它。
-        main.postDelayed(finishSuspend, 600);
+        // 独立窗口，keyguardGoingAway 后 ~47ms 被 `wms.showSurfaceRobustly` 主动拉起；我们不掀它就不露）。
+        // 掀盖时机现在完全交给上面那条链路（finishCoverFade 按 UNLOCK_COVER_HOLD_MS 压到系统动画跑完），
+        // 这里一步都不做；`finishSuspend` 只是「链路没跑起来」的兜底。resume()/applyPreShow() 都会取消它。
     }
 
     /** suspend 收尾：隐藏场景并把原生层交还系统。用 Handler 而非动画回调，避免解锁时残留。 */
     private final Runnable finishSuspend = () -> {
         if (!suspended || foreground == null) return;   // 中途 resume()/restore() 过
+        // 解锁链路（finishCoverFade → hideSceneAfterUnlock）已经收拾干净了就别再动一次：
+        // 它会顺手把 alpha 复位成 1，虽然马上又 GONE（无害），但日志会看不出到底谁收的尾。
+        if (unlockSignalled && foreground.getVisibility() == View.GONE
+                && (background == null || background.getVisibility() == View.GONE)) {
+            Log.i(TAG, "finishSuspend skipped; unlock cover chain already cleaned up");
+            return;
+        }
         foreground.animate().cancel();
         foreground.setAlpha(1f);
         foreground.setVisibility(View.GONE);
@@ -1091,6 +1162,86 @@ final class LockScreenOverlay {
                 + (android.os.SystemClock.elapsedRealtime() - suspendStartedAtMs) + "ms " + nativeCensus());
         Log.i(TAG, "suspend done; scene kept for reuse");
     };
+
+    /**
+     * 把全屏封面插进锁屏根：**紧贴原生锁屏壁纸层之上、底部快捷栏之下**（z 序两条约束见 create()）。
+     *
+     * 为什么不做成窗口根的子视图：那样虽然能躲开锁屏根的退场动画，却会盖住底部快捷栏图标
+     * （图标在锁屏根里），而且窗口根的兄弟顺序在不同 ROM 上不可控。待在锁屏根里、
+     * 只压住壁纸层，是最稳的位置；解锁时的「掀盖时机」改由时间线控制（见 [UNLOCK_COVER_HOLD_MS]）。
+     */
+    private void attachBackgroundLayer() {
+        if (background == null || root == null) return;
+        if (background.getParent() instanceof ViewGroup && background.getParent() != root)
+            ((ViewGroup) background.getParent()).removeView(background);
+        int index = Math.max(0, Math.min(backgroundIndexIn(root), root.getChildCount()));
+        root.addView(background, index, new ViewGroup.LayoutParams(-1, -1));
+        Log.i(TAG, "background host=keyguardRoot idx=" + root.indexOfChild(background) + "/" + (root.getChildCount() - 1)
+                + " wallpaperIdx=" + (nativeBackgroundLayer != null ? root.indexOfChild(nativeBackgroundLayer) : -1)
+                + " clockIdx=" + (clock != null ? root.indexOfChild(clock) : -1));
+        // 一次创建只打三行：z 序是这块最容易出错的地方，光看 idx 数字没用，得看清每一支的归属。
+        // ① 锁屏根的直接子视图（从底到顶）；② 原生壁纸层的祖先链；③ 快捷栏容器的祖先链。
+        Log.i(TAG, "keyguardRoot children (bottom→top): " + rootChildCensus());
+        Log.i(TAG, "wallpaperLayer chain: " + ancestorChain(nativeBackgroundLayer));
+        Log.i(TAG, "shortcutContainer chain: " + ancestorChain(findByIdInAnyPackage(root, "keyguard_shortcut_container")));
+    }
+
+    /** 锁屏根直接子视图清单：`下标:类名#id`，从底到顶。 */
+    private String rootChildCensus() {
+        if (root == null) return "no root";
+        StringBuilder out = new StringBuilder();
+        for (int i = 0; i < root.getChildCount(); i++) {
+            View child = root.getChildAt(i);
+            if (i > 0) out.append(" | ");
+            out.append(i).append(':').append(child.getClass().getSimpleName());
+            try {
+                String id = child.getResources().getResourceEntryName(child.getId());
+                if (id != null && !id.isEmpty()) out.append('#').append(id);
+            } catch (Throwable ignored) { /* 没 id 就只打类名 */ }
+            if (child == background) out.append("<<BACKGROUND");
+        }
+        return out.toString();
+    }
+
+    /** 祖先链，从下到上：`KeyguardPanelView#keyguard_panel_view[0] > FrameLayout#keyguard_background_layer[2]`。 */
+    private String ancestorChain(View view) {
+        if (view == null) return "none";
+        StringBuilder out = new StringBuilder();
+        View node = view;
+        while (node != null) {
+            String id = "";
+            try { id = node.getResources().getResourceEntryName(node.getId()); } catch (Throwable ignored) { }
+            int index = node.getParent() instanceof ViewGroup ? ((ViewGroup) node.getParent()).indexOfChild(node) : -1;
+            if (out.length() > 0) out.insert(0, " > ");
+            out.insert(0, node.getClass().getSimpleName() + (id == null || id.isEmpty() ? "" : "#" + id) + "[" + index + "]");
+            node = node.getParent() instanceof View ? (View) node.getParent() : null;
+        }
+        return out.toString();
+    }
+
+    /** 目标下标：原生锁屏壁纸层之后一位；锚点找不到时退到第 1 位（壁纸层一般在第 0 位）。 */
+    private int backgroundIndexIn(ViewGroup host) {
+        if (nativeBackgroundLayer != null && nativeBackgroundLayer.getParent() == host) {
+            int idx = host.indexOfChild(nativeBackgroundLayer);
+            if (idx >= 0) return idx + 1;
+        }
+        return 1;
+    }
+
+    /**
+     * z 序自校正：锁屏根是系统自己的视图，位置可能被重挂/重排；一旦我们的封面被挤到原生壁纸层
+     * **下面**，原生壁纸就会盖住我们；被挤到顶层又会压住快捷栏图标。**只在顺序确实不对时才重排**，
+     * 不要每次亮屏都动视图树。
+     */
+    private void ensureBackgroundOrder() {
+        if (background == null || root == null || background.getParent() != root) return;
+        if (root.indexOfChild(background) == backgroundIndexIn(root)) return;
+        root.removeView(background);
+        int index = Math.max(0, Math.min(backgroundIndexIn(root), root.getChildCount()));
+        root.addView(background, index, new ViewGroup.LayoutParams(-1, -1));
+        Log.i(TAG, "background z-order re-asserted idx=" + root.indexOfChild(background)
+                + "/" + (root.getChildCount() - 1) + " " + state());
+    }
 
     /**
      * 诊断：解锁交接那一刻**原生侧**长什么样。
@@ -1126,6 +1277,7 @@ final class LockScreenOverlay {
         if (!suspended || foreground == null) return;
         suspended = false;
         main.removeCallbacks(finishSuspend); main.removeCallbacks(finishCoverFade);
+        main.removeCallbacks(hideSceneAfterUnlock);
         main.removeCallbacks(restoreCoverIfStillLocked);
         unlockSignalled = false;   // 新一轮锁屏周期：等下一次 keyguardGoingAway 再启动淡出
         Log.i(TAG, "resume reused scene " + state());
@@ -1162,6 +1314,7 @@ final class LockScreenOverlay {
             background.setVisibility(View.VISIBLE);
         }
         if (notificationButton != null) notificationButton.setVisibility(View.VISIBLE);
+        ensureBackgroundOrder();
         main.post(this::alignEntryWithShortcutRow);
         showMusic();
     }

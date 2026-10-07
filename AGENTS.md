@@ -7,6 +7,8 @@
 - 锁屏覆盖层默认失败关闭：找不到目标 SystemUI 视图或媒体数据无效时恢复原生界面。
 - 界面只做「复用 HyperIsland 原版组件 + 换数据源」，不新写样式；同名卡片直接提升 `OverviewPage.kt` 里的实现为 `internal` 共享，禁止复制第二份。**照搬上游组件时要把配套的 `graphicsLayer` 一起搬**：凡是内部用 `BlendMode`（尤其 `DstIn`/`SrcIn` 蒙版）的绘制，必须带 `compositingStrategy = CompositingStrategy.Offscreen`，否则会拿整块 surface 当混合目标——表现为蒙版底边留硬边、颜色染到相邻页面（2026-10-07 开发者页/外观页已踩过）。
 - `LockScreenOverlay.java` 由 Hook 注入 SystemUI 进程：任何改动都必须失败关闭（异常退回原生锁屏），并且**不要与其他会话/人工编辑并行改这个文件**。
+- **全屏封面（`background`）的 z 序只有一个正确位置：锁屏根里、紧跟原生锁屏壁纸层 `keyguard_background_layer`**。真机普查（`keyguardRoot children` + `ancestorChain` 两行诊断）确认锁屏根 `HyperOSKeyguardRootView` 的结构是：`[0] KeyguardPanelView`（内含 `[0] keyguard_background_layer` 原生壁纸）、`[2] keyguard_header`、`[4] KeyguardBottomAreaView`（内含 `keyguard_shortcut_container`＝手电筒/相机图标）、`[6]` 我们的 foreground。两条约束**必须同时满足**：① 在原生壁纸**之上**（否则原生壁纸重显就盖住我们，用户看到「只有一张原生壁纸」）；② 在底部快捷栏**之下**（否则图标被不透明封面压住，表现是「图标不见了但还能点进去」）。锚点用「壁纸层的父容器 + 紧跟其后」，不要用写死的下标。
+- **解锁时「掀盖时机」要对齐的是系统解锁退场动画的长度，不是桌面窗口上屏的时刻**（2026-10-07 踩了四轮）：真机时间线为 `keyguardGoingAway` → +148ms 系统动画开始（`KeyguardService IRemoteAnimationRunner`）→ +685ms 动画结束（`updateKeyguardWallpaperStateAnim onAnimationFinished`）→ +742ms 换壁纸落地。参数见 `UNLOCK_COVER_HOLD_MS`。另外 `suspend()` **绝不能** cancel `finishCoverFade`，否则参数怎么调都不生效（链路被当场掐掉）。
 - 新增锁屏可调参数时：键名与默认值加到 `Config.java` 的 `ELEMENT_DEFAULTS`，Provider 走 `/elements` 的 key/value 通道，**不要**再去改 `ConfigProvider` 的列投影。
 - **首页的真身是 `LockScreenPages.kt` 的 `LockHomePage`，不是 `page/home/OverviewPage.kt`**：后者只提供共享卡片组件（`OverviewStatusGrid` / `OverviewInfoCard` / `OverviewAlertCard` / `HomeOverviewState`），`OverviewPage` 这个 Composable **没有任何调用点、是死代码**。改首页（含右上角按钮）必须改 `LockHomePage`；改 `OverviewPage` 真机上不会有任何反应（2026-10-07 已踩过一次）。
 - **装机后必须自证版本，别假设「装了就生效」**（2026-10-07 踩过：源码与设备上的 APK 都是新版、逐 dex 搜字符串确认过，但新起的 SystemUI 进程跑的仍是**上一版** dex，整轮验证白做）。做法：每个入口在 `handleLoadPackage` 里打一行 `rev=<修订串>`（`ShortcutAnimBackdrop` 已这么做），**先看到新 rev 再让人复现**。注意 `ProtectionDomain.getCodeSource()` 在 SystemUI 进程里返回 **null**（模块 dex 由 `InMemoryDexClassLoader` 加载），只能用手工修订串；要离线确认设备上装的是哪一版：`pm path` → `adb pull base.apk` → python 逐个 dex 搜特征字符串。
@@ -16,7 +18,8 @@
 - **钩子别用 `param.classLoader` 找模块自己的类**：legacy Xposed 下模块类由模块自己的 ClassLoader 加载，字符串查找会 `ClassNotFoundException`；要钩自己人就用类字面量或反射读字段。
 - **撤销/回滚这类「一次动很多文件」的 git 操作，做完立刻 `git status` 复核**：2026-10-07 `git revert` 后出现过 `app/` 整树 ~300 项被删（我这条命令只动 4 个文件，疑并行会话所致），恢复命令是 `git checkout -- app`（HEAD 里全在，10 秒恢复）。
 - **要钩 ROM 的方法时，「日志文案 ≠ 方法名」**（2026-10-07 踩过）：日志里 `onStartedWakingUp` / `handleNotifyWakingUp` 只是 `Log` 的字符串，按它们精确匹配会让四个候选类全部落空（`KeyguardViewMediator` 真机上根本没有 `handleNotifyWakingUp` 这个方法）。**正确做法**：用 dex 解析找「引用了该字符串的方法」（见 DEVELOPMENT.md 的 DEX 小节），拿到真名后再钩；或者按**名字模糊匹配**（如小写含 `wakingup`）+ 覆盖匿名内部类与接口 default 方法，并把**实际挂上的方法名**打进日志。
-- **构建偶发 `BUILD FAILED` 不要先怀疑代码**（2026-10-07 多次）：改动后第一次构建可能失败（与本机杀毒/索引锁 dex 同源），**直接重跑一次，通常 1~2 分钟就过**；真正的编译错误会在 `^e:` / `.java:N: 错误` 里明确给出文件名与行号，先看错误落在谁的文件上。
+- **构建偶发 `BUILD FAILED` 不要先怀疑代码**（2026-10-07 多次）：改动后第一次构建可能失败（与本机杀毒/索引锁 dex 同源），**直接重跑一次，通常 1~2 分钟就过**；真正的编译错误会在 `^e:` / `.java:N: 错误` 里明确给出文件名与行号，先看错误落在谁的文件上。报告里出现 `desugar_graph/**/graph.bin (拒绝访问)` 时，删掉 `app/build/intermediates/{desugar_graph,project_dex_archive}` 再跑。
+- **亲眼确认「改动的确进了 APK」再装机**（2026-10-07 踩过）：改完源码后构建可能报 `compileDebugJavaWithJavac UP-TO-DATE` + `packageDebug UP-TO-DATE`，**装上去的还是上一版**（`grep` 确认源码已改也没用）。强制办法：删掉 `app/build/intermediates/javac` 再构建；装之前先解包 APK 逐个 `classes*.dex` 搜本轮新增的特征字符串，命中才算数。
 - **装完 APK 必须重启 SystemUI 才会加载新的 Hook 代码**，顺序是先装再重启。**无 root 重启法**：`adb -s 1b3a7d8 shell am crash com.android.systemui`（实测有效，SystemUI 崩掉后自动重启、PID 立刻变化；`am force-stop` 无效、`su` 从 adb 不可用）。锁屏行为异常时先比 `ps` 里 SystemUI 的 ETIME 和 APK 安装时间，再看 `logcat | grep "Elements: clock="` 有没有出现——没有就说明跑的还是旧代码。
 
 ## 仓库与发布
