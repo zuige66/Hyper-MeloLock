@@ -60,6 +60,11 @@
 
 ## 最近完成
 
+- **熄屏快速亮屏露原生锁屏（2026-10-07）** —— 日志显示模块**全程没撤过层**（`fg/bg=true`），问题在可见性时序：`suspend()` 之后场景是 `GONE`，而 `resume()` 只能等 `SCREEN_ON` 广播（**送达时面板已经亮了**）或亮屏后第一帧 pre-draw，中间那几十~两百毫秒就是原生锁屏。
+  - **改法：暗期预显。** `SCREEN_OFF` 之后再等 `SCREEN_OFF_PRESHOW_DELAY_MS = 220ms`（**面板黑透之后**）执行 `preShowForWake`，把可见性提前摆回可见 —— 亮屏第一帧即我们的界面；若亮屏后 keyguard 没锁则 `SCREEN_ON` 分支走 `restore("wake-unlocked")` 收回。
+  - **两个刻意的取舍**：① 必须等 220ms —— `SCREEN_OFF` 广播送达时面板还在跑熄屏动画，那会儿改可见性会跟动画抢（这正是之前被迫给守卫加 `interactive()` 闸的原因）；② **只摆可见性、不调 `resume()`** —— `resume()` 会走 `showMusic()` 并启动进度 ticker，熄屏期间每 500ms 唤醒一次，纯耗电。
+  - **诊断补强（关键）**：`state()` 现在带 `cover=` / `front=`（`V1.00` 可见且不透明 / `G0.00` 已移除 / `-` 对象不存在）。**排查「露原生」只看 `fg/bg=true` 不够** —— 那只说明对象还在，真正决定露不露的是可见性；这次的日志就是先靠它排除了"模块撤层"这条假设。
+  - **踩坑复现**：把 `preShowForWake` 写成字段初始化器里的 lambda，用**简单名**引用后面声明的字段（`foreground`/`background`/`main`）会被 javac 判「非法前向引用」→ 按本项目规矩改**方法引用 `this::runPreShowForWake`**。
 - **解锁节奏对齐原生：改用系统侧解锁信号（2026-10-07，B+）** —— 上一轮只砍掉了 120ms 淡出，实测大头还在：**pre-draw 守卫比 `keyguardGoingAway` 晚 277~491ms**，而桌面窗口 `wms.showSurfaceRobustly` 在 `keyguardGoingAway` 后 **111~205ms** 就已可见。于是「桌面已可见却被盖子盖住 120~367ms」+「前景层随 keyguard 根先走、只剩一块纯色约 230ms」——用户原话「看到纯色壁纸然后才进入桌面」「解锁没有原生快」。
   - **做法**：`HookEntry#hookUnlockSignal` 挂 **`com.android.systemui.statusbar.policy.KeyguardStateControllerImpl#notifyKeyguardGoingAway`**（SystemUI 进程内，**不用扩作用域**；AOSP 里 `KeyguardViewMediator#keyguardGoingAway` 就是调它通知所有 Callback，同一时刻）。实测我们的回调 **45.699 比系统的 `keyguardGoingAway, transition` 45.709 还早 10ms**，守卫要到 46.182。拿到起点后背景层改成 **Hold 130ms → Fade 240ms**（取自实测的 111~205ms 窗口），桌面从盖子底下渐显。
   - **找不到方法怎么办**：本机 `KeyguardViewMediator` 类存在但**没有任何 `keyguard*` 方法** → 改为**按方法名匹配、不猜签名**，并打诊断 `none on <类> (methods=N, GoingAway*=…)`。**定位真实方法名的捷径**：`adb shell grep -a -o -E '[A-Za-z_]*GoingAway[A-Za-z_]*' /system_ext/priv-app/MiuiSystemUI/MiuiSystemUI.apk | sort | uniq -c`。装不上就只打日志、回退旧的 pre-draw 时序（失败关闭）。

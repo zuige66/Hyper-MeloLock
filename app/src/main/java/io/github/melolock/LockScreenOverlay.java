@@ -68,6 +68,25 @@ final class LockScreenOverlay {
      */
     private static final long UNLOCK_COVER_HOLD_MS = 130;
     private static final long UNLOCK_COVER_FADE_MS = 240;
+    /**
+     * SCREEN_OFF 之后等面板**黑透**再"预显"场景的延时（避开熄屏动画）。
+     *
+     * SCREEN_OFF 广播送达时面板还在跑熄屏动画，那会儿改可见性会跟动画抢 —— 这正是之前被迫给
+     * 守卫加 `interactive()` 闸的原因。面板黑透之后再动，既没人看得见，也不会撞上动画。
+     */
+    private static final long SCREEN_OFF_PRESHOW_DELAY_MS = 220;
+
+    /**
+     * 熄屏"暗期"里把场景的可见性**提前摆好**（只摆可见性，不跑动画、不启进度 ticker）。
+     *
+     * 动机：`suspend()` 之后场景是 GONE，而 `resume()` 只能等 `SCREEN_ON` 广播（那时面板已经亮了）
+     * 或亮屏后第一帧 pre-draw —— 中间露出的就是原生锁屏。用户反馈的「息屏快速亮屏又出现原生」
+     * 正是这一段。在面板黑透之后先把可见性摆回去，亮屏**第一帧**就是我们的界面。
+     *
+     * 只摆可见性、不调 `resume()`：`resume()` 会走 `showMusic()`，而它会把进度 ticker 启动起来
+     * —— 熄屏期间每 500ms 唤醒一次，纯耗电。入场动画与 ticker 照样留给亮屏时的 `SCREEN_ON` 分支。
+     */
+    private final Runnable preShowForWake = this::runPreShowForWake;
     private final ViewGroup root;
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -94,6 +113,9 @@ final class LockScreenOverlay {
                 // only after SCREEN_ON is what caused the one-second stock-screen flash.
                 Log.i(TAG, "SCREEN_OFF kept=" + state());
                 main.removeCallbacks(progressTicker);
+                // 暗期预显：等面板黑透再把场景摆回可见，这样亮屏第一帧就是我们的界面。
+                main.removeCallbacks(preShowForWake);
+                main.postDelayed(preShowForWake, SCREEN_OFF_PRESHOW_DELAY_MS);
                 // 主动让媒体层回调一次：此时还没有场景的话，render() 会在屏幕看不见时先建好。
                 if (Config.enabled(context)) media.start();
             } else if (Intent.ACTION_USER_PRESENT.equals(intent.getAction())) {
@@ -113,7 +135,11 @@ final class LockScreenOverlay {
                 Log.i(TAG, "SCREEN_ON offFor=" + offMs + "ms " + state());
                 screenOffAtMs = 0;
                 if (suspended && lockscreenCycle && keyguardLocked()) resume();
-                else if (!suspended && shown != null && foreground != null && !expanded) showMusic();
+                else if (suspended) {
+                    // 暗期预显可能已经跑过，但这次亮屏看到的是桌面（keyguard 没锁）→ 把场景收回去，
+                    // 否则它会一直盖在桌面上，直到下一次媒体回调才被 render() 撤掉。
+                    restore("wake-unlocked");
+                } else if (shown != null && foreground != null && !expanded) showMusic();
                 updateSwitch();
             }
         }
@@ -728,8 +754,43 @@ final class LockScreenOverlay {
             foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f);
             playerCard.setAlpha(1f); playerCard.setTranslationY(0f); playerCard.setScaleX(1f); playerCard.setScaleY(1f);
         }
+        ensureCoverVisible();
         playerSceneVisible = true;
         main.removeCallbacks(progressTicker); main.post(progressTicker);
+    }
+
+    /** 兜底：场景该显示时，背景层不该是 GONE 或半透明（解锁淡出期间由 unlockSignalled 拦住）。 */
+    private void ensureCoverVisible() {
+        if (background == null || unlockSignalled || suspended) return;
+        if (background.getVisibility() == View.VISIBLE && background.getAlpha() >= 1f) return;
+        Log.i(TAG, "Cover was not visible while the scene shows; restoring it");
+        background.animate().cancel();
+        background.setAlpha(1f);
+        background.setVisibility(View.VISIBLE);
+    }
+
+    /**
+     * {@link #preShowForWake} 的实现体。
+     *
+     * 写成方法而不是 lambda：lambda 放在字段初始化器里时，用**简单名**引用后面声明的字段是
+     * 非法的（javac「非法前向引用」）—— 这条坑本项目已经踩过一次，统一改成方法引用 `this::xxx`。
+     */
+    private void runPreShowForWake() {
+        if (!suspended || foreground == null || !lockscreenCycle || !keyguardLocked()) return;
+        Log.i(TAG, "Pre-showing scene while display is dark so the first lit frame is ours");
+        main.removeCallbacks(finishSuspend); main.removeCallbacks(finishCoverFade);
+        main.removeCallbacks(restoreCoverIfStillLocked);
+        suspended = false;
+        unlockSignalled = false;
+        foreground.animate().cancel();
+        foreground.setAlpha(1f);
+        foreground.setVisibility(View.VISIBLE);
+        if (background != null) {
+            background.animate().cancel();
+            background.setAlpha(1f);
+            background.setVisibility(View.VISIBLE);
+        }
+        if (notificationButton != null) notificationButton.setVisibility(View.VISIBLE);
     }
 
     private void showNotifications() {
@@ -938,7 +999,10 @@ final class LockScreenOverlay {
         if (suspended || foreground == null) return;
         suspended = true;
         main.removeCallbacks(progressTicker);
-        main.removeCallbacks(finishSuspend);
+        // 解锁信号那条链路的回调在这里作废：收尾已经由 suspend() 承担，留着它们只会在下一轮
+        // 锁屏周期里把刚摆好的背景层又摘掉。
+        main.removeCallbacks(finishSuspend); main.removeCallbacks(finishCoverFade);
+        main.removeCallbacks(restoreCoverIfStillLocked);
         suspendStartedAtMs = android.os.SystemClock.elapsedRealtime();
         Log.i(TAG, "suspend reason=" + reason + " " + state());
         foreground.animate().cancel();
@@ -1220,7 +1284,16 @@ final class LockScreenOverlay {
         return "fg=" + (foreground != null) + " bg=" + (background != null) + " shown=" + (shown != null)
                 + " expanded=" + expanded + " scene=" + playerSceneVisible + " suspended=" + suspended
                 + " attached=" + root.isAttachedToWindow() + " interactive=" + interactive()
-                + " keyguard=" + keyguardLocked();
+                + " keyguard=" + keyguardLocked()
+                // 可见性必须一起记：`bg=true` 只说明对象还在，真正决定"露不露原生"的是它是不是
+                // GONE / 半透明。排查「亮屏露原生」这类问题全靠这两个字段。
+                + " cover=" + layerState(background) + " front=" + layerState(foreground);
+    }
+
+    /** 诊断用：`V1.00` = 可见且不透明，`G0.00` = 已移除，`-` = 对象不存在。 */
+    private static String layerState(View view) {
+        if (view == null) return "-";
+        return visibilityName(view).charAt(0) + fmt(view.getAlpha());
     }
 
     private boolean keyguardLocked() {

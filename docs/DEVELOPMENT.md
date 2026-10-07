@@ -158,6 +158,26 @@ hook 装不上时会打 `none on <类名> (methods=N, GoingAway*=…)` —— �
 `KeyguardViewMediator`(无) 找到 `statusbar.policy.KeyguardStateControllerImpl#notifyKeyguardGoingAway` 的）。
 **铁律仍然成立**：`suspend()` 里那个硬隐藏是兜底，别为了"好看"往里加淡出。
 
+### 亮屏第一帧必须是我们的界面（暗期预显）
+
+`suspend()` 之后场景是 `GONE`，而 `resume()` 只能等两件事：`SCREEN_ON` 广播（**送达时面板已经亮了**）或亮屏后第一帧 pre-draw。于是「息屏 → 快速亮屏」中间那几十~两百毫秒露出的就是**原生锁屏** —— 用户反馈的「息屏快速亮屏又出现原生」。
+
+改法：`SCREEN_OFF` 之后再等 `SCREEN_OFF_PRESHOW_DELAY_MS = 220ms`（**面板黑透之后**）执行 `preShowForWake`，把场景的可见性提前摆回可见 —— 亮屏**第一帧**就是我们的界面。
+
+三个刻意的取舍：
+
+- **必须等 220ms**：`SCREEN_OFF` 广播送达时面板还在跑熄屏动画，那会儿改可见性会跟动画抢（这正是之前被迫给守卫加 `interactive()` 闸的原因）。面板黑透之后再动，既看不见也不会撞动画。
+- **只摆可见性，不调 `resume()`**：`resume()` 会走 `showMusic()`，而它会把进度 ticker 启动起来 —— 熄屏期间每 500ms 唤醒一次，纯耗电。入场动画与 ticker 照样留给亮屏时的 `SCREEN_ON` 分支（`playerSceneVisible` 仍为 true，所以 `showMusic()` 走"无动画"路径）。
+- 若亮屏后 keyguard 没锁（看到的是桌面），`SCREEN_ON` 分支走 `restore("wake-unlocked")` 把预显收回去。
+
+**诊断字段（重要）**：`state()` 现在带 `cover=` / `front=`（`V1.00` = 可见且不透明，`G0.00` = 已移除，`-` = 对象不存在）。
+**排查「露原生」只看 `fg/bg=true` 是不够的** —— 那只说明对象还在，真正决定露不露的是可见性。
+
+日志：`Pre-showing scene while display is dark so the first lit frame is ours` / `Cover was not visible while the scene shows; restoring it`。
+
+**踩坑**：把 `preShowForWake` 写成字段初始化器里的 lambda 时，用**简单名**引用后面声明的字段（`foreground`/`background`/`main`…）会被 javac 判为「非法前向引用」。
+本项目的规矩：**改方法引用 `this::runPreShowForWake`**，把实现体放进普通方法。
+
 ### 切歌的空窗期：保住上一帧，不撤层
 
 真机日志显示，换歌时 App 会先**摘掉 metadata 里的封面 bitmap、只留 URI**，约 300ms 后才补齐新封面；这段时间内会话也可能短暂不合格（playbackState 为空或非 PLAYING）。三条旧的处理会把这个过渡态当成「播放停了」：
