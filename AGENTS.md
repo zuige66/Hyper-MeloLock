@@ -21,6 +21,7 @@
 
 ## 最近完成
 
+- **「亮屏快按两下开机键，息屏后没再亮起来」（2026-10-07）**：日志里失败那次 `SCREEN_OFF` 后 **72 秒内没有任何 `SCREEN_ON`**，模块无崩溃/无撤层/SystemUI PID 未变 → **第二次按键是被系统丢弃的，不是模块吞键**（亮屏再点一次能亮，说明通路没问题；快按两下时按键落在熄屏动画窗口内）。不过日志也暴露一处 ours 的无用功：熄屏后 **49ms** 就 `resume reused scene … interactive=false` —— 屏幕已全黑，守卫却在「正要黑」的窗口里把两层重新置可见 + `bringToFront`（整棵窗口根 relayout），第二次按键恰好也落在同一窗口。改法：守卫 suspended 分支加 `interactive()` 条件，屏幕还黑就不 resume（亮屏秒显靠 `SCREEN_ON` 广播与亮屏后第一帧 pre-draw，不受影响）。另给 `SCREEN_ON` 补 `offFor=Nms`，这类问题以后能直接和按键节奏对账。
 - **解锁卡顿 + 息屏后快速解锁闪原生壁纸（2026-10-07）**：
   1. **删掉 `unlockWatch` 探针**。它每 30ms 采样、每次解锁打 50 行 logcat，实测把采样间隔拖成 87~157ms（12 次 >60ms）——**logcat 写入是同步的，诊断本身在制造卡顿**。它要验证的结论早已拿到（系统把 keyguard 根直接置 `INVISIBLE`+`alpha 0`、全程无位移）。**教训：临时探针用完必须删，「只打日志」不等于零成本**；定位现象靠 `suspend reason=` 与 `native layers handed back at t=+Nms`。
   2. **外观指纹拆两份**：背景类（样式/遮罩/圆角）→ `applyBackdrop()` **就地更新三层背景、不动视图树**（`solidFill` / `baseScrim` 因此提为字段）；三元素类（尺寸/字号/间距）→ 才 `restore("elements-changed")` + 下一帧重建。旧写法只有一个指纹、改了就整场重建，而那条路径 `restore()` 后**提前 return 跳过了 `showMusic()`**——隐藏原生壁纸层的动作正在 `showMusic()` 里，于是重建那一百来毫秒原生壁纸可见（用户看到的「息屏后快速解锁闪一下」）。

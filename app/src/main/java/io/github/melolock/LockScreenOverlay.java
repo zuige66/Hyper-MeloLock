@@ -69,6 +69,7 @@ final class LockScreenOverlay {
         @Override public void onReceive(Context ignored, Intent intent) {
             if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
                 lockscreenCycle = true;
+                screenOffAtMs = android.os.SystemClock.elapsedRealtime();
                 // Keep the already-rendered scene in SystemUI memory.  Rebuilding it
                 // only after SCREEN_ON is what caused the one-second stock-screen flash.
                 Log.i(TAG, "SCREEN_OFF kept=" + state());
@@ -86,7 +87,11 @@ final class LockScreenOverlay {
                 // 这里只兜底补一次，仍然保留实例，不再销毁场景。
                 if (!suspended && foreground != null) suspend("user-present");
             } else if (Intent.ACTION_SCREEN_ON.equals(intent.getAction())) {
-                Log.i(TAG, "SCREEN_ON " + state());
+                long offMs = screenOffAtMs > 0 ? android.os.SystemClock.elapsedRealtime() - screenOffAtMs : -1;
+                // offForMs 能和用户的按键节奏对账：正常点一次是几百毫秒；「快按两下没亮起来」
+                // 的那次，这里会看到屏幕其实是被正常点亮的，而真正丢失的是第一次按键本身。
+                Log.i(TAG, "SCREEN_ON offFor=" + offMs + "ms " + state());
+                screenOffAtMs = 0;
                 if (suspended && lockscreenCycle && keyguardLocked()) resume();
                 else if (!suspended && shown != null && foreground != null && !expanded) showMusic();
                 updateSwitch();
@@ -104,8 +109,10 @@ final class LockScreenOverlay {
     private boolean unlockRestoreLogged;
     /** 诊断用：render 早退原因去重，只在原因变化时打日志。 */
     private String lastSkipReason;
-    /** 诊断用：本次 suspend 的起点时间戳，配合 unlockWatch 输出相对毫秒数。 */
+    /** 诊断用：本次 suspend 的起点时间戳。 */
     private long suspendStartedAtMs;
+    /** 最近一次 SCREEN_OFF 的时刻，用来在亮屏时打出「熄屏了多久」，和用户操作对账。 */
+    private long screenOffAtMs;
     private int createAttempts;
     /**
      * 建场景那一瞬的外观配置指纹，**分成两份**：
@@ -201,7 +208,13 @@ final class LockScreenOverlay {
                 // 时间」漏到桌面上。所以时钟层继续按住；**壁纸层绝不能碰**（解锁动画要靠它，
                 // 隐藏会露黑底，这条踩过）。
                 hideNativeClockLayers(root);
-                if (lockscreenCycle && keyguardLocked()) resume();
+                // `interactive()` 这条不能少：熄屏动画期间窗口还在出帧，此时此刻 resume 等于
+                // 在「屏幕正要黑」的窗口里把两层重新置可见 + bringToFront（整棵窗口根 relayout）。
+                // 真机日志里出现过 SCREEN_OFF 后 49ms 就 `resume reused scene interactive=false`，
+                // 而用户反馈「亮屏时快按两下开机键，息屏后没再亮起来」——第二次按键正好落在这个
+                // 窗口里（系统那侧根本没有 SCREEN_ON 广播，不是模块吞键）。亮屏秒显靠的是
+                // SCREEN_ON 广播与亮屏后第一帧 pre-draw，两者都在屏幕亮起之后，所以这里直接跳过。
+                if (lockscreenCycle && keyguardLocked() && interactive()) resume();
                 return true;
             }
             if (foreground != null) {
