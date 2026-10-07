@@ -57,6 +57,17 @@ final class LockScreenOverlay {
      * 亮屏本身由 `SCREEN_ON` 广播负责 resume，不需要守卫在这段窗口里抢着做。
      */
     private static final long RESUME_AFTER_SCREEN_OFF_MS = 500;
+    /**
+     * 解锁信号的覆盖层时序：先压住 [UNLOCK_COVER_HOLD_MS]，再用 [UNLOCK_COVER_FADE_MS] 淡出。
+     *
+     * 两个数都是从真机实测的窗口挑的（15 次解锁）：
+     * `keyguardGoingAway` → 桌面窗口 `wms.showSurfaceRobustly` 可见 = **+111~205ms**。
+     * 压住 130ms ≈ 覆盖"桌面窗口还没上屏"的最快那一档，保证这段里不会露壁纸；
+     * 之后 240ms 的淡出让桌面从盖子底下**渐显**出来，而不是等 pre-draw 守卫（实测晚 277~491ms）
+     * 发现后再突然撤走 —— 用户看到的「纯色壁纸停顿一下」正是那段延迟造成的。
+     */
+    private static final long UNLOCK_COVER_HOLD_MS = 130;
+    private static final long UNLOCK_COVER_FADE_MS = 240;
     private final ViewGroup root;
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -146,6 +157,13 @@ final class LockScreenOverlay {
      * 媒体回调也不接管界面，只等锁屏重新出现时 resume() 直接复用同一批视图。
      */
     private boolean suspended;
+    /**
+     * 本次锁屏周期里是否已经收到过系统的解锁信号（`KeyguardViewMediator#keyguardGoingAway`）。
+     *
+     * 收到它就意味着「锁屏退场动画真正开始了」，比 pre-draw 守卫早 277~491ms（实测）。
+     * 在 create()/resume() 之后复位；没有信号时一切回退到旧行为。
+     */
+    private boolean unlockSignalled;
     /** True only from screen-off until the user has completed an unlock. */
     private boolean lockscreenCycle = true;
     private boolean expanded;
@@ -841,8 +859,72 @@ final class LockScreenOverlay {
         if (notificationButton != null && notificationButton.getParent() == foreground) foreground.removeView(notificationButton);
         background = null; foreground = null; content = null; immersiveClock = null; playerCard = null; notificationButton = null; clock = null; secondaryClock = null; nativeBackgroundLayer = null; nativeForegroundLayer = null; notifications = null; windowRoot = null; leftShadePanel = null;
         solidFill = null; baseScrim = null; elementSignature = null; backdropSignature = null;
-        unlockRestoreLogged = false; lastSkipReason = null; suspended = false;
+        // unlockSignalled 必须在这里清掉：本周期可能刚收到 keyguardGoingAway 就撤层了（例如用户
+        // 立刻又关机/切配置）。不清的话，下一个场景复用时 finishCoverFade 会把新的背景层又摘掉。
+        unlockRestoreLogged = false; lastSkipReason = null; suspended = false; unlockSignalled = false;
     }
+
+    /**
+     * 系统侧解锁信号（`KeyguardViewMediator#keyguardGoingAway`）：**锁屏退场动画真正开始的时刻**。
+     *
+     * 由 `HookEntry` 注入的 hook 调用，可能在非主线程，所以这里只置标志、再抛回主线程。
+     * 没有这个信号时（hook 不可用 / 类名对不上）整条链路什么都不做，行为与旧版一致 —— 失败关闭。
+     */
+    void onUnlockStarting() {
+        // `interactive()` 这道闸不能省：真机实测 `notifyKeyguardGoingAway` **会跟着息屏/Doze 一起发**
+        // （2026-10-07 抓到一次：信号 41.988 之后 3ms 就是 `render skipped: display-off`，而屏幕
+        // 42.565 才 SCREEN_OFF、43.209 又 SCREEN_ON —— 锁屏还在，盖子却已经被我们撤掉了）。
+        // 屏幕灭着时的"退场"跟我们无关，绝不能因此撤层。
+        if (suspended || unlockSignalled || !interactive()) return;
+        unlockSignalled = true;
+        main.post(this::startUnlockCoverFade);
+    }
+
+    /**
+     * 让背景层跟着系统退场动画走：先压住一小段，再淡出，桌面从盖子底下**渐显**出来。
+     *
+     * 旧版是等 pre-draw 守卫发现解锁（实测比 `keyguardGoingAway` 晚 **277~491ms**）才硬隐藏，
+     * 于是「前景层随 keyguard 根先消失 → 屏幕上只剩一块纯色 → 再过两三百毫秒才进桌面」，
+     * 就是用户说的「看到纯色壁纸然后才进入桌面」「解锁没有原生快」。
+     * 拿到真正的起点后这段延迟被压掉：桌面窗口在 +111~205ms 已可见，而我们的盖子在 130ms 时
+     * 仍不透明、随后 240ms 渐隐，正好把桌面接上来（详见 UNLOCK_COVER_HOLD_MS 的注释）。
+     */
+    private void startUnlockCoverFade() {
+        if (background == null || foreground == null) return;
+        Log.i(TAG, "Unlock signalled (keyguardGoingAway); cover holds " + UNLOCK_COVER_HOLD_MS
+                + "ms then fades " + UNLOCK_COVER_FADE_MS + "ms");
+        background.animate().cancel();
+        background.animate().alpha(0f)
+                .setStartDelay(UNLOCK_COVER_HOLD_MS)
+                .setDuration(UNLOCK_COVER_FADE_MS)
+                .start();
+        // 隐藏不能只挂 ViewPropertyAnimator 的回调：解锁期间窗口正在切换，动画回调可能根本不推进。
+        main.removeCallbacks(finishCoverFade);
+        main.postDelayed(finishCoverFade, UNLOCK_COVER_HOLD_MS + UNLOCK_COVER_FADE_MS + 80);
+        // 误触发兜底：`notifyKeyguardGoingAway` 并不只在真解锁时发，所以淡完之后回头核对一次 ——
+        // 只要 `suspend()` 没被叫到（= 守卫确认过 keyguard 真的不锁了），就说明这次不是解锁。
+        main.removeCallbacks(restoreCoverIfStillLocked);
+        main.postDelayed(restoreCoverIfStillLocked, 800);
+    }
+
+    /** 淡出收尾兜底：把背景层真正摘掉，绝不只留一层全透明视图挡在桌面上。 */
+    private final Runnable finishCoverFade = () -> {
+        if (background == null || !unlockSignalled) return;
+        background.animate().cancel();
+        background.setAlpha(1f);
+        background.setVisibility(View.GONE);
+    };
+
+    /** 误触发兜底：淡出之后若解锁并没有真的发生（`suspend()` 没被叫到），把盖子放回去。 */
+    private final Runnable restoreCoverIfStillLocked = () -> {
+        if (foreground == null || suspended || !unlockSignalled) return;
+        Log.w(TAG, "Unlock signal did not lead to an unlock; restoring cover");
+        unlockSignalled = false;
+        if (background == null) return;
+        background.animate().cancel();
+        background.setAlpha(1f);
+        background.setVisibility(View.VISIBLE);
+    };
 
     /**
      * 解锁时不再硬撤场景。
@@ -922,7 +1004,9 @@ final class LockScreenOverlay {
     private void resume() {
         if (!suspended || foreground == null) return;
         suspended = false;
-        main.removeCallbacks(finishSuspend);
+        main.removeCallbacks(finishSuspend); main.removeCallbacks(finishCoverFade);
+        main.removeCallbacks(restoreCoverIfStillLocked);
+        unlockSignalled = false;   // 新一轮锁屏周期：等下一次 keyguardGoingAway 再启动淡出
         Log.i(TAG, "resume reused scene " + state());
         // 复用之前先验指纹：这一批视图是照着上次的配置量出来的，直接恢复就是把旧外观又端出来。
         // 场景跨周期复用之后 create() 不再重跑，配置读不到第二次，这是「外观改了没反应」的根因。

@@ -139,7 +139,24 @@ adb -s 1b3a7d8 logcat -v time | grep -E "keyguardGoingAway|showSurfaceRobustly m
 现在的做法：**`suspend()` 里背景层直接 `setVisibility(GONE)`，不做淡出。**
 依据是 `suspend()` 只在 `keyguardLocked()==false` 时触发（`predraw-keyguard-unlocked` / `user-present` 两条路径都是），那一刻解锁事务已经在跑、桌面已经可见，撤层不会露任何壁纸。硬隐藏仍由 `finishSuspend` 兜底，绝不留下残影。
 
-**残留（已知，尚未解决）**：`keyguardGoingAway` → `suspend` 之间的那 92~184ms 里，盖子仍盖着已可见的桌面。要消掉这段必须比 pre-draw 守卫更早知道解锁（例如听 `KeyguardManager` 的锁屏状态回调，或直接读系统事务），属于下一步。**不要靠在 `suspend()` 里"把延时调小"来蒙——那时桌面还没上屏，只会重新露壁纸。**
+**残留延迟已解决（2026-10-07）：改用系统侧解锁信号驱动**
+
+上面那 120~367ms 的残留，根因是「只能靠 pre-draw 守卫发现解锁，它比 `keyguardGoingAway` 晚 277~491ms」。
+现在多加了一个**系统侧信号**（`HookEntry#hookUnlockSignal`）：挂 `KeyguardStateControllerImpl#notifyKeyguardGoingAway`。
+
+- 它在 **SystemUI 进程内**，**不需要扩 Xposed 作用域**。AOSP 里 `KeyguardViewMediator#keyguardGoingAway` 本来就是调它去通知所有 Callback 的，所以和挂在 `keyguardGoingAway` 是同一时刻。
+- 实测我们的回调 `45.699` 比系统的 `keyguardGoingAway, transition`（`45.709`）**还早 10ms**，而守卫要到 `46.182`（晚 473ms）。
+- 拿到起点后背景层不再硬切，而是 **Hold 130ms → Fade 240ms**（两个数取自实测的「桌面窗口 +111~205ms 可见」窗口）：先压住"桌面还没上屏"的那一瞬，再让桌面从盖子底下渐显出来。
+
+**两个必须记住的坑**
+
+1. **`notifyKeyguardGoingAway` 会跟着息屏/Doze 一起发，不是只在真解锁时发。** 抓到过一次：信号之后 3ms 就是 `render skipped: display-off`，而锁屏还在 —— 盖子被撤掉，锁屏重现时就只剩原生壁纸。所以 `onUnlockStarting()` 里的 `interactive()` 闸**不能省**。
+2. 另加误触发兜底 `restoreCoverIfStillLocked`：+800ms 回头核对一次，只要 `suspend()` 没被叫到（= 守卫确认过 keyguard 真的不锁了）就说明这次不是解锁，把盖子放回去。
+
+**诊断**：`Unlock signal hook armed on <类名>` / `Unlock signal from system: <类>#<方法>` / `Unlock signalled (keyguardGoingAway); cover holds …`。
+hook 装不上时会打 `none on <类名> (methods=N, GoingAway*=…)` —— 直接告诉你这个 ROM 上真实的方法叫什么（本机就是这么从
+`KeyguardViewMediator`(无) 找到 `statusbar.policy.KeyguardStateControllerImpl#notifyKeyguardGoingAway` 的）。
+**铁律仍然成立**：`suspend()` 里那个硬隐藏是兜底，别为了"好看"往里加淡出。
 
 ### 切歌的空窗期：保住上一帧，不撤层
 
