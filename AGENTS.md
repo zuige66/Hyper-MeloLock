@@ -7,9 +7,6 @@
 - 锁屏覆盖层默认失败关闭：找不到目标 SystemUI 视图或媒体数据无效时恢复原生界面。
 - 界面只做「复用 HyperIsland 原版组件 + 换数据源」，不新写样式；同名卡片直接提升 `OverviewPage.kt` 里的实现为 `internal` 共享，禁止复制第二份。**照搬上游组件时要把配套的 `graphicsLayer` 一起搬**：凡是内部用 `BlendMode`（尤其 `DstIn`/`SrcIn` 蒙版）的绘制，必须带 `compositingStrategy = CompositingStrategy.Offscreen`，否则会拿整块 surface 当混合目标——表现为蒙版底边留硬边、颜色染到相邻页面（2026-10-07 开发者页/外观页已踩过）。
 - `LockScreenOverlay.java` 由 Hook 注入 SystemUI 进程：任何改动都必须失败关闭（异常退回原生锁屏），并且**不要与其他会话/人工编辑并行改这个文件**。
-- **Xposed 入口不止一个**：`app/src/main/assets/xposed_init` 现在有 `HookEntry`（锁屏覆盖层主入口）与 `ShortcutAnimBackdrop`（方案 B：往 MIUI 快捷方式动画窗 `miui_keyguard_shortcut` 注入自绘背景，解决手电筒/相机转场露系统壁纸）。增删入口必须同步这个清单。**临时诊断探针要做成独立入口并只登记在清单里，结论拿到后源码与清单一并删掉**（如 `ShortcutAnimProbe`）—— 既不跟并行会话抢文件，也不把观测成本留在产品里。
-- **钩子别按类名去找 MIUI 插件类**：`com.miui.keyguard.shortcuts.*` 是插件化动态加载的，在 SystemUI 基础 `param.classLoader` 里 `findClassIfExists` 全部 NOT FOUND；只有 `com.android.keyguard.*`（含 `shortcut.MiuiShortcutController`、`panel.KeyguardPanelViewController`）在 SystemUI 自己那边。要动插件窗口就按**窗口标题**认（`WindowManagerImpl.addView`）。
-- **钩子别用 `param.classLoader` 找模块自己的类**：legacy Xposed 下模块类由模块自己的 ClassLoader 加载，字符串查找会 `ClassNotFoundException`；要钩自己人就用类字面量或反射读字段。
 - 新增锁屏可调参数时：键名与默认值加到 `Config.java` 的 `ELEMENT_DEFAULTS`，Provider 走 `/elements` 的 key/value 通道，**不要**再去改 `ConfigProvider` 的列投影。
 - **首页的真身是 `LockScreenPages.kt` 的 `LockHomePage`，不是 `page/home/OverviewPage.kt`**：后者只提供共享卡片组件（`OverviewStatusGrid` / `OverviewInfoCard` / `OverviewAlertCard` / `HomeOverviewState`），`OverviewPage` 这个 Composable **没有任何调用点、是死代码**。改首页（含右上角按钮）必须改 `LockHomePage`；改 `OverviewPage` 真机上不会有任何反应（2026-10-07 已踩过一次）。
 - **装完 APK 必须重启 SystemUI 才会加载新的 Hook 代码**，顺序是先装再重启。**无 root 重启法**：`adb -s 1b3a7d8 shell am crash com.android.systemui`（实测有效，SystemUI 崩掉后自动重启、PID 立刻变化；`am force-stop` 无效、`su` 从 adb 不可用）。锁屏行为异常时先比 `ps` 里 SystemUI 的 ETIME 和 APK 安装时间，再看 `logcat | grep "Elements: clock="` 有没有出现——没有就说明跑的还是旧代码。
