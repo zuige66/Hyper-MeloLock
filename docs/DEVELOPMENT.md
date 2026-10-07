@@ -42,9 +42,13 @@
   - 右数据卡为「封面圆角」，取 `Config.cornerRadiusDp()`；点击跳到「外观」页。
   - 告警卡仅在 `Config.deviceSupported()` 为假（设备构建指纹不在已验证列表内）时出现，与 `HookEntry` 的加载门禁同一判据。
   - 系统信息卡四行：系统版本、应用版本、Xposed 框架、设备型号。前三行中 Xposed 框架依赖 Vector/LSPosed 服务绑定（`XposedPrefsSyncApp.awaitReady()`）；legacy 模块拿不到服务时显示 `未知`。
-- **音乐应用**：对齐 HyperIsland「应用」页 —— 搜索栏加应用行（图标、名称、包名、开关），整行点击也可切换。**列表是全部已安装应用**（含系统应用，可用「显示系统应用」开关过滤），由用户自行勾选哪些是音乐播放器。**默认一个都不勾选，且默认不显示系统应用**——必须显式勾选播放器锁屏才会接管它（与 `Config.packageAllowed()` 对齐）；全部取消后锁屏不再接管任何播放器。该页进入时会打一行 `Music apps: N selected by default`，`N=0` 才是真的一个都没勾。HyperOS 上枚举全部应用需要 `com.android.permission.GET_INSTALLED_APPS`，**该权限必须在 Manifest 里显式声明**：申请一个未声明的权限，系统会直接返回拒绝、连授权框都不弹（这正是 2026-10-06 第一次改完列表为空、看不到授权框的原因）。进入该页时会自动申请，实测弹出 MIUI 的「获取已安装的应用信息」授权框。
+- **音乐应用**：对齐 HyperIsland「应用」页 —— 搜索栏加应用行（图标、名称、包名、开关），整行点击也可切换。**列表是全部已安装应用**（含系统应用，可用「显示系统应用」开关过滤），由用户自行勾选哪些是音乐播放器。**默认一个都不勾选，且默认不显示系统应用**——必须显式勾选播放器锁屏才会接管它（与 `Config.packageAllowed()` 对齐）；全部取消后锁屏不再接管任何播放器。列表上方有「**全选**」开关：勾上＝把**当前列表**（受搜索与「显示系统应用」过滤影响）里的应用全部选中，再点一次＝把这些全部取消；它只是对同一份 `allowed_packages` 集合做批量增删，不是独立状态。该页进入时会打一行 `Music apps: N selected by default`，`N=0` 才是真的一个都没勾。HyperOS 上枚举全部应用需要 `com.android.permission.GET_INSTALLED_APPS`，**该权限必须在 Manifest 里显式声明**：申请一个未声明的权限，系统会直接返回拒绝、连授权框都不弹（这正是 2026-10-06 第一次改完列表为空、看不到授权框的原因）。进入该页时会自动申请，实测弹出 MIUI 的「获取已安装的应用信息」授权框。
 - **外观**：锁屏三元素（时间 / 专辑封面 / 播放器）的编辑器，外加原有的背景设置。配置通过只读 `ContentProvider` 同步给 SystemUI。
-- **开发者**：应用图标 + 名称 + 版本、开发者 `zuige`、GitHub `zuige66`、开源说明。**联系方式与捐赠/教程/资源外链仍留空**，对应行显示「待填写」并置灰不可点击。
+- **开发者**（第 4 个根页面，`LockAboutPage`）：版式参考上游 `AboutPage.kt` —— 整屏一个滚动列表，hero（应用图标 + 应用名 + 版本号）叠在顶部，**上滑时 hero 淡出并轻微缩小、动画渐变背景同时淡掉**，列表内容看起来是「盖上来」的。背景动画直接复用同包的 `AnimatedAboutBackground` / `rememberAboutAnimationTime` / `animatedGradientColors`（从 `private` 提升为 `internal` 共享，没有第二份实现）。最外层 `Box` 里 hero 画在 `LazyColumn` 之后（更上层），列表首项用 `Spacer(heroHeight + 16.dp)` 给 hero 留位。
+  - 滚动映射与上游同一套：`backgroundAlpha = 1 - offset/389dp`、`logoProgress = (offset - 0.25·hero) / 0.35·hero`、缩放 `1 - 0.1·progress`。
+  - 顶部的渐变背景动画是逐帧的，`isActive`（由 `AppShell` 传 `pagerState.currentPage == 3`）为假时**不跑**，避免在别的页面白耗电。
+  - 开发者卡片：灰色圆底 + 图标作头像占位（**不借用上游那张作者头像**）、名称 `zuige`、GitHub 号 `@zuige66`，整卡点击直达 `github.com/zuige66`。
+  - **没有的功能一律灰度**：讨论（Telegram）、备份与恢复、检查更新、引用、隐私政策都是 `enabled = false` 占位。为此给 `SettingsActionWithArrow` 补了 `enabled` 参数（与 `SettingsAction` 对齐）。项目区里 GitHub（`zuige66/Hyper-MeloLock`）与更新日志（GitHub Releases）是真实链接。
 
 四页共用的卡片来自 HyperIsland 原版实现：`OverviewPage.kt` 里原先私有的 `StatusGrid` / `StatusCard` / `StatCard` / `InfoCard` / 告警卡已提升为 `internal` 的 `OverviewStatusGrid` / `OverviewStatusCard` / `OverviewStatCard` / `OverviewInfoCard` / `OverviewAlertCard`，只把标题与数值参数化，视觉与交互代码未改动。HyperIsland 自己的首页（`OverviewPage`）改为调用同一批组件，因此不存在第二份样式实现。音乐应用页的行样式沿用 HyperIsland `AppsPage` 的 `Card` + `BasicComponent` 组合，图标复用 `InstalledAppsRepository` 的缓存与解码逻辑。
 

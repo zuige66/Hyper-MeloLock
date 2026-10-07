@@ -371,7 +371,8 @@ internal fun HyperIslandApp(prefs: FlutterPrefsRepository) {
                                 )
                                 1 -> LockMusicAppsPage()
                                 2 -> LockAppearancePage()
-                                else -> LockAboutPage()
+                                // hero 的渐变背景是逐帧动画，只在停留此页时跑，否则白白耗电。
+                                else -> LockAboutPage(isActive = pagerState.currentPage == 3)
                             }
                             }
                         }

@@ -439,7 +439,7 @@ private fun DeveloperCard(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun AnimatedAboutBackground(
+internal fun AnimatedAboutBackground(
     animationTime: Float,
     colors: List<Color>,
     modifier: Modifier = Modifier,
@@ -562,7 +562,7 @@ private fun DrawScope.drawAboutGradientField(
 }
 
 @Composable
-private fun rememberAboutAnimationTime(running: Boolean): Float {
+internal fun rememberAboutAnimationTime(running: Boolean): Float {
     var animationTime by remember { mutableFloatStateOf(0f) }
     LaunchedEffect(running) {
         if (!running) return@LaunchedEffect
@@ -609,7 +609,7 @@ private fun strengthenGradientColor(color: Color): Color {
     )
 }
 
-private fun animatedGradientColors(
+internal fun animatedGradientColors(
     animationTime: Float,
     dark: Boolean,
 ): List<Color> {

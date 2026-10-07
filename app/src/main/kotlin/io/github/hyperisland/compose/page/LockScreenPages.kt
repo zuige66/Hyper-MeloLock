@@ -9,17 +9,28 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -29,10 +40,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -43,12 +57,14 @@ import io.github.hyperisland.BuildConfig
 import io.github.hyperisland.R
 import io.github.hyperisland.XposedPrefsSyncApp
 import io.github.hyperisland.compose.component.CollapsingPage
+import io.github.hyperisland.compose.component.LocalRootBottomBarPadding
 import io.github.hyperisland.compose.component.PreferenceDropdown
 import io.github.hyperisland.compose.component.PreferenceSlider
 import io.github.hyperisland.compose.component.PreferenceSwitch
 import io.github.hyperisland.compose.component.RestartScopeDialog
 import io.github.hyperisland.compose.component.SectionTitle
 import io.github.hyperisland.compose.component.SettingsAction
+import io.github.hyperisland.compose.component.SettingsActionWithArrow
 import io.github.hyperisland.compose.data.InstalledAppsRepository
 import io.github.hyperisland.compose.page.home.OverviewAlertCard
 import io.github.hyperisland.compose.page.home.OverviewInfoCard
@@ -63,15 +79,21 @@ import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.SearchBar
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.basic.ArrowRight
+import top.yukonga.miuix.kmp.icon.extended.Backup
+import top.yukonga.miuix.kmp.icon.extended.Community
 import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.Link
 import top.yukonga.miuix.kmp.icon.extended.Refresh
+import top.yukonga.miuix.kmp.icon.extended.Update
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.utils.overScrollVertical
 
 /**
  * 本模块的四个根页面。
@@ -306,6 +328,18 @@ internal fun LockMusicAppsPage() {
         }
     }
 
+    /** 全选开关的作用范围＝当前列表（含搜索/系统应用过滤），避免把看不见的应用一起勾上。 */
+    fun selectAllVisible(checked: Boolean) {
+        val visible = filtered.map { it.packageName }.toSet()
+        val next = if (checked) selection.packages + visible else selection.packages - visible
+        if (Config.setAllowedPackages(context, next)) {
+            selection = MusicSelection(unrestricted = false, packages = next)
+        }
+    }
+
+    val allVisibleSelected = filtered.isNotEmpty() &&
+        filtered.all { selection.isSelected(it.packageName) }
+
     CollapsingPage(title = "音乐应用") {
         item {
             SearchBar(
@@ -325,6 +359,13 @@ internal fun LockMusicAppsPage() {
         }
         item {
             Card {
+                PreferenceSwitch(
+                    title = "全选",
+                    summary = "勾选当前列表里的全部应用；再点一次全部取消",
+                    icon = null,
+                    checked = allVisibleSelected,
+                    onCheckedChange = { selectAllVisible(it) },
+                )
                 PreferenceSwitch(
                     title = "显示系统应用",
                     summary = "关闭后只列出你自己安装的应用",
@@ -366,7 +407,8 @@ internal fun LockMusicAppsPage() {
             Card {
                 InfoText(
                     "这里列出全部已安装应用。默认一个都不勾选，必须显式勾选播放器，" +
-                        "锁屏才会接管它的播放信息；全部取消后锁屏不再接管任何播放器。",
+                        "锁屏才会接管它的播放信息；全部取消后锁屏不再接管任何播放器。" +
+                        "上方的「全选」只作用于当前列表（受搜索与「显示系统应用」过滤影响）。",
                 )
             }
         }
@@ -537,82 +579,250 @@ internal fun LockAppearancePage() {
 
 // ── 开发者 ───────────────────────────────────────────────────────────────────
 
+/**
+ * 「开发者」页（第 4 个根页面）。
+ *
+ * 版式参考 HyperIsland 的 `AboutPage`：整屏是一个滚动列表，hero（图标 + 应用名 + 版本号）
+ * 固定叠在顶部，**上滑时 hero 淡出并轻微缩小、动画渐变背景同时淡掉**，列表内容看起来是
+ * 「盖上来」的。背景动画直接复用同包的 [AnimatedAboutBackground] / [rememberAboutAnimationTime]
+ * / [animatedGradientColors]，hero 的滚动映射与上游同一套公式，不另写一份样式。
+ *
+ * 本模块还没有的东西（讨论 / 备份恢复 / 检查更新 / 引用 / 隐私政策）一律**灰度不可点**。
+ */
 @Composable
-internal fun LockAboutPage() {
-    CollapsingPage(title = "开发者") {
-        item {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 22.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Image(
-                        painter = painterResource(R.drawable.ic_hmsc),
-                        contentDescription = null,
-                        modifier = Modifier.size(88.dp).clip(RoundedCornerShape(22.dp)),
+internal fun LockAboutPage(isActive: Boolean) {
+    val context = LocalContext.current
+    val listState = rememberLazyListState()
+    val density = LocalDensity.current
+    val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+    val heroHeight = screenHeight * ABOUT_HERO_HEIGHT_FRACTION
+    val heroHeightPx = with(density) { heroHeight.toPx() }
+    val backgroundFadeDistance = with(density) { 389.dp.toPx() }
+    val logoFadeStart = heroHeightPx * 0.25f
+    val logoFadeDistance = heroHeightPx * 0.35f
+
+    val scrollOffset by remember(listState, heroHeightPx) {
+        derivedStateOf {
+            if (listState.firstVisibleItemIndex > 0) {
+                heroHeightPx
+            } else {
+                listState.firstVisibleItemScrollOffset.toFloat()
+            }
+        }
+    }
+    // 背景先淡掉（跟着滚动距离线性走），hero 稍后才开始消失，两者错开才有「盖上来」的层次。
+    val backgroundAlpha = (1f - scrollOffset / backgroundFadeDistance).coerceIn(0f, 1f)
+    val logoProgress = ((scrollOffset - logoFadeStart) / logoFadeDistance).coerceIn(0f, 1f)
+    val logoAlpha = 1f - logoProgress
+    val logoScale = 1f - logoProgress * 0.1f
+
+    val animationTime = rememberAboutAnimationTime(isActive)
+    val gradientColors = animatedGradientColors(animationTime, isSystemInDarkTheme())
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        AnimatedAboutBackground(
+            animationTime = animationTime,
+            colors = gradientColors,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(heroHeight + 180.dp)
+                .alpha(backgroundAlpha)
+                .graphicsLayer { translationY = -listState.firstVisibleItemScrollOffset * 0.12f },
+        )
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize().overScrollVertical(),
+            contentPadding = PaddingValues(
+                start = 16.dp,
+                top = 0.dp,
+                end = 16.dp,
+                bottom = 28.dp + LocalRootBottomBarPadding.current,
+            ),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            item {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    // hero 是叠在上层的（不是列表项），这里留出等高的空位让它可见。
+                    Spacer(Modifier.height(heroHeight + ABOUT_DEVELOPER_TOP_GAP))
+                    SectionTitle(stringResource(R.string.about_developer))
+                    DeveloperCard()
+                }
+            }
+            item {
+                SectionTitle(stringResource(R.string.about_discussion))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    // 还没有讨论群：先灰度占位。
+                    SettingsAction(
+                        title = stringResource(R.string.telegram),
+                        icon = MiuixIcons.Community,
+                        summary = PLACEHOLDER_TEXT,
+                        endIcon = MiuixIcons.Link,
+                        endIconSize = 26.dp,
+                        enabled = false,
+                        onClick = {},
                     )
-                    Text(
-                        text = stringResource(R.string.app_name),
-                        modifier = Modifier.padding(top = 14.dp),
-                        fontSize = 19.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MiuixTheme.colorScheme.onSurface,
+                }
+            }
+            item {
+                SectionTitle(stringResource(R.string.about_module))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    // 备份恢复与检查更新都还没做（且已移除 INTERNET 权限）：灰度。
+                    SettingsActionWithArrow(
+                        title = stringResource(R.string.backup_restore),
+                        icon = MiuixIcons.Backup,
+                        enabled = false,
+                        onClick = {},
                     )
-                    Text(
-                        text = "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-                        modifier = Modifier.padding(top = 2.dp),
-                        fontSize = 13.sp,
-                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    SettingsAction(
+                        title = stringResource(R.string.check_update_action),
+                        icon = MiuixIcons.Update,
+                        summary = PLACEHOLDER_TEXT,
+                        enabled = false,
+                        onClick = {},
+                    )
+                }
+            }
+            item {
+                SectionTitle(stringResource(R.string.about_project))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    SettingsAction(
+                        title = stringResource(R.string.github),
+                        icon = MiuixIcons.Info,
+                        summary = "$DEVELOPER_HANDLE/Hyper-MeloLock",
+                        endIcon = MiuixIcons.Link,
+                        endIconSize = 26.dp,
+                    ) {
+                        context.openUrl(REPO_URL)
+                    }
+                    SettingsAction(
+                        title = stringResource(R.string.changelog),
+                        icon = MiuixIcons.Info,
+                        summary = "GitHub Releases",
+                        endIcon = MiuixIcons.Link,
+                        endIconSize = 26.dp,
+                    ) {
+                        context.openUrl(RELEASES_URL)
+                    }
+                    // 引用清单与隐私政策还没有页面：灰度。
+                    SettingsActionWithArrow(
+                        title = stringResource(R.string.references),
+                        icon = MiuixIcons.Info,
+                        enabled = false,
+                        onClick = {},
+                    )
+                    SettingsAction(
+                        title = stringResource(R.string.privacy_consent_title),
+                        icon = MiuixIcons.Info,
+                        summary = PLACEHOLDER_TEXT,
+                        endIcon = MiuixIcons.Link,
+                        endIconSize = 26.dp,
+                        enabled = false,
+                        onClick = {},
+                    )
+                }
+            }
+            item {
+                SectionTitle("开源说明")
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    InfoText(
+                        "本项目：AGPL-3.0\n" +
+                            "界面来源：HyperIsland（MIT License），配置端 Compose/Miuix 组件直接复用。" +
+                            "锁屏 Hook 与配置链路为本项目独立实现。",
                     )
                 }
             }
         }
-        item {
-            SectionTitle("开发者")
-            Card {
-                // 作者信息待补充：把下面的常量填上即可显示真实内容。
-                SettingsAction(
-                    title = "开发者",
-                    summary = DEVELOPER_NAME.ifBlank { PLACEHOLDER_TEXT },
-                    icon = MiuixIcons.Info,
-                    enabled = false,
-                    onClick = {},
+        // hero 画在列表之后（更上层），淡出过程中列表内容是「从下面盖上来」的观感。
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .height(heroHeight)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            Column(
+                modifier = Modifier
+                    .offset(y = ABOUT_HERO_CONTENT_OFFSET)
+                    .graphicsLayer {
+                        alpha = logoAlpha
+                        scaleX = logoScale
+                        scaleY = logoScale
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Image(
+                    painter = painterResource(R.drawable.ic_hmsc),
+                    contentDescription = null,
+                    modifier = Modifier.size(88.dp).clip(RoundedCornerShape(22.dp)),
                 )
-                SettingsAction(
-                    title = "联系方式",
-                    summary = DEVELOPER_CONTACT.ifBlank { PLACEHOLDER_TEXT },
-                    icon = MiuixIcons.Info,
-                    enabled = false,
-                    onClick = {},
+                Text(
+                    text = stringResource(R.string.app_name),
+                    modifier = Modifier.padding(top = 18.dp),
+                    fontSize = 34.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MiuixTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "${BuildConfig.VERSION_NAME}(${BuildConfig.VERSION_CODE})",
+                    modifier = Modifier.padding(top = 6.dp),
+                    fontSize = 15.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
             }
         }
-        item {
-            SectionTitle("项目")
-            Card {
-                LinkAction(title = "GitHub", summary = DEVELOPER_HANDLE, url = GITHUB_URL)
-                LinkAction(title = "项目主页", summary = "源码与发布", url = PROJECT_URL)
-                LinkAction(
-                    title = stringResource(R.string.documentation),
-                    summary = stringResource(R.string.documentation_summary),
-                    url = DOCUMENTATION_URL,
-                )
-                LinkAction(
-                    title = stringResource(R.string.related_resources),
-                    summary = stringResource(R.string.related_resources_summary),
-                    url = RESOURCES_URL,
+    }
+}
+
+/** 开发者卡片：头像、名称、GitHub 号，整卡可点直达 GitHub。 */
+@Composable
+private fun DeveloperCard() {
+    val context = LocalContext.current
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        onClick = { context.openUrl(GITHUB_URL) },
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            // 作者头像还没有：先用灰色圆底加占位图标，避免误用上游那张头像。
+            Box(
+                modifier = Modifier
+                    .size(56.dp)
+                    .clip(CircleShape)
+                    .background(MiuixTheme.colorScheme.onSurfaceVariantSummary.copy(alpha = 0.18f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Info,
+                    contentDescription = null,
+                    modifier = Modifier.size(26.dp),
+                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
             }
-        }
-        item {
-            SectionTitle("开源说明")
-            Card {
-                InfoText(
-                    "本项目：AGPL-3.0\n" +
-                        "界面来源：HyperIsland（MIT License），配置端 Compose/Miuix 组件直接复用。" +
-                        "锁屏 Hook 与配置链路为本项目独立实现。",
+            Column(modifier = Modifier.padding(start = 14.dp)) {
+                Text(
+                    text = DEVELOPER_NAME,
+                    fontSize = 19.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MiuixTheme.colorScheme.onSurface,
+                )
+                Text(
+                    text = "@$DEVELOPER_HANDLE",
+                    modifier = Modifier.padding(top = 1.dp),
+                    fontSize = 14.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 )
             }
+            Spacer(Modifier.weight(1f))
+            Icon(
+                imageVector = MiuixIcons.Basic.ArrowRight,
+                contentDescription = null,
+                modifier = Modifier.size(width = 10.dp, height = 16.dp),
+                tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+            )
         }
     }
 }
@@ -768,16 +978,22 @@ private fun Context.openUrl(url: String) {
     runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
 }
 
-// TODO(作者信息)：以下链接与署名待补充，留空时页面会显示“待填写”并置灰。
+// 留空的链接（捐赠 / 使用教程 / 相关资源）在页面上显示「待填写」并置灰。
 private const val DEVELOPER_NAME = "zuige"
 private const val DEVELOPER_HANDLE = "zuige66"
-private const val DEVELOPER_CONTACT = ""
+/** 开发者主页：开发者卡片整卡点击的去处。 */
 private const val GITHUB_URL = "https://github.com/zuige66"
-private const val PROJECT_URL = "https://github.com/zuige66"
+private const val REPO_URL = "https://github.com/zuige66/Hyper-MeloLock"
+private const val RELEASES_URL = "$REPO_URL/releases"
 private const val DONATION_URL = ""
 private const val DOCUMENTATION_URL = ""
 private const val RESOURCES_URL = ""
 private const val PLACEHOLDER_TEXT = "待填写"
+
+// 「开发者」页 hero 的尺寸参数，与上游 AboutPage 同一套比例。
+private const val ABOUT_HERO_HEIGHT_FRACTION = 0.60f
+private val ABOUT_DEVELOPER_TOP_GAP = 16.dp
+private val ABOUT_HERO_CONTENT_OFFSET = 30.dp
 
 /** HyperOS 上枚举全部应用需要的 MIUI 权限，与 HyperIsland 应用页一致。 */
 private const val APP_LIST_PERMISSION = "com.android.permission.GET_INSTALLED_APPS"

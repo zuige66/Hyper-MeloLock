@@ -348,6 +348,8 @@ internal fun SettingsActionWithArrow(
     title: String,
     icon: ImageVector,
     summary: String? = null,
+    /** 置 false 时整行灰度且不可点，用于「本模块还没有的功能」占位。 */
+    enabled: Boolean = true,
     onClick: () -> Unit,
 ) {
     BasicComponent(
@@ -359,10 +361,15 @@ internal fun SettingsActionWithArrow(
                 imageVector = MiuixIcons.Basic.ArrowRight,
                 contentDescription = null,
                 modifier = Modifier.size(width = 10.dp, height = 16.dp),
-                tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                tint = if (enabled) {
+                    MiuixTheme.colorScheme.onSurfaceVariantActions
+                } else {
+                    MiuixTheme.colorScheme.disabledOnSurface
+                },
             )
         },
         insideMargin = SettingsItemMargin,
+        enabled = enabled,
         onClick = onClick,
     )
 }
