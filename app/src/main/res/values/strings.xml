@@ -707,6 +707,7 @@
     <string name="screen_recorder">Screen Recorder</string>
     <string name="security_center">Security Service</string>
     <string name="restart_root_required">Please check if ROOT permission has been granted to this app</string>
+    <string name="restart_scope_requested">System UI restart requested</string>
     <string name="restart_failed">Restart failed: %1$s</string>
     <string name="support_development">Support development</string>
     <string name="support_development_summary">Donate to the developers to show your support</string>

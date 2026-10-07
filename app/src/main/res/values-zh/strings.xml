@@ -713,6 +713,7 @@
     <string name="screen_recorder">屏幕录制</string>
     <string name="security_center">安全服务</string>
     <string name="restart_root_required">请检查是否已给予本应用 ROOT 权限</string>
+    <string name="restart_scope_requested">已请求重启系统界面</string>
     <string name="restart_failed">重启失败：%1$s</string>
     <string name="support_development">支持开发</string>
     <string name="support_development_summary">向开发者捐赠以表示支持</string>

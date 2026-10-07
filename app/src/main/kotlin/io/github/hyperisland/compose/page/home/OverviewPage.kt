@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
+import io.github.melolock.Config
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -156,15 +157,23 @@ internal fun OverviewPage(
         title = "HyperIsland",
         actionIcon = MiuixIcons.Refresh,
         actionDescription = stringResource(R.string.restart_scope),
-        // 先探测 root 再决定要不要弹列表：没有 root 时列出来也没意义，
-        // 用户只会在点「确定」之后才看到失败。
+        // 先探测 root 再决定走哪条路：
+        //  · 有 root → 弹出作用域列表，用 su 命令精确重启选中的进程
+        //  · 无 root → 走模块通道（广播给 SystemUI 里的模块，由它自己重启自己），
+        //    这样在 su 不可用的环境（如本机 SukiSU）里这个按钮依然有用，而不是点了没反应
         onAction = {
             scope.launch {
-                if (RestartScopeService.hasRoot()) showRestartDialog = true
-                else Toast.makeText(
+                if (RestartScopeService.hasRoot()) {
+                    showRestartDialog = true
+                    return@launch
+                }
+                context.sendBroadcast(
+                    Intent(Config.ACTION_RESTART_SYSTEMUI).setPackage(Config.SYSTEMUI_PACKAGE)
+                )
+                Toast.makeText(
                     context,
-                    context.getString(R.string.restart_root_required),
-                    Toast.LENGTH_SHORT,
+                    context.getString(R.string.restart_scope_requested),
+                    Toast.LENGTH_LONG,
                 ).show()
             }
         },

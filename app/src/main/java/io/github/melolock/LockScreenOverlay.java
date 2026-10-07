@@ -53,6 +53,18 @@ final class LockScreenOverlay {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final MediaSource media;
     private final ContentObserver switchObserver;
+    /**
+     * 无 root 的重启通道：配置端发现 `su` 不可用时，会发一条显式广播过来，
+     * 由已经跑在 SystemUI 进程里的模块自己 kill 自己完成一次作用域重启。
+     * 与 `am crash com.android.systemui` 效果等价，但不需要 root 也不需要 adb。
+     */
+    private final BroadcastReceiver restartReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context ignored, Intent intent) {
+            if (!Config.ACTION_RESTART_SYSTEMUI.equals(intent.getAction())) return;
+            Log.i(TAG, "Restart requested via broadcast; killing SystemUI for a clean reload");
+            android.os.Process.killProcess(android.os.Process.myPid());
+        }
+    };
     private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context ignored, Intent intent) {
             if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
@@ -203,6 +215,9 @@ final class LockScreenOverlay {
         IntentFilter events = new IntentFilter();
         events.addAction(Intent.ACTION_SCREEN_OFF); events.addAction(Intent.ACTION_SCREEN_ON); events.addAction(Intent.ACTION_USER_PRESENT);
         context.registerReceiver(screenReceiver, events, Context.RECEIVER_NOT_EXPORTED);
+        // 显式广播（setPackage 到 SystemUI）才能穿过 RECEIVER_NOT_EXPORTED 送达这里。
+        context.registerReceiver(restartReceiver, new IntentFilter(Config.ACTION_RESTART_SYSTEMUI),
+                Context.RECEIVER_EXPORTED);
         observing = true;
         Log.i(TAG, "Keyguard root compatible; observing module switch");
         updateSwitch();
@@ -210,7 +225,12 @@ final class LockScreenOverlay {
 
     void destroy() {
         Log.i(TAG, "Overlay destroy " + state());
-        if (observing) { context.getContentResolver().unregisterContentObserver(switchObserver); context.unregisterReceiver(screenReceiver); observing = false; }
+        if (observing) {
+            context.getContentResolver().unregisterContentObserver(switchObserver);
+            context.unregisterReceiver(screenReceiver);
+            try { context.unregisterReceiver(restartReceiver); } catch (Throwable ignored) { }
+            observing = false;
+        }
         media.close(); restore("destroy");
     }
 

@@ -446,3 +446,17 @@ adb -s 1b3a7d8 reboot
     改为：`RestartScopeService` 新增 `hasRoot()`（开一个 `su` 跑 `id`，以 `waitFor() == 0` 判定），`OverviewPage` 的 `onAction` 在协程里先调用，**有权限才 `showRestartDialog = true`，否则 Toast `restart_root_required`**。同时 `RestartScopeDialog` 的 `targets` 用 `stringArrayResource(R.array.xposed_scope)` 与内置 `RestartScopeTargets` 求交集，**只列 Manifest 里真正声明过的作用域**——当前 `xposed_scope.xml` 只有 `com.android.systemui` 一项，将来往该文件加一项列表会自动跟上。注意 `hasRoot()` 会触发 root 管理器（SukiSU）的授权弹窗。
 
 23. 2026-10-07 **未勾选音乐应用则不启用沉浸锁屏**。`Config.packageAllowed()` 原本是 `raw.isEmpty() || (!NONE.equals(raw) && allowedPackages(context).contains(packageName))`，即**未设置＝允许全部**：用户刚装好、还没在「音乐应用」页做任何选择时，任何 App 的 MediaSession 都能拉起覆盖层。现在空值与哨兵 `NONE` 一律 `return false`，**必须显式勾选某个播放器包名才放行**。配套把 `enabledAppCount()` 的 `-1`（原「允许全部」返回值）去掉，改为直接返回 `selectedPackages(context).size()`；首页「已开启应用」数据卡因此不再需要区分「全部 / 0」。
+
+24. 2026-10-07 **重启小圈点了没反应** —— 根因是 `su` 在本机根本不可用。用户反馈首页右上角刷新图标点击多次毫无反应。定位过程：
+
+    ```
+    adb shell ls -l /system/bin/su /system/xbin/su /system_ext/bin/su /vendor/bin/su   → 全部 No such file
+    adb shell ls -l /data/adb/ksu/bin/su                                                → Permission denied
+    adb shell su -c id                                                                  → su: inaccessible or not found
+    ```
+
+    `RestartScopeService` 原实现是 `Runtime.exec("su")` 配一个**没有超时**的 `waitFor()`。在这种环境下 `exec` 要么抛 IOException、要么启动后卡在等一个永远不会响应的 root 管理器，`waitFor()` 无限期阻塞在 IO 线程上 → 协程永不返回 → 既没有弹作用域列表也没有 Toast，表现就是「点了完全没反应」。
+
+    **改法（两条）**：① `su` 统一走 `SU_TIMEOUT_MS = 3000` 超时（`waitFor(3000, MILLISECONDS)`，超时或失败一律 `process.destroy()`），并打日志 `RestartScope: hasRoot=`，避免再次出现「静默卡死」。② **新增一条不需要 root 的重启通道**：`Config.ACTION_RESTART_SYSTEMUI` 广播——配置端发现无 root 时发一条 `setPackage("com.android.systemui")` 的**显式**广播，模块 `LockScreenOverlay` 用 `Context.RECEIVER_EXPORTED` 注册（显式广播才能穿过 `NOT_EXPORTED`），收到后 `Process.killProcess(Process.myPid())` 自杀重启，与 `am crash com.android.systemui` 等价但不需要 root 也不需要 adb。有 root 时仍走原来的作用域列表（su 命令）。Toast 文案用新增的 `restart_scope_requested`（「已请求重启系统界面」）。
+
+25. 2026-10-07 **音乐应用页两个默认项**：① `showSystemApps` 默认由 `true` 改 `false`——列表里绝大多数是系统组件，默认打开只会让用户找不到自己装的播放器；② `loadMusicSelection` 去掉 `unrestricted = packages.isEmpty()`，改为恒 `false`，**默认任何应用都不勾选**，与第 23 条 `Config.packageAllowed` 的语义对齐。「全部应用」仍作为可切换选项保留在界面上，但不再是默认值。

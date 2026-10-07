@@ -217,7 +217,8 @@ internal fun LockMusicAppsPage() {
     var apps by remember { mutableStateOf(repository.cachedApps()) }
     var loading by remember { mutableStateOf(apps.isEmpty()) }
     var selection by remember { mutableStateOf(loadMusicSelection(context)) }
-    var showSystemApps by remember { mutableStateOf(true) }
+    // 默认不显示系统应用：列表里绝大多数是系统组件，默认打开只会让用户难找。
+    var showSystemApps by remember { mutableStateOf(false) }
     var query by remember { mutableStateOf("") }
     var searchExpanded by remember { mutableStateOf(false) }
 
@@ -700,14 +701,16 @@ private data class MusicSelection(val unrestricted: Boolean, val packages: Set<S
     fun isSelected(packageName: String): Boolean = unrestricted || packages.contains(packageName)
 }
 
+/**
+ * 默认任何应用都不勾选。
+ *
+ * 旧逻辑是 `unrestricted = packages.isEmpty()`，也就是「还没设置过＝允许全部」，
+ * 装好之后没做任何选择时任何 App 的 MediaSession 都能拉起覆盖层。现在与
+ * [Config.packageAllowed] 对齐：默认空勾选＝不启用，用户必须显式勾选；
+ * 「全部应用」仍作为一个可切换的选项留在界面上，但不再是默认值。
+ */
 private fun loadMusicSelection(context: Context): MusicSelection =
-    if (Config.allPackagesDisabled(context)) {
-        // 已全部取消：必须与“未设置”区分开，否则会被误判为允许全部。
-        MusicSelection(unrestricted = false, packages = emptySet())
-    } else {
-        val packages = Config.selectedPackages(context)
-        MusicSelection(unrestricted = packages.isEmpty(), packages = packages)
-    }
+    MusicSelection(unrestricted = false, packages = Config.selectedPackages(context))
 
 /** 从 Vector/LSPosed 服务读取框架信息；legacy 模块拿不到服务时返回 null。 */
 private fun loadFrameworkDetails(context: Context): FrameworkDetails? {

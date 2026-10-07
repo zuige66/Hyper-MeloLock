@@ -26,6 +26,19 @@ public final class Config {
     private static final String NONE = "__NONE__";
     static final String FINGERPRINT = "Redmi/gauguinpro/gauguinpro:16/BP2A.250605.031.A3/OS3.0.303.0.WNKCNXM:user/release-keys";
 
+    /**
+     * 无 root 时重启 SystemUI 的通道：配置端发这条广播，注入在 SystemUI 里的模块自己
+     * kill 自己（等价一次 SystemUI 重启，和 `am crash` 效果一样）。
+     *
+     * 为什么需要它：Xposed 模块的 hook 只在进程启动时装载，改完配置/作用域必须重启
+     * 目标进程。常规做法是 `su -c killall com.android.systemui`，但 SukiSU 这类环境
+     * 下 `su` 对应用可能完全不可用（本机实测 `su: inaccessible or not found`），
+     * 重启作用域这个功能就变成摆设。模块既然已经跑在 SystemUI 里，就不需要 root。
+     */
+    public static final String ACTION_RESTART_SYSTEMUI = "io.github.melolock.action.RESTART_SYSTEMUI";
+    /** 广播的目标包：显式指定才能送达 SystemUI 进程里注册的接收器。 */
+    public static final String SYSTEMUI_PACKAGE = "com.android.systemui";
+
     // ── 锁屏三元素（时间 / 专辑封面 / 播放器）的可编辑参数 ──────────────────────
     // 键名同时用作 SharedPreferences 键与 Provider 的 key 列，值统一按字符串存取，
     // 这样新增参数不需要再改 Provider 的列投影。
