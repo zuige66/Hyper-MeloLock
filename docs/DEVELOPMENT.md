@@ -512,3 +512,8 @@ adb -s 1b3a7d8 reboot
     - `elementSignature`（三元素参数）→ 才 `restore("elements-changed")` 并在下一帧 `render()` 重建。
 
     顺带收益：改背景样式不再重建场景，锁屏重现时直接生效，也不会再有露出原生壁纸的那一瞬。
+
+    还有一个周期性卡顿源：媒体层每 2 秒交一次快照（带进度），而 `applySnapshot()` 每次都
+    `setImageBitmap(snapshot.art)` —— **给 ImageView 重设同一张 bitmap 也会触发重绘**，
+    等于每 2 秒强制重渲染一次**全屏模糊层**。改为用 `shownArtwork` 比对，只在封面真换了才重设，
+    文本与进度照旧每次更新（很便宜）。

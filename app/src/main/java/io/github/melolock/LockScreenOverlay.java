@@ -164,6 +164,8 @@ final class LockScreenOverlay {
     private TextClock immersiveClock;
     private Button notificationButton;
     private MediaSource.Snapshot shown;
+    /** 最近一次铺进三个 ImageView 的封面；比对用，避免每 2 秒重复触发全屏模糊层重绘。 */
+    private android.graphics.Bitmap shownArtwork;
     private ViewTreeObserver guardObserver;
     private boolean playerSceneVisible;
     private boolean artworkFallbackPending;
@@ -350,7 +352,13 @@ final class LockScreenOverlay {
     /** 把一帧数据铺到已建好的视图上；不涉及可见性，供正常渲染与熄屏预建共用。 */
     private void applySnapshot(MediaSource.Snapshot snapshot) {
         shown = snapshot;
-        baseBlur.setImageBitmap(snapshot.art); cover.setImageBitmap(snapshot.art); cardArt.setImageBitmap(snapshot.art);
+        // 只有封面**真的换了**才重新 setImageBitmap：媒体层每 2 秒交一次快照（带进度），
+        // 而给 ImageView 重设同一张 bitmap 也会触发重绘 —— 全屏模糊层每 2 秒被强制重渲染一次，
+        // 这本身就是周期性卡顿。文本与进度照旧每次更新（很便宜）。
+        if (snapshot.art != shownArtwork) {
+            shownArtwork = snapshot.art;
+            baseBlur.setImageBitmap(snapshot.art); cover.setImageBitmap(snapshot.art); cardArt.setImageBitmap(snapshot.art);
+        }
         title.setText(emptyAs(snapshot.title, "未知曲目")); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
         playPause.setText(snapshot.playing ? "Ⅱ" : "▶");
         updateProgress();
@@ -799,7 +807,7 @@ final class LockScreenOverlay {
         // 页面切换动画可能只跑到一半就被撤层：复位通知栈的动画属性，
         // 否则下次 show() 出来的是一张全透明的通知列表。
         if (notifications != null) { notifications.animate().cancel(); endNotificationsLayer(); notifications.setAlpha(1f); notifications.setTranslationY(0f); }
-        cancelArtworkFallback(); unregisterGuard(); shown = null; expanded = false; playerSceneVisible = false; restoreChangedViews();
+        cancelArtworkFallback(); unregisterGuard(); shown = null; shownArtwork = null; expanded = false; playerSceneVisible = false; restoreChangedViews();
         if (foreground != null && foreground.getParent() == root) root.removeView(foreground);
         // background 挂在窗口根（见 create()），这里按实际父容器移除。
         if (background != null && background.getParent() instanceof ViewGroup) ((ViewGroup) background.getParent()).removeView(background);
