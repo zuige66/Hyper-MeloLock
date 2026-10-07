@@ -21,6 +21,10 @@
 
 ## 最近完成
 
+- **解锁停顿 + 配置读取容错 + 背景样式分档（2026-10-07）**：
+  1. **解锁时「沉浸式壁纸停顿一下」（时有时无）**：背景层挂在窗口根（为了盖住桌面壁纸），却要等 `finishSuspend`（+150ms）才 `GONE`，而锁屏根在 +36ms 就已 `alpha=0` —— 中间那张**静止的模糊封面**就是停顿。现在 `suspend()` 里背景跟前景同节奏淡出 120ms，硬隐藏仍由 `finishSuspend` 兜底；**`resume()` 必须复位 `background.alpha=1f`**。
+  2. **`Config.enabled()` 把「读不到」当成「关了」**：SystemUI 侧配置靠 ContentProvider 读，偶发查询失败时旧代码 `return false` → 模块被判成关闭、场景被 `restore()` 撤掉，表现为「改完外观没反应 / 锁屏上东西没了」且时好时坏。新增 `Config.enabledOrNull()`（读不到返回 `null`），`updateSwitch()` 与 `render()` 遇到 `null` **保持现状不动**；读到 `false` 才撤层。
+  3. **三档背景样式做出区别**：`深色玻璃` blur 28dp / 遮罩原样，`浅色玻璃` blur 14dp / 遮罩 ×0.55，`纯色沉浸` 不铺封面铺纯色。原先只差 28 与 18dp 模糊，肉眼等于没差，用户会认为「调了不生效」。
 - **外观改完不生效 / 底部入口对齐 / 渐变背景漏色（2026-10-07）**：
   1. **外观参数（含「背景样式」三项）改完不生效** —— 场景跨锁屏周期复用带来的回归：`create()` 是唯一读配置的地方，而解锁后场景只 `suspend()` 保留、`resume()` 复用，于是 `create()` 一辈子只跑一次。改法：`create()` 收尾算 `appearanceSignature`（元素参数 + 背景样式/颜色/强度 + 封面圆角），`resume()` 比对，不同就 `restore("appearance-changed")` 再用保留的快照重建（**必须 `main.post` 到下一帧**，`resume()` 站在 pre-draw 里不能当场 `addView`）。「纯色沉浸」顺带做出区别：`style == 2` 不铺封面、改铺一层 `overlayColor` 纯色（原来三档只差模糊半径，肉眼分不出来）。
   2. **底部「展开通知 / 返回播放器」入口与手电筒/相机对齐** —— 那两个图标属于 MIUI 的 `com.miui.keyguard.shortcuts`，id 与网上流传的名字对不上。做法是先 `adb shell uiautomator dump /sdcard/ui.xml` + `adb pull` 抓真机视图树（**屏幕熄灭时抓不到 keyguard，必须锁屏亮着抓**），看清后再写判据：真机是 `keyguard_shortcut_container` 里挂 `shortcut_view_left_layout` / `shortcut_view_right_layout`（均 289×289，顶边 y=2111，中心 2255）。实现按 id 优先（两个 resource 包都试）+ 几何兜底；**只在 `keyguardLocked() && interactive()` 时量**（场景常在桌面/灭屏时预建，那会儿底部没有东西），**尝试次数封顶**（`showMusic()` 每秒都会走到）。

@@ -145,12 +145,27 @@ public final class Config {
     }
 
     public static boolean enabled(Context context) {
+        Boolean value = enabledOrNull(context);
+        return value != null && value;
+    }
+
+    /**
+     * 取开关状态，**读不到时返回 `null`**（与「读到关闭」区分开）。
+     *
+     * 为什么要单独一个方法：SystemUI 侧只能通过 ContentProvider 读，而 Provider 在配置端
+     * 正在写盘/被系统整理时可能**偶发**查询失败。旧写法把异常一律当「关闭」，于是配置端
+     * 每改一次外观（每次写盘都会 notifyChange），SystemUI 就有一小段概率把模块判成关闭、
+     * 直接 `restore()` 撤掉场景——用户看到的是「改完设置锁屏上就什么都没有了」 /
+     * 「改完没反应」，而且「有时有、有时没有」。所以：读到 false 照旧关闭（失败关闭原则不变），
+     * 读失败则保持上一次的状态不动，并打日志。
+     */
+    public static Boolean enabledOrNull(Context context) {
         if (PACKAGE.equals(context.getPackageName())) {
             return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY, false);
         }
         try (Cursor cursor = context.getContentResolver().query(URI, null, null, null, null)) {
             return cursor != null && cursor.moveToFirst() && cursor.getInt(0) == 1;
-        } catch (RuntimeException error) { return false; }
+        } catch (RuntimeException error) { return null; }
     }
     public static boolean setEnabled(Context context, boolean enabled) {
         try {

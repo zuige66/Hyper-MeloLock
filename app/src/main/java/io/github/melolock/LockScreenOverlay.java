@@ -220,7 +220,17 @@ final class LockScreenOverlay {
         media = new MediaSource(context, snapshot -> {
             try { render(snapshot); } catch (Throwable error) { Log.e(TAG, "Overlay render failed", error); restore("render-error"); }
         });
-        switchObserver = new ContentObserver(main) { @Override public void onChange(boolean ignored) { updateSwitch(); } };
+        switchObserver = new ContentObserver(main) {
+            @Override public void onChange(boolean ignored) {
+                updateSwitch();
+                // 诊断：确认「配置端写盘 → SystemUI 收到 → 与当前场景不一致」这条链路是通的。
+                // 只在真的不一致时打一行，滑块拖动commit 几次也不会刷屏。
+                if (foreground != null && appearanceSignature != null
+                        && !appearanceSignature.equals(currentAppearanceSignature())) {
+                    Log.i(TAG, "Appearance differs from current scene; will rebuild on next lock");
+                }
+            }
+        };
     }
 
     void start() {
@@ -249,7 +259,14 @@ final class LockScreenOverlay {
     }
 
     private void updateSwitch() {
-        boolean enabled = Config.enabled(context);
+        Boolean read = Config.enabledOrNull(context);
+        if (read == null) {
+            // Provider 偶发查不到 ≠ 用户关了模块。旧代码把两者混为一谈，导致「改完设置
+            // 锁屏上东西全没了 / 改完没反应」，且时好时坏（见 Config.enabledOrNull 注释）。
+            Log.w(TAG, "Config read failed; keeping previous switch state=" + lastEnabled);
+            return;
+        }
+        boolean enabled = read;
         if (lastEnabled == null || lastEnabled != enabled) Log.i(TAG, "Module enabled=" + enabled + " " + state());
         lastEnabled = enabled;
         if (enabled) media.start(); else { Log.i(TAG, "Module switched off; restoring " + state()); media.stop(); restore("switch-off"); }
@@ -264,7 +281,11 @@ final class LockScreenOverlay {
     }
 
     private void render(MediaSource.Snapshot snapshot) {
-        if (!Config.enabled(context)) { skip("disabled"); restore("render-disabled"); return; }
+        Boolean enabledRead = Config.enabledOrNull(context);
+        // 读不到（Provider 偶发失败）时什么都不做，保持现有画面；不能像旧代码那样当成
+        // 「模块已关闭」把场景撤掉——那正是「配配置改完锁屏上没东西 / 时好时坏」的来源。
+        if (enabledRead == null) { skip("config-unreadable"); return; }
+        if (!enabledRead) { skip("disabled"); restore("render-disabled"); return; }
         if (!root.isAttachedToWindow()) { skip("root-detached"); restore("render-root-detached"); return; }
         if (!lockscreenCycle) {
             // 下拉桌面通知栏时系统仍可能把 keyguard root 保持 attached。这个周期
@@ -372,23 +393,27 @@ final class LockScreenOverlay {
         background = new FrameLayout(context);
         baseBlur = new ImageView(context);
         baseBlur.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        // 0 深色玻璃 / 1 浅色玻璃：同一张封面做不同半径的高斯模糊；
-        // 2 纯色沉浸：干脆不用封面，整块背景就是「遮罩颜色」那一个色值 —— 这是三个选项里
-        // 唯一看得出「换了个东西」的一档（少 10dp 模糊肉眼基本分辨不出来）。
+        // 三档背景样式，**必须一眼看得出换了东西**：
+        //   0 深色玻璃 —— 封面强模糊（28dp）+ 遮罩按「遮罩强度」原样铺
+        //   1 浅色玻璃 —— 封面轻模糊（14dp）+ 遮罩乘 0.55，封面透出来更亮
+        //   2 纯色沉浸 —— 不铺封面，整块背景就是「遮罩颜色」那一个纯色值
+        // 之前三档只差 28dp/18dp 的模糊半径（约等于没差），用户反馈「调了不生效」就出在这。
         int style = Config.overlayStyle(context);
-        int blurDp = style == 2 ? 0 : (style == 1 ? 18 : 28);
+        int color = Config.overlayColor(context);
+        int alpha = Config.overlayAlpha(context);
+        int blurDp = style == 2 ? 0 : (style == 1 ? 14 : 28);
         if (blurDp > 0) baseBlur.setRenderEffect(RenderEffect.createBlurEffect(dp(blurDp), dp(blurDp), Shader.TileMode.CLAMP));
         background.addView(baseBlur, new FrameLayout.LayoutParams(-1, -1));
         View solidFill = new View(context);
-        solidFill.setBackground(new ColorDrawable(Config.overlayColor(context) | 0xFF000000));
+        solidFill.setBackground(new ColorDrawable(color | 0xFF000000));
         solidFill.setVisibility(style == 2 ? View.VISIBLE : View.GONE);
         background.addView(solidFill, new FrameLayout.LayoutParams(-1, -1));
         View baseScrim = new View(context);
-        int color = Config.overlayColor(context);
-        baseScrim.setBackground(new ColorDrawable((color & 0x00FFFFFF) | (Config.overlayAlpha(context) << 24)));
+        int scrimAlpha = style == 1 ? Math.round(alpha * 0.55f) : alpha;
+        baseScrim.setBackground(new ColorDrawable((color & 0x00FFFFFF) | (clamp(scrimAlpha, 0, 255) << 24)));
         background.addView(baseScrim, new FrameLayout.LayoutParams(-1, -1));
         Log.i(TAG, "Backdrop: style=" + style + " blur=" + blurDp + "dp color=" + Integer.toHexString(color)
-                + " alpha=" + Config.overlayAlpha(context));
+                + " alpha=" + alpha + " scrim=" + scrimAlpha);
         // 挂窗口根而不是锁屏根：真机采样（Unlock watch）显示系统解锁时是把整个
         // HyperOSKeyguardRootView 直接置 INVISIBLE + alpha 0，且动作发生在 suspend()
         // 触发之前——挂在它内部的层没有过渡窗口，父控件 alpha 归零就一起消失，露出的是桌面壁纸。
@@ -784,6 +809,15 @@ final class LockScreenOverlay {
         // 解锁时窗口正在切换，ViewPropertyAnimator 的回调可能根本不推进，
         // 那样前景组件就会一直留在桌面上（实测过）。
         foreground.animate().alpha(0f).setDuration(120).start();
+        // 背景层挂在窗口根，不随锁屏根被系统带走（刻意如此：上滑时要它盖住桌面壁纸）。
+        // 但它原先要等 finishSuspend（+150ms）才「啪」地消失，而锁屏根在 +36ms 就已经
+        // alpha=0 —— 中间那 100 多毫秒里用户看到的是一张**静止不动**的模糊封面，
+        // 就是反馈的「解锁时沉浸式壁纸停顿一下」；系统退场动画时长不定，所以时有时无。
+        // 现在让它跟前景同节奏淡出；硬隐藏仍由 finishSuspend 兜底，绝不留下残影。
+        if (background != null) {
+            background.animate().cancel();
+            background.animate().alpha(0f).setDuration(120).start();
+        }
         main.postDelayed(finishSuspend, 150);
     }
 
@@ -793,7 +827,11 @@ final class LockScreenOverlay {
         foreground.animate().cancel();
         foreground.setAlpha(1f);
         foreground.setVisibility(View.GONE);
-        if (background != null) background.setVisibility(View.GONE);
+        if (background != null) {
+            background.animate().cancel();
+            background.setAlpha(1f);
+            background.setVisibility(View.GONE);
+        }
         if (notificationButton != null) notificationButton.setVisibility(View.GONE);
         // 原生壁纸/时钟交还系统：桌面期间我们完全不碰这些层。
         long handedBackAtMs = android.os.SystemClock.elapsedRealtime() - suspendStartedAtMs;
@@ -860,7 +898,12 @@ final class LockScreenOverlay {
         foreground.animate().cancel();
         foreground.setAlpha(1f);
         foreground.setVisibility(View.VISIBLE);
-        if (background != null) background.setVisibility(View.VISIBLE);
+        if (background != null) {
+            // suspend() 会把背景淡到 0，复用时必须复位，否则锁屏重现时背景是透明的。
+            background.animate().cancel();
+            background.setAlpha(1f);
+            background.setVisibility(View.VISIBLE);
+        }
         if (notificationButton != null) notificationButton.setVisibility(View.VISIBLE);
         main.post(this::alignEntryWithShortcutRow);
         showMusic();

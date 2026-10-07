@@ -490,3 +490,7 @@ adb -s 1b3a7d8 reboot
     两个坑：① **必须在真的站在锁屏上时才量**——场景经常是在桌面或灭屏时 `preCreate()` 好的，那一刻 keyguard 底部什么都没有（`keyguardLocked() && interactive()` 两个条件都过才量）；② `showMusic()` 每次媒体回调都会走（播放时约每秒一次），所以**尝试次数要封顶**（`entryAligned` 成功后直接返回，失败最多 5 次，诊断清单只打前 3 次）。
 
     注：这两个快捷图标所在的层在窗口根里，和我们的 `background` 一样；`background` 插在它们**下面**（`windowRoot.addView(background, 0)`），所以背景不会盖住手电筒/相机。
+
+29. 2026-10-07 **解锁时「沉浸式壁纸停顿一下」（时有时无）**。背景层为修「上滑露壁纸」挂在**窗口根**，不会随锁屏根被系统带走；而真机采样显示锁屏根在 `t=+36ms` 就已经 `INVISIBLE / alpha=0`，我们却要等 `finishSuspend`（`+150ms`）才把背景 `GONE`。中间那 100 多毫秒里屏幕上是**一张静止不动的模糊封面** —— 这就是那一下停顿；系统退场动画时长每次都不同，所以时有时无。改法：`suspend()` 里让背景跟前景**同节奏淡出 120ms**（硬隐藏仍由 `finishSuspend` 兜底），`resume()` / `finishSuspend` 复位 `alpha=1f`。**注意 `resume()` 必须把背景 alpha 复位**，否则锁屏重现时背景是透明的。
+
+30. 2026-10-07 **「读不到配置」≠「模块被关掉」**。`Config.enabled()` 在 SystemUI 侧靠 ContentProvider 读，查询**偶发**失败（配置端正在写盘、Provider 被整理）时旧代码 catch 后 `return false`，于是「改一次外观」就有一小段概率把模块判成关闭 → `restore()` 撤场景 → 用户看到「改完没反应 / 改完锁屏上什么都没有」，而且时好时坏。改为新增 `Config.enabledOrNull()`：**读不到返回 `null`**；`updateSwitch()` 与 `render()` 收到 `null` 时**保持现状不动**（读到 `false` 才真的撤层，失败关闭原则不变）。同一轮把三档背景样式做出区别（见第 27 条）：`深色玻璃` blur 28dp 遮罩原样、`浅色玻璃` blur 14dp 遮罩×0.55、`纯色沉浸` 不铺封面铺纯色 —— 之前只差 28/18dp 模糊，肉眼等于没差。
