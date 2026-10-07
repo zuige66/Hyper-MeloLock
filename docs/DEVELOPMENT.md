@@ -440,3 +440,9 @@ adb -s 1b3a7d8 reboot
 19. 2026-10-06 **播放器页 ↔ 通知页共享元素切换**，并修掉三个真机反馈：① 展开通知后左下拉仍能拉出通知（`sceneShowing()` 不该带 `playerSceneVisible`）；② 桌面下拉露出原屏保时间（suspended 期间要继续按住原生时钟层，但不碰壁纸层）；③ 切回播放器时间闪一下（真凶是返回时把含时钟的 `foreground` 从 alpha 0 淡入）。附带：位移上限收到 96dp 且展开/返回复用同一值、`bringToFront()` 换成 `ensureOnTop()`（避免每帧 `requestLayout`）。
 
 20. 2026-10-07 **首个 Release**：仓库推送到 <https://github.com/zuige66/Hyper-MeloLock>，v0.2.0 正式签名 APK（v1+v2+v3）发布到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases/tag/v0.2.0)。补 `.gitignore`（签名密钥、`.workbuddy/`、临时截图）。发布用 token 只活在临时文件里，用完即删（**并且应当在 GitHub 上吊销**）。
+
+22. 2026-10-07 **重启作用域列表改为本模块自己的作用域，并在点开前先探 root**。首页右上角刷新图标（`MiuixIcons.Refresh`，`actionDescription` 用 `restart_scope`）原本直接弹出 `RestartScopeDialog`，存在两个问题：① 列表是迁入的 HyperIsland 硬编码 5 项（`com.android.systemui` / `com.milink.service` / `com.android.settings` / `com.xiaomi.xmsf` / `com.android.providers.downloads`），**后四项本模块根本没有 hook**；② root 判定发生在「点了确定之后」——`RestartScopeService.restart()` 走 `Runtime.exec("su")`，失败才显示 `restart_root_required`，没 root 时列表照样弹出来，用户只能白点一次。
+
+    改为：`RestartScopeService` 新增 `hasRoot()`（开一个 `su` 跑 `id`，以 `waitFor() == 0` 判定），`OverviewPage` 的 `onAction` 在协程里先调用，**有权限才 `showRestartDialog = true`，否则 Toast `restart_root_required`**。同时 `RestartScopeDialog` 的 `targets` 用 `stringArrayResource(R.array.xposed_scope)` 与内置 `RestartScopeTargets` 求交集，**只列 Manifest 里真正声明过的作用域**——当前 `xposed_scope.xml` 只有 `com.android.systemui` 一项，将来往该文件加一项列表会自动跟上。注意 `hasRoot()` 会触发 root 管理器（SukiSU）的授权弹窗。
+
+23. 2026-10-07 **未勾选音乐应用则不启用沉浸锁屏**。`Config.packageAllowed()` 原本是 `raw.isEmpty() || (!NONE.equals(raw) && allowedPackages(context).contains(packageName))`，即**未设置＝允许全部**：用户刚装好、还没在「音乐应用」页做任何选择时，任何 App 的 MediaSession 都能拉起覆盖层。现在空值与哨兵 `NONE` 一律 `return false`，**必须显式勾选某个播放器包名才放行**。配套把 `enabledAppCount()` 的 `-1`（原「允许全部」返回值）去掉，改为直接返回 `selectedPackages(context).size()`；首页「已开启应用」数据卡因此不再需要区分「全部 / 0」。

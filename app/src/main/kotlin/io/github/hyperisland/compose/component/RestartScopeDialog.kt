@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringArrayResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.state.ToggleableState
@@ -94,12 +95,18 @@ internal fun RestartScopeDialog(
     preselectedPackages: Set<String> = emptySet(),
 ) {
     val scope = rememberCoroutineScope()
-    val targets = remember(allowedPackages) {
-        if (allowedPackages == null) {
-            RestartScopeTargets
-        } else {
-            RestartScopeTargets.filter { it.packageName in allowedPackages }
-        }
+    // 只列出本模块在 Manifest（R.array.xposed_scope）里真正声明过的作用域。
+    // 迁入的 HyperIsland 列表里有 miLink / xmsf / 下载管理这些我们根本没 hook 的包，
+    // 按原列表全部列出来会误导用户去重启无关进程；反过来将来在 xposed_scope.xml
+    // 里新增一项，这里也会自动跟上。
+    val declaredScopes = stringArrayResource(R.array.xposed_scope).toSet()
+    val targets = remember(allowedPackages, declaredScopes) {
+        RestartScopeTargets
+            .filter { it.packageName in declaredScopes }
+            .let { list ->
+                if (allowedPackages == null) list
+                else list.filter { it.packageName in allowedPackages }
+            }
     }
     var selectedPackages by remember(show, targets) {
         mutableStateOf(preselectedPackages.intersect(targets.map { it.packageName }.toSet()))

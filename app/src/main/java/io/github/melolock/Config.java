@@ -186,12 +186,10 @@ public final class Config {
     /**
      * 首页数据卡用的已开启应用数。
      *
-     * @return 未设置（允许全部）时为 -1，已全部取消时为 0，其余为实际勾选数量。
+     * @return 实际勾选数量；未选中任何播放器时为 0（此时不启用沉浸锁屏）。
      */
     public static int enabledAppCount(Context context) {
-        if (allPackagesDisabled(context)) return 0;
-        Set<String> packages = selectedPackages(context);
-        return packages.isEmpty() ? -1 : packages.size();
+        return selectedPackages(context).size();
     }
 
     /** 当前设备是否落在已验证的 SystemUI 构建指纹内，与 HookEntry 的加载门禁一致。 */
@@ -199,9 +197,17 @@ public final class Config {
         return FINGERPRINT.equals(android.os.Build.FINGERPRINT);
     }
 
+    /**
+     * 是否允许这个播放器驱动沉浸锁屏。
+     *
+     * **必须在「音乐应用」页显式勾选**：旧的语义是「未设置＝允许全部」，那样用户还
+     * 没做任何选择时任何 App 的 MediaSession 都能拉起覆盖层。现在未设置（空值）与
+     * 全部取消（哨兵 `NONE`）一律不放行，只有真正勾选过的包名才通过。
+     */
     public static boolean packageAllowed(Context context, String packageName) {
         String raw = readString(context, ALLOWED_PACKAGES, "");
-        return raw.isEmpty() || (!NONE.equals(raw) && allowedPackages(context).contains(packageName));
+        if (raw.isEmpty() || NONE.equals(raw)) return false;
+        return allowedPackages(context).contains(packageName);
     }
 
     public static boolean setAllowedPackages(Context context, Set<String> packages) {

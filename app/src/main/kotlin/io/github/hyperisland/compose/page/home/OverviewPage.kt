@@ -3,6 +3,7 @@ package io.github.hyperisland.compose.page.home
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -40,12 +41,14 @@ import io.github.hyperisland.R
 import io.github.hyperisland.XposedPrefsSyncApp
 import io.github.hyperisland.compose.component.CollapsingPage
 import io.github.hyperisland.compose.component.RestartScopeDialog
+import io.github.hyperisland.compose.service.RestartScopeService
 import io.github.hyperisland.compose.component.SettingsAction
 import io.github.hyperisland.compose.data.FlutterPrefsRepository
 import io.github.hyperisland.compose.service.HomeSystemInfo
 import io.github.hyperisland.compose.service.SystemInfoProvider
 import io.github.hyperisland.compose.service.TestNotificationService
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -153,7 +156,18 @@ internal fun OverviewPage(
         title = "HyperIsland",
         actionIcon = MiuixIcons.Refresh,
         actionDescription = stringResource(R.string.restart_scope),
-        onAction = { showRestartDialog = true },
+        // 先探测 root 再决定要不要弹列表：没有 root 时列出来也没意义，
+        // 用户只会在点「确定」之后才看到失败。
+        onAction = {
+            scope.launch {
+                if (RestartScopeService.hasRoot()) showRestartDialog = true
+                else Toast.makeText(
+                    context,
+                    context.getString(R.string.restart_root_required),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+        },
         horizontalContentPadding = 12.dp,
         topContentPadding = 12.dp,
         bottomContentPadding = 16.dp,
