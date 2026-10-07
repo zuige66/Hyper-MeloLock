@@ -9,6 +9,12 @@
 - `LockScreenOverlay.java` 由 Hook 注入 SystemUI 进程：任何改动都必须失败关闭（异常退回原生锁屏），并且**不要与其他会话/人工编辑并行改这个文件**。
 - 新增锁屏可调参数时：键名与默认值加到 `Config.java` 的 `ELEMENT_DEFAULTS`，Provider 走 `/elements` 的 key/value 通道，**不要**再去改 `ConfigProvider` 的列投影。
 - **首页的真身是 `LockScreenPages.kt` 的 `LockHomePage`，不是 `page/home/OverviewPage.kt`**：后者只提供共享卡片组件（`OverviewStatusGrid` / `OverviewInfoCard` / `OverviewAlertCard` / `HomeOverviewState`），`OverviewPage` 这个 Composable **没有任何调用点、是死代码**。改首页（含右上角按钮）必须改 `LockHomePage`；改 `OverviewPage` 真机上不会有任何反应（2026-10-07 已踩过一次）。
+- **装机后必须自证版本，别假设「装了就生效」**（2026-10-07 踩过：源码与设备上的 APK 都是新版、逐 dex 搜字符串确认过，但新起的 SystemUI 进程跑的仍是**上一版** dex，整轮验证白做）。做法：每个入口在 `handleLoadPackage` 里打一行 `rev=<修订串>`（`ShortcutAnimBackdrop` 已这么做），**先看到新 rev 再让人复现**。注意 `ProtectionDomain.getCodeSource()` 在 SystemUI 进程里返回 **null**（模块 dex 由 `InMemoryDexClassLoader` 加载），只能用手工修订串；要离线确认设备上装的是哪一版：`pm path` → `adb pull base.apk` → python 逐个 dex 搜特征字符串。
+- **改别人窗口里的东西时，优先「改它已有图层的 background」，不要「插一层自己的视图」**（2026-10-07 血泪）：插自己的视图＝新增一份「每帧都要重画的全屏内容」，实测把转场那 1 秒拖到 ~20fps（用户反馈「很卡」）；而改它已有图层的背景成本不变（都是一张图铺满），并且**显隐归宿主管**——「忘记撤层盖住 app」这类坑在结构上不存在。
+- **Xposed 入口不止一个**：`app/src/main/assets/xposed_init` 现在有 `HookEntry`（锁屏覆盖层主入口）与 `ShortcutAnimBackdrop`（手电筒/相机转场：把 MIUI 动画窗那层全屏遮罩的 background 换成我们的封面）。增删入口必须同步这个清单。**临时诊断探针要做成独立入口并只登记在清单里，结论拿到后源码与清单一并删掉**——既不跟并行会话抢文件，也不把观测成本留在产品里。
+- **钩子别按类名去找 MIUI 插件类**：`com.miui.keyguard.shortcuts.*` 是插件化动态加载的，在 SystemUI 基础 `param.classLoader` 里 `findClassIfExists` 全部 NOT FOUND；要动插件窗口就按**窗口标题**认（`WindowManagerImpl.addView`；本 ROM 上 `WindowManagerGlobal.addView` 签名对不上）。`com.android.keyguard.*`（含 `shortcut.MiuiShortcutController`）在 SystemUI 自己那边，可以直接钩。
+- **钩子别用 `param.classLoader` 找模块自己的类**：legacy Xposed 下模块类由模块自己的 ClassLoader 加载，字符串查找会 `ClassNotFoundException`；要钩自己人就用类字面量或反射读字段。
+- **撤销/回滚这类「一次动很多文件」的 git 操作，做完立刻 `git status` 复核**：2026-10-07 `git revert` 后出现过 `app/` 整树 ~300 项被删（我这条命令只动 4 个文件，疑并行会话所致），恢复命令是 `git checkout -- app`（HEAD 里全在，10 秒恢复）。
 - **装完 APK 必须重启 SystemUI 才会加载新的 Hook 代码**，顺序是先装再重启。**无 root 重启法**：`adb -s 1b3a7d8 shell am crash com.android.systemui`（实测有效，SystemUI 崩掉后自动重启、PID 立刻变化；`am force-stop` 无效、`su` 从 adb 不可用）。锁屏行为异常时先比 `ps` 里 SystemUI 的 ETIME 和 APK 安装时间，再看 `logcat | grep "Elements: clock="` 有没有出现——没有就说明跑的还是旧代码。
 
 ## 仓库与发布

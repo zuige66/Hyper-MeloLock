@@ -178,7 +178,57 @@ hook 装不上时会打 `none on <类名> (methods=N, GoingAway*=…)` —— �
 **踩坑**：把 `preShowForWake` 写成字段初始化器里的 lambda 时，用**简单名**引用后面声明的字段（`foreground`/`background`/`main`…）会被 javac 判为「非法前向引用」。
 本项目的规矩：**改方法引用 `this::runPreShowForWake`**，把实现体放进普通方法。
 
+### 手电筒 / 相机转场：改 MIUI 那层遮罩的背景（**不新增视图**）
+
+**现象**：点左下角手电筒或右下角相机时，转场过程中会看到**原生壁纸**一闪（进入与退出两个方向都会）。
+
+**根因（日志 + 离线 dex 解析双证）**：MIUI 快捷方式转场时 `com.android.keyguard.shortcut.MiuiShortcutController`
+在 `onFullscreenAnimationStart` 分支调 `KeyguardPanelViewController.hideWindowViewByOccludedAnim()`，
+而后者本体只有一句 `Folme.useAt(notificationShadeWindowView).state().to(0f, hideEase)` —— 把整个
+`NotificationShadeWindowView`（窗口标题 `NotificationShade`，**type=2040**）alpha 动到 0。我们的背景层
+（挂窗口根 index 0）与前景层（挂锁屏根）都在这扇窗里，于是一起消失，**露出最底层的系统壁纸 surface**。
+退出方向是同一件事反过来（shade 的 alpha 淡回来）。注意：**那段时间 `MeloLock` 一行日志都没有** ——
+不是我们的代码在动。
+
+**做法**：`ShortcutAnimBackdrop` 只做一件事 —— 把 MIUI 自己动画窗里**本来就每帧在画**的那层全屏遮罩的
+background 换成我们的封面。
+
+真机实测结构（OS3 16.03，`dumpsys`＋探针确认）：
+
+```
+Window{miui_keyguard_shortcut  type=2017(TYPE_STATUS_BAR_SUB_PANEL)}     ← 按窗口标题认
+ └─ FrameLayout 1080x2400                                              ← 窗口内容视图
+     └─ ShortcutOccludedAnimView 1080x2400                             ← MIUI 插件类（按类名认）
+         ├─ View 1080x2400 bg=ColorDrawable                            ← **我们改它的 background**
+         └─ ScaleShortcutImageView 289x289                             ← 图标放大（不动）
+```
+
+- 认窗口：钩 `WindowManagerImpl.addView`（`WindowManagerGlobal.addView` 在本 ROM 上签名对不上）按标题匹配；
+- 认那层：在 `ShortcutOccludedAnimView` 子树里取「不是 ImageView、且 background 是 ColorDrawable」的子 View
+  （图标是 `ScaleShortcutImageView`，289×289，不会被选中）；
+- 重设时机：窗口加入时 + `onFullscreenAnimationStart`（进入）与 `onUnoccludedAnimationStart`（退出），
+  各带一次 +150ms 延后重试（MIUI 铺尺寸/加子视图比回调晚一点）；
+- 背景内容与 `LockScreenOverlay.applyBackdrop()` 对齐：风格 0 封面＋遮罩原样 / 1 遮罩 ×0.55 / 2 纯色；
+  封面**缩到 1/32 再拉满**（廉价模糊，等效软掉），**封面＋遮罩预合成到一张 1/4 分辨率位图**交给 `BitmapDrawable`。
+
+**为什么这样就不卡**：这层是 MIUI 自己的，**每帧本来就在画**；我们只是把「一张纯色铺满」换成「一张位图铺满」，
+每帧绘制成本相同（都是 1 次全屏填充）。前一版之所以卡，是**新增了一层自己的视图**，那层每帧都要重画全屏内容
+（`RenderEffect` 版实测转场 1 秒内连续 25 帧 41~74ms ≈ 20fps；换成廉价模糊后中位仍 38→33ms）。
+
+**顺带白拿的三个好处**（前一版踩过的坑在结构上不存在了）：
+- **显隐不用我们管**：那层归 MIUI，它自己显示/隐藏/移除窗口，我们的背景跟着走 —— 不会「忘记撤层盖住相机」；
+- **不会压着 app**：我们没加任何自己的层，最多是替换了 MIUI 要画的东西；
+- **失败关闭**：认不出窗口/找不到那层/取不到封面 → 什么都不做，退化成「和原生一样」（最多照旧露一下壁纸）。
+
+**诊断日志**：`[scrim] rev=<修订串>`（**装机后先看这行**，历史上有过「源码与 APK 都是新版但进程跑旧 dex」的事故）/
+`[scrim] scrim background replaced: 1080x2400|bitmap` / `[scrim] backdrop built: style=0 270x600 color=ff111827 scrim=150` /
+`[scrim] scrim view not found yet`（MIUI 结构变了就会看到这行，功能静默失效但不影响原生行为）。
+
+**已知边界**：相机**冷启动**会把 SystemUI 主线程整块堵住（实测 3.5s / 5.1s / 5.3s，`gfxinfo` 里是一个几千毫秒的单帧），
+那段时间屏幕是冻住的 —— **与模块无关**（没有本功能时同样存在），本功能也治不了它。
+
 ### 切歌的空窗期：保住上一帧，不撤层
+
 
 真机日志显示，换歌时 App 会先**摘掉 metadata 里的封面 bitmap、只留 URI**，约 300ms 后才补齐新封面；这段时间内会话也可能短暂不合格（playbackState 为空或非 PLAYING）。三条旧的处理会把这个过渡态当成「播放停了」：
 
