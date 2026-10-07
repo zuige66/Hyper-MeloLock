@@ -19,6 +19,45 @@
 - **版本号**：`app/build.gradle.kts` 的 `versionCode` / `versionName`，发版时改这里并打同名 tag。
 - **不要提交**：`local.properties`、`.workbuddy/`、临时调试截图 `hmsc-*.png`、任何 `*.keystore` / `*.jks`。**要提交的展示图放在 `docs/images/`**（`icon.png` 为应用图标，供 README 引用）。
 
+## 调试与验证方法论（真机日志驱动）
+
+**取数据**
+
+- 先抓全量再分析：`logcat -d -v time -s MeloLock:V`，过滤用 `grep -E "/MeloLock\("`（**标签后是 PID 不是冒号**），滤噪 `grep -v "Media ready from bitmap"`。
+- **量化代替人眼**：日志存成文件，用脚本按每行时间戳算**相邻采样间隔**，>60ms 的就是主线程被占住的时刻，再对照那一刻在跑什么逻辑。靠这招定位到「诊断探针自己打 50 行 logcat 造成卡顿」。
+- **视图树 dump 拿真 id/坐标**：`adb shell uiautomator dump /sdcard/ui.xml` + `adb pull`（**必须锁屏亮着，息屏抓不到 keyguard**）。别信网上流传的 id 名字。
+- **直接问 Provider 读配置真值**：`adb shell content query --uri content://io.github.melolock.config/state`。
+- 状态机日志用 `restore(reason)` + `skip(reason)` 去重；**「某段一条日志都没有」也是关键证据**（通常＝改错文件 / Composable 没被调用）。
+- 给事件加**可对账的时间戳**（如 `SCREEN_ON offFor=Nms`），才能把系统事件和用户操作节奏对上。
+- **分清事实与推测**：日志能证明什么、不能证明什么，要说清楚（例：「72 秒内无 SCREEN_ON ⇒ 按键未被系统受理」，而不是「大概是我们吞了」）。
+
+**定位**
+
+- 先分清「没生效」是**真没生效**还是**生效了但看不出来**（三档样式只差 28→18dp 模糊 = 用户说没生效，其实分不出差别）。
+- 引入「状态跨周期复用」后要立刻想到：**唯一读配置的地方要加指纹比对**，否则配置永远读不到第二次。
+- 指纹**分级**：会改视图树的（元素参数）才重建；纯参数（背景样式/遮罩）就地更新。分级顺带能消掉「重建窗口里露出原生层」这类副作用漏洞。
+- 怀疑卡顿先查自己的诊断代码（logcat 同步写、每帧日志）；再查重复的重活（同一 bitmap 重设也会重绘 → 全屏 RenderEffect 重渲染）。
+- 审计所有**提前 return 的分支**，看是否跳过了必须的动作（隐藏原生层、复位 alpha、重新测量）。
+
+**红线（违反过 / 都会咬人）**
+
+1. **不要在 pre-draw 回调里改视图树**（`addView`/`bringToFront`）→ 排队到下一帧。
+2. **不要每帧 `bringToFront()`** → 只在确实不在最上层时动（`ensureOnTop()`）。
+3. **不要在每帧路径里打 logcat**（同步写）→ 主线程被占，实测把采样间隔拖成 87~157ms。
+4. **临时诊断探针用完必须删**；「只打日志」不是零成本。
+5. **不要把「读不到」当成「关闭 / 为空 / 没勾选」** → 显式返回「未知」（`enabledOrNull`），保持上一次状态。
+6. **不要只挂 `ViewPropertyAnimator` 回调做隐藏**，必须 `Handler.postDelayed` 兜底（解锁时动画回调可能不推进）。
+7. **不要在屏幕还黑/未亮时做重活** → 判 `interactive()`；熄屏动画窗口里的 relayout 会挤压按键/唤醒时机。
+8. **不要给 ImageView 重设同一张 bitmap** → 用引用比对去重。
+9. **不要在 suspend 期间碰原生壁纸层**（解锁动画靠它，隐藏会露黑底）；时钟层则要继续按住。
+10. **新增的早退/重建分支要逐个核对副作用**，别只管主路径。
+11. **不要与其他会话/人工并行编辑 `LockScreenOverlay.java`**。
+12. **构建必须加 `timeout`**：Windows 杀毒锁 dex 会让构建挂 3 小时才 FAIL。
+13. **改动前先 `git commit`**（见下方事故记录）；**改完同步三处文档**。
+
+**验证闭环**：装 APK → 重启作用域（`am crash` 或模块广播）→ 让用户复现 → 读日志对账 → 提交。
+设备拒绝 ADB 注入输入事件，UI 交互只能人工；SELinux 拦 shell 写 app data，配置只能由用户在 App 里改。
+
 ## 最近完成
 
 - **「亮屏快按两下开机键，息屏后没再亮起来」（2026-10-07）**：日志里失败那次 `SCREEN_OFF` 后 **72 秒内没有任何 `SCREEN_ON`**，模块无崩溃/无撤层/SystemUI PID 未变 → **第二次按键是被系统丢弃的，不是模块吞键**（亮屏再点一次能亮，说明通路没问题；快按两下时按键落在熄屏动画窗口内）。不过日志也暴露一处 ours 的无用功：熄屏后 **49ms** 就 `resume reused scene … interactive=false` —— 屏幕已全黑，守卫却在「正要黑」的窗口里把两层重新置可见 + `bringToFront`（整棵窗口根 relayout），第二次按键恰好也落在同一窗口。改法：守卫 suspended 分支加 `interactive()` 条件，屏幕还黑就不 resume（亮屏秒显靠 `SCREEN_ON` 广播与亮屏后第一帧 pre-draw，不受影响）。另给 `SCREEN_ON` 补 `offFor=Nms`，这类问题以后能直接和按键节奏对账。
