@@ -114,7 +114,32 @@ adb -s 1b3a7d8 logcat -d | grep -E "Left-shade touch block armed|Left-shade gest
 # consumed → 每次成功吃掉的手势，带 x 坐标与序号
 ```
 
-**铁律**：不改 `suspend()` / `resume()` 内部时序（那是「熄屏秒显 + 解锁撤层」的地基，改过就出「快速开关屏露原屏保」回归）。
+**铁律（2026-10-07 修正）**：`suspend()` / `resume()` 的**生命周期结构**（解锁不销毁、保留实例复用、`finishSuspend` 兜底）不要动，那是「熄屏秒显 + 解锁撤层」的地基。但**撤层的时机必须靠实测校准、不能凭感觉**：曾经为了「好看」给背景层加过 120ms 淡出，实测反而让桌面被多盖 152~411ms（见下一节）。
+
+### 解锁时的撤层时机：别让盖子盖住已经出现的桌面
+
+`background` 挂在窗口根（`DecorView` index 0）是为了盖住原生壁纸，但**它盖住的时长必须和「桌面什么时候真的出现」对齐**，否则就是用户反馈的「上滑进桌面卡一下」。
+
+系统侧与模块侧的时间戳都在日志里，**直接对齐即可，不需要录屏**：
+
+```bash
+adb -s 1b3a7d8 logcat -v time | grep -E "keyguardGoingAway|showSurfaceRobustly mWin:Window\{[0-9a-f]+ u0 com.miui.home|/MeloLock\(|native layers handed back"
+```
+
+真机实测（2026-10-07，4 次解锁结论一致）：
+
+| 事件 | 相对 `keyguardGoingAway` |
+| --- | --- |
+| 桌面窗口 `wms.showSurfaceRobustly Window{com.miui.home/Launcher}` | **+92 ~ +184ms** |
+| 模块 `suspend reason=predraw-keyguard-unlocked` | **+301 ~ +318ms**（pre-draw 守卫在等窗口重绘） |
+| `native layers handed back at t=+Nms` | 再 +151 ~ +420ms |
+
+也就是：**桌面早就可见了，模块那块不透明层还要多盖 152~411ms**。`finishSuspend` 的 `postDelayed(150)` 只是其中一段，**背景层那 120ms 淡出同样在遮挡**。
+
+现在的做法：**`suspend()` 里背景层直接 `setVisibility(GONE)`，不做淡出。**
+依据是 `suspend()` 只在 `keyguardLocked()==false` 时触发（`predraw-keyguard-unlocked` / `user-present` 两条路径都是），那一刻解锁事务已经在跑、桌面已经可见，撤层不会露任何壁纸。硬隐藏仍由 `finishSuspend` 兜底，绝不留下残影。
+
+**残留（已知，尚未解决）**：`keyguardGoingAway` → `suspend` 之间的那 92~184ms 里，盖子仍盖着已可见的桌面。要消掉这段必须比 pre-draw 守卫更早知道解锁（例如听 `KeyguardManager` 的锁屏状态回调，或直接读系统事务），属于下一步。**不要靠在 `suspend()` 里"把延时调小"来蒙——那时桌面还没上屏，只会重新露壁纸。**
 
 ### 切歌的空窗期：保住上一帧，不撤层
 
@@ -129,10 +154,12 @@ adb -s 1b3a7d8 logcat -d | grep -E "Left-shade touch block armed|Left-shade gest
 现在统一在 `MediaSource` 里收敛处理：
 
 1. **封面解不出来 ≠ 播放停了**（SystemUI 常常读不到 App 给的 `content://` 权限或私有文件）：保留上一帧继续显示，超时也一样保留，等 App 补齐；
-2. **会话失去给 1500ms 宽限期**（`SESSION_GRACE_MS`）：期间继续交出上一帧，超时确认没会话才回退；真的暂停另有分支保持画面；
-3. **空窗期按包名继续跟踪会话**（日志 `Empty gap detected; keep tracking …`），保住 `MediaController` 回调，新封面一到就立刻刷新。
+2. **会话失去给 1500ms 宽限期**（`SESSION_GRACE_MS`）：期间继续交出上一帧；真的暂停另有分支保持画面；
+3. **空窗期按包名继续跟踪会话**（日志 `Empty gap detected; keep tracking …`），保住 `MediaController` 回调，新封面一到就立刻刷新；
+4. **超时之后也不再撤层（2026-10-07）**。旧实现在 `render()` 的 `snapshot == null` 分支里只认「仍在播放」，否则 `restore("render-no-session")` 把**整个场景**撤掉 → 原生锁屏连原生壁纸一起原样露出（实测 18:13:14 撤层、18:13:35 才重建，那时用户已经回到桌面了，中间整段锁屏都是原生界面）。现在改成**锁屏上只要有最后一帧（`shown != null`）就保留场景**，撤层的理由只剩三条：不在锁屏（`render-keyguard-unlocked`）、模块关闭、以及**从来没拿到过一帧**。随之删掉整套 `artworkFallback` 机制（它 2.5s 后的 `restore("artwork-timeout")` 也是执行者之一）。
+   **行为取舍（用户已确认）**：音乐 App 被彻底关掉时，锁屏会一直留着最后一帧封面，而不是退回原生锁屏 —— 与既有的「暂停不撤层」是同一套哲学。能走到那一行就说明 keyguard 此刻是锁着的（桌面/解锁路径在上面已经 `restore`），所以不会把场景漏到桌面上。
 
-对应日志只有三行，一眼可判：`Session unavailable … keeping last frame up to 1500ms` / `Empty gap detected` / `Media ready from bitmap title=<新歌>`。**验收标准：切歌全程不应出现 `restore reason=render-no-session` 与 `create()`。**
+对应日志：`Session unavailable … keeping last frame up to 1500ms` / `Empty gap detected` / `Media ready from bitmap title=<新歌>`；命中第 4 条新规时会看到 `render skipped: last-frame-kept`。**验收标准：切歌全程不应出现 `restore reason=render-no-session` 与 `create()`。**
 
 ### 播放器页 ↔ 通知页的切换动效（共享元素）
 

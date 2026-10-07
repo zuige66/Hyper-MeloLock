@@ -60,6 +60,13 @@
 
 ## 最近完成
 
+- **沉浸层「压住桌面」的时机修正：三处改动（2026-10-07）** —— 用户反馈「解锁进桌面有时候会卡、偶尔看到原生壁纸」。日志量化后确认**两件事都不是「盖子漏了」**：
+  1. **「卡」＝我们的不透明层盖在已经可见的桌面上。** 系统侧与模块侧的时间戳都在日志里，四点直接对齐：`keyguardGoingAway` → 桌面窗口 `wms.showSurfaceRobustly Window{com.miui.home/Launcher}` 只差 **+92~184ms**，而模块 `suspend()` 要等到 **+301~318ms** 才触发（pre-draw 守卫在等窗口重绘），之后又走 120ms 背景淡出 + 150ms `finishSuspend` 兜底 ⇒ 桌面已上屏后还被多盖 **152~411ms**（`native layers handed back` 实测分布 **+151 / +151 / +152 / +160 / +176 / +216 / +219 / +238 / +298 / +386 / +420**）。改法：**`suspend()` 里背景层直接 `GONE`，不淡出** —— `suspend()` 只在 `keyguardLocked()==false` 时触发，那一刻解锁事务已在跑、桌面已可见，撤层不会露任何壁纸。**别再为了「好看」往 `suspend()` 里加淡出。**
+  2. **「偶见原生壁纸」＝会话掉线回退（fail-open），不是盖子漏。** 切歌时媒体会话消失超过 `SESSION_GRACE_MS(1500ms)` → `render()` 走 `restore("render-no-session")` 撤掉**整个场景** ⇒ 原生锁屏连原生壁纸一起原样露出（实测 18:13:14 撤层、18:13:35 才重建，那时用户已回到桌面）。改法：**锁屏上只要有最后一帧（`shown != null`）就绝不撤层**，撤层理由收窄为「不在锁屏（`render-keyguard-unlocked`）/ 模块关闭 / 从没拿到过帧」。连带**删掉整套 `artworkFallback`**（它 2.5s 后的 `restore("artwork-timeout")` 也是执行者）；**取舍（用户已确认）**：音乐 App 被彻底关掉时锁屏留着最后一帧，不退回原生锁屏。
+  3. **息屏时 12/16 次白跑 `resume()`**：守卫那行的 `interactive()` 在 SCREEN_OFF 刚发生时**仍返回 true**（模块自己打的日志就是 `interactive=true`），判据拦不住 → 每次息屏白跑一趟 `showMusic()`（含底部快捷栏全树扫描 + 一行超长日志）。新增时间闸 `RESUME_AFTER_SCREEN_OFF_MS = 500`。
+  - **验证判据（全走日志，不需要录屏）**：`suspend reason=` 与 `wms.showSurfaceRobustly …com.miui.home…` 的差值应收到 **92~184ms**；`restore reason=render-no-session` 应为 **0**；`SCREEN_OFF` 后紧跟 `resume reused scene` 应从 **12/16 降到 ~0**。
+  - **踩坑**：同一轮消息里对**同一个文件**并行发多个 Edit 会互相覆盖（后写者赢，工具仍报 success）→ **一处文件的多处改动必须串行，且每步 grep 复查**。
+  - **设备包型**：迭代期设备上装的是 **debug**（`pkgFlags=[ DEBUGGABLE …]`），release 签名装不上（`INSTALL_FAILED_UPDATE_INCOMPATIBLE`）→ **用 `assembleDebug` 覆盖安装**，避免卸载重装（会丢模块开关 + 要重新在 Vector 勾作用域）。
 - **「亮屏快按两下开机键，息屏后没再亮起来」（2026-10-07）**：日志里失败那次 `SCREEN_OFF` 后 **72 秒内没有任何 `SCREEN_ON`**，模块无崩溃/无撤层/SystemUI PID 未变 → **第二次按键是被系统丢弃的，不是模块吞键**（亮屏再点一次能亮，说明通路没问题；快按两下时按键落在熄屏动画窗口内）。不过日志也暴露一处 ours 的无用功：熄屏后 **49ms** 就 `resume reused scene … interactive=false` —— 屏幕已全黑，守卫却在「正要黑」的窗口里把两层重新置可见 + `bringToFront`（整棵窗口根 relayout），第二次按键恰好也落在同一窗口。改法：守卫 suspended 分支加 `interactive()` 条件，屏幕还黑就不 resume（亮屏秒显靠 `SCREEN_ON` 广播与亮屏后第一帧 pre-draw，不受影响）。另给 `SCREEN_ON` 补 `offFor=Nms`，这类问题以后能直接和按键节奏对账。
 - **解锁卡顿 + 息屏后快速解锁闪原生壁纸（2026-10-07）**：
   1. **删掉 `unlockWatch` 探针**。它每 30ms 采样、每次解锁打 50 行 logcat，实测把采样间隔拖成 87~157ms（12 次 >60ms）——**logcat 写入是同步的，诊断本身在制造卡顿**。它要验证的结论早已拿到（系统把 keyguard 根直接置 `INVISIBLE`+`alpha 0`、全程无位移）。**教训：临时探针用完必须删，「只打日志」不等于零成本**；定位现象靠 `suspend reason=` 与 `native layers handed back at t=+Nms`。

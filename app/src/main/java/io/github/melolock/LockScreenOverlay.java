@@ -15,7 +15,6 @@ import android.graphics.Shader;
 import android.graphics.Typeface;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
-import android.media.session.PlaybackState;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -48,6 +47,16 @@ final class LockScreenOverlay {
     private static final String TAG = "MeloLock";
     private static final String CLOCK = "com.android.keyguard.clock.KeyguardClockContainer";
     private static final String NOTIFICATIONS = "com.android.systemui.statusbar.notification.stack.NotificationStackScrollLayout";
+    /**
+     * SCREEN_OFF 之后的静默期：这段时间内 pre-draw 守卫不许 `resume()`。
+     *
+     * 真机实测 16 次 SCREEN_OFF 里有 **12 次**紧跟一次白跑的 `resume reused scene`（间隔 30~1112ms）。
+     * 根因是这条分支里读到的 `interactive()` 那一刻**仍然返回 true**——模块自己在 SCREEN_OFF 行里
+     * 打出来的就是 `interactive=true`，所以拿 `interactive()` 当判据根本拦不住它。于是每次息屏都要
+     * 白跑一整趟 `showMusic()`（含底部快捷栏全树扫描 + 一行超长日志），全落在「屏幕正在黑」的窗口里。
+     * 亮屏本身由 `SCREEN_ON` 广播负责 resume，不需要守卫在这段窗口里抢着做。
+     */
+    private static final long RESUME_AFTER_SCREEN_OFF_MS = 500;
     private final ViewGroup root;
     private final Context context;
     private final Handler main = new Handler(Looper.getMainLooper());
@@ -175,14 +184,6 @@ final class LockScreenOverlay {
     private android.graphics.Bitmap shownArtwork;
     private ViewTreeObserver guardObserver;
     private boolean playerSceneVisible;
-    private boolean artworkFallbackPending;
-    private final Runnable artworkFallback = () -> {
-        artworkFallbackPending = false;
-        if (foreground != null && shown != null) {
-            Log.i(TAG, "Artwork update timed out; native lockscreen restored");
-            restore("artwork-timeout");
-        }
-    };
     private final Runnable progressTicker = new Runnable() {
         @Override public void run() {
             updateProgress();
@@ -214,7 +215,10 @@ final class LockScreenOverlay {
                 // 而用户反馈「亮屏时快按两下开机键，息屏后没再亮起来」——第二次按键正好落在这个
                 // 窗口里（系统那侧根本没有 SCREEN_ON 广播，不是模块吞键）。亮屏秒显靠的是
                 // SCREEN_ON 广播与亮屏后第一帧 pre-draw，两者都在屏幕亮起之后，所以这里直接跳过。
-                if (lockscreenCycle && keyguardLocked() && interactive()) resume();
+                // 除了 interactive()，还要过一道**时间闸**：SCREEN_OFF 刚发生的那一小段里
+                // interactive() 仍然返回 true（见 RESUME_AFTER_SCREEN_OFF_MS 注释），光靠它拦不住。
+                if (lockscreenCycle && keyguardLocked() && interactive()
+                        && android.os.SystemClock.elapsedRealtime() - screenOffAtMs > RESUME_AFTER_SCREEN_OFF_MS) resume();
                 return true;
             }
             if (foreground != null) {
@@ -350,12 +354,22 @@ final class LockScreenOverlay {
             return;
         }
         if (snapshot == null) {
-            if (foreground != null && shown != null && isStillPlaying()) { skip("awaiting-artwork"); deferArtworkFallback(); }
-            else { skip("no-session"); restore("render-no-session"); }
+            // 锁屏上**只要有最后一帧就绝不撤层**。
+            //
+            // 旧写法只在 isStillPlaying() 时才保留、否则走 restore("render-no-session")。真机实测
+            // （18:13:12~14）切歌期间媒体会话消失、超过 SESSION_GRACE_MS(1500ms) 后走的就是那条 else，
+            // 把**整个场景**撤掉 —— 原生锁屏连原生壁纸一起原样露出，还得等下一次媒体回调重新 create()
+            // （那一次等到 18:13:35 才建，人已经回到桌面上了）。这正是用户反馈的
+            // 「解锁后有时候会看到原生壁纸」的来源。
+            //
+            // 取舍（已与用户确认）：音乐 App 被彻底关掉时，锁屏会一直留着最后一帧封面，而不是退回
+            // 原生锁屏 —— 与既有的「暂停不撤层」是同一套哲学。注意能走到这一行就说明 keyguard
+            // 此刻是锁着的（桌面/解锁路径在上面已经 restore），所以不会把场景漏到桌面上。
+            if (foreground != null && shown != null) { skip("last-frame-kept"); return; }
+            skip("no-session"); restore("render-no-session");
             return;
         }
         lastSkipReason = null;
-        cancelArtworkFallback();
         if (foreground == null && !create()) return;
         registerGuard();
         applySnapshot(snapshot);
@@ -820,7 +834,7 @@ final class LockScreenOverlay {
         // 页面切换动画可能只跑到一半就被撤层：复位通知栈的动画属性，
         // 否则下次 show() 出来的是一张全透明的通知列表。
         if (notifications != null) { notifications.animate().cancel(); endNotificationsLayer(); notifications.setAlpha(1f); notifications.setTranslationY(0f); }
-        cancelArtworkFallback(); unregisterGuard(); shown = null; shownArtwork = null; expanded = false; playerSceneVisible = false; restoreChangedViews();
+        unregisterGuard(); shown = null; shownArtwork = null; expanded = false; playerSceneVisible = false; restoreChangedViews();
         if (foreground != null && foreground.getParent() == root) root.removeView(foreground);
         // background 挂在窗口根（见 create()），这里按实际父容器移除。
         if (background != null && background.getParent() instanceof ViewGroup) ((ViewGroup) background.getParent()).removeView(background);
@@ -852,14 +866,19 @@ final class LockScreenOverlay {
         // 解锁时窗口正在切换，ViewPropertyAnimator 的回调可能根本不推进，
         // 那样前景组件就会一直留在桌面上（实测过）。
         foreground.animate().alpha(0f).setDuration(120).start();
-        // 背景层挂在窗口根，不随锁屏根被系统带走（刻意如此：上滑时要它盖住桌面壁纸）。
-        // 但它原先要等 finishSuspend（+150ms）才「啪」地消失，而锁屏根在 +36ms 就已经
-        // alpha=0 —— 中间那 100 多毫秒里用户看到的是一张**静止不动**的模糊封面，
-        // 就是反馈的「解锁时沉浸式壁纸停顿一下」；系统退场动画时长不定，所以时有时无。
-        // 现在让它跟前景同节奏淡出；硬隐藏仍由 finishSuspend 兜底，绝不留下残影。
+        // 背景层挂在窗口根、盖的是整个屏幕，**它没有任何「淡出美学」价值：晚撤一帧，桌面就晚出现一帧。**
+        //
+        // 真机四点对齐（18:12:53 那次解锁，另外 3 次同样结论）：
+        //   keyguardGoingAway 53.506 → 桌面窗口 wms.showSurfaceRobustly 53.694（**已可见**）
+        //   → 本方法才在 53.871 触发（守卫晚 365ms）→ 再走 120ms 淡出 + 150ms 兜底 → 54.105 交还。
+        // 即「桌面已经上屏之后，这层不透明色块还多盖了 411ms」，用户观感就是「上滑进桌面卡一下」。
+        // 而 `suspend()` 只在 `keyguardLocked()==false` 时触发（predraw-keyguard-unlocked / user-present
+        // 两条路径都是），那一刻解锁事务已经在跑、桌面已经可见 —— **直接撤层才是对的**，
+        // 淡出与固定延时都是纯负担。硬隐藏仍由 finishSuspend 兜底，绝不留下残影。
         if (background != null) {
             background.animate().cancel();
-            background.animate().alpha(0f).setDuration(120).start();
+            background.setAlpha(1f);
+            background.setVisibility(View.GONE);
         }
         main.postDelayed(finishSuspend, 150);
     }
@@ -1269,22 +1288,6 @@ final class LockScreenOverlay {
         if (state == null) return;
         view.setVisibility(state.visibility);
         view.setImportantForAccessibility(state.accessibility);
-    }
-    private boolean isStillPlaying() {
-        try {
-            PlaybackState state = shown.controller.getPlaybackState();
-            return state != null && state.getState() == PlaybackState.STATE_PLAYING;
-        } catch (RuntimeException error) { return false; }
-    }
-    private void deferArtworkFallback() {
-        if (artworkFallbackPending) return;
-        artworkFallbackPending = true;
-        main.postDelayed(artworkFallback, 2500);
-        Log.i(TAG, "Keeping previous artwork while the next track updates");
-    }
-    private void cancelArtworkFallback() {
-        artworkFallbackPending = false;
-        main.removeCallbacks(artworkFallback);
     }
     private TextView label(int color, int sizeSp, boolean bold) {
         TextView text = new TextView(context); text.setTextColor(color); text.setTextSize(sizeSp); text.setSingleLine(true); text.setEllipsize(TextUtils.TruncateAt.END);
