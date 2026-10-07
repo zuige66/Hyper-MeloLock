@@ -823,3 +823,36 @@ adb -s 1b3a7d8 reboot
     `packageDebug UP-TO-DATE`，装上去的还是上一版 —— 源码明明已改（`grep` 确认过）。
     强制办法：删掉 `app/build/intermediates/javac` 再构建；**装完务必验证 dex**：
     解包 APK 逐个 `classes*.dex` 搜特征字符串（本轮搜 `ancestorChain`，命中在 `classes16.dex`）。
+
+34. 2026-10-08 凌晨 **上面第 33 条改完，用户复测「进桌面还是有原生壁纸，跟之前一样」——真正的根因是结构，不是时间**。
+
+    日志显示我们自己的链路执行得**无懈可击**：
+
+    ```
+    00:11:37.363  Unlock signalled; cover stays opaque for 760ms
+    00:11:37.729  suspend reason=predraw-keyguard-unlocked
+    00:11:38.410  unlock cover removed at t=+1047ms
+                  native[keyguardRoot=I0.00 wallpaper=I1.00 nativeFg=I1.00 clock=I1.00 …]
+    ```
+
+    封面全程 `cover=V1.00`（VISIBLE 且 alpha 1），760ms 才开始淡、1047ms 才摘层。
+    **但 `keyguardRoot=I0.00`** —— 系统在这趟解锁里把**整棵 `HyperOSKeyguardRootView`
+    置成了 INVISIBLE + alpha 0**。我们的两层都挂在锁屏根**里面**：父控件一被隐藏，子视图
+    **连绘制都不参与**，把自己设成 `VISIBLE / alpha 1` 也救不回来。
+
+    这就是 hold 从 130 → 240 → 280 → 760 怎么调都无效的原因：**不是时间不对，是我们压根没被画出来**。
+
+    **改法：解锁时把封面挪出锁屏根**（`liftCoverToWindowRoot()`）。在 `keyguardGoingAway` 这一刻
+    （系统动画 +148ms 才开始）把不透明封面从锁屏根挪到**窗口根、紧贴锁屏根之上**；挪出去之后就不受
+    锁屏根可见性的影响，掀盖时机才真正由我们掌握。
+
+    - 两个操作（remove + add）在**同一个主线程消息**里完成，不存在「两边都没有」的那一帧；
+      此刻屏幕内容不变（仍是同一张不透明封面）。
+    - 解锁期间底部快捷栏图标本来就在随锁屏根一起退场，被压住没有副作用。
+    - 重新锁屏时由 `ensureBackgroundOrder()` 把它**挂回**锁屏根，回到「壁纸之上、快捷栏之下」，
+      否则快捷栏图标会被压住。
+
+    **排查顺序要改**：这类「露原生壁纸」问题，**先看父容器还活不活，再看自己的可见性/alpha**。
+    `nativeCensus()` 里的 `keyguardRoot=` 一项就是为此存在的，它比 `cover=V1.00`（只说明我们
+    自己的层还在、可见）更能说明问题。本轮补了三个采样点（信号 +0ms / 淡出起点 +760ms /
+    摘层 +920ms）来定位系统到底在什么时候把锁屏根藏起来。

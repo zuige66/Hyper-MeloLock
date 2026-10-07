@@ -522,6 +522,11 @@ final class LockScreenOverlay {
         //      （还能点进去，但图标看不见）：图标也在锁屏根里，被这层不透明封面压住了。
         // 所以锚点选「原生壁纸层」，紧贴它后面插，不碰它上面的任何原生控件。
         attachBackgroundLayer();
+        // 一次创建只打三行：z 序是这块最容易出错的地方，光看 idx 数字没用，得看清每一支的归属。
+        // ① 锁屏根的直接子视图（从底到顶）；② 原生壁纸层的祖先链；③ 快捷栏容器的祖先链。
+        Log.i(TAG, "keyguardRoot children (bottom→top): " + rootChildCensus());
+        Log.i(TAG, "wallpaperLayer chain: " + ancestorChain(nativeBackgroundLayer));
+        Log.i(TAG, "shortcutContainer chain: " + ancestorChain(findByIdInAnyPackage(root, "keyguard_shortcut_container")));
 
         content = new LinearLayout(context);
         content.setOrientation(LinearLayout.VERTICAL); content.setGravity(Gravity.CENTER_HORIZONTAL);
@@ -1022,6 +1027,12 @@ final class LockScreenOverlay {
     private void startUnlockCoverFade() {
         if (background == null || foreground == null) return;
         unlockSignalledAtMs = android.os.SystemClock.elapsedRealtime();
+        // **第一件事就是把封面挪出锁屏根**（详见 liftCoverToWindowRoot）。
+        // 不挪的话后面所有时序都是空谈：系统会在这趟解锁里把整棵锁屏根置 INVISIBLE + alpha 0，
+        // 挂在他里面的层连绘制都不参与 —— 这就是 hold 130 → 280 → 760 怎么调都没用的真正原因。
+        // 此刻（keyguardGoingAway 刚到，系统动画 +148ms 才开始）挪，屏幕上看到的仍是同一张不透明封面。
+        liftCoverToWindowRoot();
+        Log.i(TAG, "unlock: " + nativeCensus());
         // 「提前画好、直接覆盖」的完整含义：**全程压住不透明**，把系统过渡期拉起来的壁纸窗口
         // （独立窗口，keyguardGoingAway +47ms 被 showSurfaceRobustly 拉起）与锁屏壁纸收尾动画
         // 都死死盖住；等系统解锁动画结束（+685ms）、换壁纸落地（+742ms）之后才淡出。
@@ -1065,6 +1076,9 @@ final class LockScreenOverlay {
      */
     private final Runnable finishCoverFade = () -> {
         if (background == null || !unlockSignalled) return;
+        // 三个采样点（信号 +0ms / 淡出起点 +760ms / 摘层 +920ms）记录锁屏根的可见性，
+        // 用来确认「系统到底什么时候把锁屏根置 INVISIBLE」——这是本轮最关键的一问。
+        Log.i(TAG, "unlock fade starts; " + nativeCensus());
         background.animate().cancel();
         background.animate().alpha(0f).setDuration(UNLOCK_COVER_FADE_MS).start();
         if (foreground != null) {
@@ -1179,11 +1193,31 @@ final class LockScreenOverlay {
         Log.i(TAG, "background host=keyguardRoot idx=" + root.indexOfChild(background) + "/" + (root.getChildCount() - 1)
                 + " wallpaperIdx=" + (nativeBackgroundLayer != null ? root.indexOfChild(nativeBackgroundLayer) : -1)
                 + " clockIdx=" + (clock != null ? root.indexOfChild(clock) : -1));
-        // 一次创建只打三行：z 序是这块最容易出错的地方，光看 idx 数字没用，得看清每一支的归属。
-        // ① 锁屏根的直接子视图（从底到顶）；② 原生壁纸层的祖先链；③ 快捷栏容器的祖先链。
-        Log.i(TAG, "keyguardRoot children (bottom→top): " + rootChildCensus());
-        Log.i(TAG, "wallpaperLayer chain: " + ancestorChain(nativeBackgroundLayer));
-        Log.i(TAG, "shortcutContainer chain: " + ancestorChain(findByIdInAnyPackage(root, "keyguard_shortcut_container")));
+    }
+
+    /**
+     * 解锁一开始就把不透明封面**从锁屏根挪到窗口根、紧贴锁屏根之上**。
+     *
+     * 这是「解锁闪原生壁纸」真正的结构原因：真机日志里 `native[keyguardRoot=I0.00]` 证明系统在这趟
+     * 解锁中会把**整棵锁屏根**置 INVISIBLE + alpha 0（`HyperOSKeyguardRootView`）。我们的层挂在它
+     * 里面，父控件一被隐藏，子视图连绘制都不参与 —— 把自己设成 `VISIBLE / alpha 1` 也救不回来。
+     * 这正是 hold 从 130 一路调到 760、参数怎么调都无效的原因：**不是时间不对，是我们压根没被画出来**。
+     *
+     * 挪到窗口根之后就不受锁屏根可见性的影响，掀盖时机才真正由我们掌握。
+     * 时机选在 `keyguardGoingAway` 这一刻（系统动画 +148ms 才开始）：屏幕内容不变（还是同一张
+     * 不透明封面），且 remove + add 在同一个主线程消息里完成，不存在「两边都没有」的那一帧。
+     * 解锁期间底部快捷栏图标本来就在随锁屏根一起退场，被压住没有副作用；
+     * 重新锁屏时 `ensureBackgroundOrder()` 会把它挂回锁屏根、回到「壁纸之上、快捷栏之下」。
+     */
+    private void liftCoverToWindowRoot() {
+        if (background == null || windowRoot == null || root == null) return;
+        if (background.getParent() == windowRoot) return;
+        int keyguardIdx = windowRoot.indexOfChild(root);
+        int index = keyguardIdx >= 0 ? keyguardIdx + 1 : windowRoot.getChildCount();
+        if (background.getParent() instanceof ViewGroup) ((ViewGroup) background.getParent()).removeView(background);
+        windowRoot.addView(background, Math.max(0, Math.min(index, windowRoot.getChildCount())), new ViewGroup.LayoutParams(-1, -1));
+        Log.i(TAG, "cover lifted to windowRoot idx=" + windowRoot.indexOfChild(background) + "/" + (windowRoot.getChildCount() - 1)
+                + " keyguardIdx=" + keyguardIdx + " " + nativeCensus());
     }
 
     /** 锁屏根直接子视图清单：`下标:类名#id`，从底到顶。 */
@@ -1230,15 +1264,16 @@ final class LockScreenOverlay {
 
     /**
      * z 序自校正：锁屏根是系统自己的视图，位置可能被重挂/重排；一旦我们的封面被挤到原生壁纸层
-     * **下面**，原生壁纸就会盖住我们；被挤到顶层又会压住快捷栏图标。**只在顺序确实不对时才重排**，
-     * 不要每次亮屏都动视图树。
+     * **下面**，原生壁纸就会盖住我们；被挤到顶层又会压住快捷栏图标。
+     *
+     * 另外它还负责**把解锁时挪走的封面挂回锁屏根** —— 上一轮解锁已经把它 lift 到窗口根了，
+     * 重新锁屏时必须回到「壁纸之上、快捷栏之下」，否则快捷栏图标会被压住。
+     * **只在位置确实不对时才动视图树**，不要每次亮屏都重排。
      */
     private void ensureBackgroundOrder() {
-        if (background == null || root == null || background.getParent() != root) return;
-        if (root.indexOfChild(background) == backgroundIndexIn(root)) return;
-        root.removeView(background);
-        int index = Math.max(0, Math.min(backgroundIndexIn(root), root.getChildCount()));
-        root.addView(background, index, new ViewGroup.LayoutParams(-1, -1));
+        if (background == null || root == null) return;
+        if (background.getParent() == root && root.indexOfChild(background) == backgroundIndexIn(root)) return;
+        attachBackgroundLayer();
         Log.i(TAG, "background z-order re-asserted idx=" + root.indexOfChild(background)
                 + "/" + (root.getChildCount() - 1) + " " + state());
     }
