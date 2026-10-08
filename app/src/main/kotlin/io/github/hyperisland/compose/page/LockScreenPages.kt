@@ -462,9 +462,36 @@ internal fun LockAppearancePage() {
         expandedSections = if (key in expandedSections) expandedSections - key else expandedSections + key
     }
 
+    // 各分组的「恢复默认」键集（↺ 按钮）；背景组例外：三态存 SharedPreferences 非 elements。
+    val sectionDefaultKeys: Map<String, List<String>> = mapOf(
+        "pick" to listOf(Config.SWATCH_PICK),
+        "date" to listOf(Config.DATE_ENABLED, Config.DATE_SIZE, Config.DATE_WEIGHT, Config.DATE_COLOR, Config.DATE_SPACING),
+        "sign" to listOf(Config.SIGN_ENABLED, Config.SIGN_SIZE, Config.SIGN_WEIGHT, Config.SIGN_COLOR, Config.SIGN_SPACING),
+        "clock" to listOf(Config.CLOCK_SIZE, Config.CLOCK_SPACING, Config.CLOCK_WEIGHT, Config.CLOCK_COLOR, Config.CLOCK_ROUNDNESS, Config.CLOCK_STROKE),
+        "cover" to listOf(Config.COVER_SCALE, Config.COVER_WIDTH, Config.COVER_HEIGHT, Config.COVER_SPACING),
+        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK),
+        "entry" to listOf(Config.ENTRY_COLOR, Config.ENTRY_COLOR_PICK, Config.ENTRY_BG, Config.ENTRY_BG_PICK),
+    )
+    fun resetSection(key: String) {
+        sectionDefaultKeys[key]?.forEach { k ->
+            val defaultValue = Config.elementDefault(k)
+            Config.setElementInt(context, k, defaultValue)
+            settings = settings + (k to defaultValue)
+        }
+        when (key) {
+            "sign" -> Config.setElementText(context, Config.DATE_SIGNATURE, "")   // 签名默认空白
+            "cover" -> { radius = 28f; Config.setCornerRadiusDp(context, 28) }    // 圆角全局默认 28
+            "backdrop" -> {                                                       // 三态回默认：玻璃/深蓝灰/150
+                style = 0; Config.setOverlayStyle(context, 0)
+                colorIndex = 0; Config.setOverlayColor(context, PALETTE[0])
+                alpha = 150f; Config.setOverlayAlpha(context, 150)
+            }
+        }
+    }
+
     CollapsingPage(title = "外观") {
         item {
-            CollapsibleSection("取色", "pick", expandedSections, ::toggleSection) {
+            CollapsibleSection("取色", "pick", expandedSections, ::toggleSection, { resetSection("pick") }) {
                 PreferenceDropdown(
                     title = "主色来源",
                     summary = "跟随封面时挑选专辑主色的方式",
@@ -476,7 +503,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("日期", "date", expandedSections, ::toggleSection) {
+            CollapsibleSection("日期", "date", expandedSections, ::toggleSection, { resetSection("date") }) {
                 PreferenceSwitch(
                     title = "显示日期",
                     summary = "时钟上方显示公历、周几与农历",
@@ -501,7 +528,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("签名", "sign", expandedSections, ::toggleSection) {
+            CollapsibleSection("签名", "sign", expandedSections, ::toggleSection, { resetSection("sign") }) {
                 PreferenceSwitch(
                     title = "显示签名",
                     summary = "日期行下方的自定义文字",
@@ -527,7 +554,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("时间", "clock", expandedSections, ::toggleSection) {
+            CollapsibleSection("时间", "clock", expandedSections, ::toggleSection, { resetSection("clock") }) {
                 DpSlider("字号", value(Config.CLOCK_SIZE), 20..120, onCommit = { update(Config.CLOCK_SIZE, it) })
                 DpSlider("粗细", value(Config.CLOCK_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.CLOCK_WEIGHT, it) })
                 DpSlider("描边加粗", value(Config.CLOCK_STROKE), 0..8, onCommit = { update(Config.CLOCK_STROKE, it) })
@@ -552,7 +579,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("专辑封面", "cover", expandedSections, ::toggleSection) {
+            CollapsibleSection("专辑封面", "cover", expandedSections, ::toggleSection, { resetSection("cover") }) {
                 DpSlider("缩放", value(Config.COVER_SCALE), 10..300, unit = "%", onCommit = { update(Config.COVER_SCALE, it) })
                 DpSlider("宽度 (0=自动)", value(Config.COVER_WIDTH), 0..600, onCommit = { update(Config.COVER_WIDTH, it) })
                 DpSlider("高度 (0=自动)", value(Config.COVER_HEIGHT), 0..600, onCommit = { update(Config.COVER_HEIGHT, it) })
@@ -572,7 +599,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("播放器", "card", expandedSections, ::toggleSection) {
+            CollapsibleSection("播放器", "card", expandedSections, ::toggleSection, { resetSection("card") }) {
                 DpSlider("缩放", value(Config.CARD_SCALE), 10..300, unit = "%", onCommit = { update(Config.CARD_SCALE, it) })
                 DpSlider("宽度 (0=自动)", value(Config.CARD_WIDTH), 0..600, onCommit = { update(Config.CARD_WIDTH, it) })
                 DpSlider("高度 (0=自动)", value(Config.CARD_HEIGHT), 0..600, onCommit = { update(Config.CARD_HEIGHT, it) })
@@ -597,7 +624,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("通知入口", "entry", expandedSections, ::toggleSection) {
+            CollapsibleSection("通知入口", "entry", expandedSections, ::toggleSection, { resetSection("entry") }) {
                 PreferenceDropdown(
                     title = "文字颜色",
                     summary = "「展开通知」的文字颜色，可选跟随封面",
@@ -619,7 +646,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("背景", "backdrop", expandedSections, ::toggleSection) {
+            CollapsibleSection("背景", "backdrop", expandedSections, ::toggleSection, { resetSection("backdrop") }) {
                 PreferenceDropdown(
                     title = "背景样式",
                     summary = "玻璃风格模糊封面，沉浸风格纯色底",
@@ -651,13 +678,12 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            SectionTitle("说明")
-            Card {
-                InfoText(
-                    "以上尺寸、圆角、间距、字体和背景样式都由锁屏覆盖层在创建场景时读取，" +
-                        "改完需要灭屏再亮屏一次才会生效（模块会自己重建，不用重启 SystemUI）。",
-                )
-            }
+            Text(
+                text = "外观参数在锁屏重建时生效：改完灭屏再亮屏一次即可（无需重启 SystemUI）。",
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+            )
         }
     }
 }
@@ -1184,6 +1210,7 @@ private val PICK_STYLE_LABELS = listOf("低饱和磨砂 (M3E)", "鲜艳原色")
  * 外观页分组（M3E 折叠卡）：**每组一张完整卡片**——标题是卡片头（可点、涟漪反馈，
  * 箭头随展开状态弹性旋转 90°），内容在同一张卡内 animateContentSize 弹性展开/收起；
  * 收起时是一张矮卡，整页保持完整卡片列表的结构感。expandedKeys 由页面持有并 rememberSaveable。
+ * 卡片头右侧的 ↺ 是「恢复本组默认」，点击只重置该组的键（不影响其他组）。
  */
 @Composable
 private fun CollapsibleSection(
@@ -1191,6 +1218,7 @@ private fun CollapsibleSection(
     key: String,
     expandedKeys: Set<String>,
     onToggle: (String) -> Unit,
+    onReset: () -> Unit,
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     val expanded = key in expandedKeys
@@ -1223,9 +1251,24 @@ private fun CollapsibleSection(
                 fontSize = MiuixTheme.textStyles.body1.fontSize,
                 color = MiuixTheme.colorScheme.onSurface,
             )
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(CircleShape)
+                    .clickable { onReset() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "↺",
+                    fontSize = 17.sp,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+            }
             Text(
                 text = "▸",
-                modifier = Modifier.graphicsLayer { rotationZ = arrowRotation },
+                modifier = Modifier
+                    .padding(start = 12.dp)
+                    .graphicsLayer { rotationZ = arrowRotation },
                 fontSize = 15.sp,
                 color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
