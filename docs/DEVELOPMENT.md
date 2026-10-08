@@ -141,7 +141,9 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 **补充（2026-10-09 凌晨）：检查更新「下载并安装」、页脚统一**
 
 - **下载并安装**：`UpdateDialogHost` 的确认按钮从「查看」改「下载（`R.string.download`）」，回调 `onViewUpdate` → `onDownload(apkUrl)`。`AppUpdate` 新增 `apkUrl` 字段：GitHub 源从 `assets[]` 里挑 `.apk` 的 `browser_download_url`（**releases 页是 HTML，不能拿来下载**），blog 源本就是直链。
-- `ApkInstaller.downloadAndInstall()`：走系统 `DownloadManager`（有通知、进程被杀也能下完）→ 下载完成广播里取 `getUriForDownloadedFile` 的 content URI → `ACTION_VIEW` 拉起安装（`FLAG_GRANT_READ_URI_PERMISSION`）。Manifest 补 `REQUEST_INSTALL_PACKAGES`（Android 8+ 装未知应用需要；首次会引导用户开「允许来自此来源的应用」）。**同名文件重复下载**由 DownloadManager 自动加后缀，旧包留在下载目录无害。
+- `ApkInstaller.downloadAndInstall()` → 启动前台服务 `UpdateDownloadService`（见下条返工）。Manifest 补 `REQUEST_INSTALL_PACKAGES`（Android 8+ 装未知应用需要；首次会引导用户开「允许来自此来源的应用」）。
+- **返工（真机「下载完了却不弹安装」，00d296b）**：第一版走系统 `DownloadManager`，但它的完成广播 `ACTION_DOWNLOAD_COMPLETE` **只能由本进程接收**——39MB 下载期间 HyperOS 常把 App 进程回收（用户切走/锁屏），广播无人接收 → 下完没反应。改为**前台服务自己下载**（通知栏保活 + 进度可见），下完在同一进程里用 `FileProvider` 的 content:// 直接 `startActivity` 拉起安装；没有「允许安装未知应用」时跳 `ACTION_MANAGE_UNKNOWN_APP_SOURCES` 设置页。Manifest 补 service（`foregroundServiceType=dataSync`）、provider（`@xml/file_paths`）、`FOREGROUND_SERVICE(_DATA_SYNC)` 与 `POST_NOTIFICATIONS`。**教训：跨进程/长耗时任务不要依赖本进程的广播接收者。**
+- 顺带修（同轮）：blog 回退源原先**只比较 versionCode**，与 GitHub 源（比较 versionName）语义不一致，两条源能给相反结论（真机：GitHub 403 回退 blog 后被判「已是最新」）。现改为 code/name 任一更新即算新版。
 - **页脚统一**：主页「使用说明」也改成 footnote 页脚小字（此前已改外观页/应用页/关于页），文案精简到一行半。
 - 默认值再同步：通知入口文字/胶囊背景取色风格默认**鲜艳**（`entry_color_pick=1`、`entry_bg_pick=1`）。
 
