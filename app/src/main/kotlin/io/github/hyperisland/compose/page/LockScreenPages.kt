@@ -494,7 +494,7 @@ internal fun LockAppearancePage() {
                         onSelectedIndexChange = { update(Config.DATE_COLOR, TEXT_COLOR_VALUES[it]) },
                     )
                     PickStyleDropdown(Config.DATE_COLOR, Config.DATE_PICK, ::value, ::update)
-                    DpSlider("距顶部", value(Config.DATE_SPACING), 0..160, onCommit = { update(Config.DATE_SPACING, it) })
+                    DpSlider("上间距", value(Config.DATE_SPACING), 0..160, onCommit = { update(Config.DATE_SPACING, it) })
                 }
             }
         }
@@ -521,7 +521,7 @@ internal fun LockAppearancePage() {
                         onSelectedIndexChange = { update(Config.SIGN_COLOR, TEXT_COLOR_VALUES[it]) },
                     )
                     PickStyleDropdown(Config.SIGN_COLOR, Config.SIGN_PICK, ::value, ::update)
-                    DpSlider("距顶部", value(Config.SIGN_SPACING), 0..160, onCommit = { update(Config.SIGN_SPACING, it) })
+                    DpSlider("上间距", value(Config.SIGN_SPACING), 0..160, onCommit = { update(Config.SIGN_SPACING, it) })
                 }
             }
         }
@@ -548,7 +548,7 @@ internal fun LockAppearancePage() {
                     onSelectedIndexChange = { update(Config.CLOCK_COLOR, TEXT_COLOR_VALUES[it]) },
                 )
                 PickStyleDropdown(Config.CLOCK_COLOR, Config.CLOCK_PICK, ::value, ::update)
-                DpSlider("距顶部", value(Config.CLOCK_SPACING), 0..160, onCommit = { update(Config.CLOCK_SPACING, it) })
+                DpSlider("上间距", value(Config.CLOCK_SPACING), 0..160, onCommit = { update(Config.CLOCK_SPACING, it) })
             }
         }
         item {
@@ -582,7 +582,7 @@ internal fun LockAppearancePage() {
                     onValueChange = { radius = it },
                     onValueChangeFinished = { Config.setCornerRadiusDp(context, radius.toInt()) },
                 )
-                DpSlider("间距", value(Config.COVER_SPACING), 0..160, onCommit = { update(Config.COVER_SPACING, it) })
+                DpSlider("上间距", value(Config.COVER_SPACING), 0..160, onCommit = { update(Config.COVER_SPACING, it) })
             }
         }
         item {
@@ -605,7 +605,7 @@ internal fun LockAppearancePage() {
                     DpSlider("高度", value(Config.CARD_HEIGHT).coerceAtLeast(60), 60..600, onCommit = { update(Config.CARD_HEIGHT, it) })
                 }
                 DpSlider("圆角", value(Config.CARD_RADIUS), 0..48, onCommit = { update(Config.CARD_RADIUS, it) })
-                DpSlider("间距", value(Config.CARD_SPACING), 0..160, onCommit = { update(Config.CARD_SPACING, it) })
+                DpSlider("上间距", value(Config.CARD_SPACING), 0..160, onCommit = { update(Config.CARD_SPACING, it) })
                 PreferenceDropdown(
                     title = "底色",
                     summary = "播放器卡片的背景色；文字颜色按底色亮度自动适配",
@@ -1251,16 +1251,18 @@ private fun SignatureInputField() {
     DisposableEffect(Unit) {
         onDispose { commit() }
     }
-    TextField(
-        value = text,
-        onValueChange = { text = it },
-        modifier = Modifier.fillMaxWidth(),
-        label = "签名内容",
-        useLabelAsPlaceholder = true,
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = { commit() }),
-    )
+    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        TextField(
+            value = text,
+            onValueChange = { text = it },
+            modifier = Modifier.fillMaxWidth(0.72f),   // 全宽显得空旷，收窄到约 3/4 居中
+            label = "签名内容",
+            useLabelAsPlaceholder = true,
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { commit() }),
+        )
+    }
 }
 
 /** 时间字体的圆润档位；0 用系统字体，1 / 2 用内置的开源圆体数字字体。 */
