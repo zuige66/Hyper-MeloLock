@@ -543,31 +543,32 @@ final class LockScreenOverlay {
         content.setOrientation(LinearLayout.VERTICAL); content.setGravity(Gravity.CENTER_HORIZONTAL);
         // 顶部三段（签名行/日期行/时钟）沿「距上一个元素」语义链：第一行距内容区顶，
         // 后面的行距上一行。两行都关时保持老布局（时钟距顶 = CLOCK_SPACING）。
+        // 顺序＝日期行在上、签名行在日期下方（用户指定）。
         signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
         boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
         boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
-        int leadSpacing = signOn ? elem(elements, Config.SIGN_SPACING)
-                : dateOn ? elem(elements, Config.DATE_SPACING)
+        int leadSpacing = dateOn ? elem(elements, Config.DATE_SPACING)
+                : signOn ? elem(elements, Config.SIGN_SPACING)
                 : elem(elements, Config.CLOCK_SPACING);
         FrameLayout.LayoutParams contentParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP); contentParams.topMargin = dp(leadSpacing);
         foreground.addView(content, contentParams);
+        if (dateOn) {
+            dateLine = new TextView(context); dateLine.setGravity(Gravity.CENTER);
+            dateLine.setTextSize(elem(elements, Config.DATE_SIZE));
+            dateLine.setTextColor(elem(elements, Config.DATE_COLOR));
+            applyTextWeight(dateLine, elem(elements, Config.DATE_WEIGHT));
+            content.addView(dateLine, new LinearLayout.LayoutParams(-1, -2));
+            refreshDateLine(true);
+        }
         if (signOn) {
             signatureLine = new TextView(context); signatureLine.setGravity(Gravity.CENTER);
             signatureLine.setTextSize(elem(elements, Config.SIGN_SIZE));
             signatureLine.setTextColor(elem(elements, Config.SIGN_COLOR));
             signatureLine.setText(signatureText);
             applyTextWeight(signatureLine, elem(elements, Config.SIGN_WEIGHT));
-            content.addView(signatureLine, new LinearLayout.LayoutParams(-1, -2));
-        }
-        if (dateOn) {
-            dateLine = new TextView(context); dateLine.setGravity(Gravity.CENTER);
-            dateLine.setTextSize(elem(elements, Config.DATE_SIZE));
-            dateLine.setTextColor(elem(elements, Config.DATE_COLOR));
-            applyTextWeight(dateLine, elem(elements, Config.DATE_WEIGHT));
-            LinearLayout.LayoutParams dateParams = new LinearLayout.LayoutParams(-1, -2);
-            if (signOn) dateParams.topMargin = dp(elem(elements, Config.DATE_SPACING));
-            content.addView(dateLine, dateParams);
-            refreshDateLine(true);
+            LinearLayout.LayoutParams signParams = new LinearLayout.LayoutParams(-1, -2);
+            if (dateOn) signParams.topMargin = dp(elem(elements, Config.SIGN_SPACING));
+            content.addView(signatureLine, signParams);
         }
         immersiveClock = new TextClock(context);
         immersiveClock.setFormat12Hour("h:mm"); immersiveClock.setFormat24Hour("HH:mm"); immersiveClock.setGravity(Gravity.CENTER);
@@ -600,7 +601,9 @@ final class LockScreenOverlay {
                 + " | card=" + geometry.cardWidth + "x" + geometry.cardHeight + "px r"
                 + elem(elements, Config.CARD_RADIUS) + " p" + elem(elements, Config.CARD_SCALE)
                 + " | spacing=" + elem(elements, Config.CLOCK_SPACING) + "/"
-                + elem(elements, Config.COVER_SPACING) + "/" + elem(elements, Config.CARD_SPACING));
+                + elem(elements, Config.COVER_SPACING) + "/" + elem(elements, Config.CARD_SPACING)
+                + " | date=" + (elem(elements, Config.DATE_ENABLED) != 0) + "/" + elem(elements, Config.DATE_SIZE)
+                + "sp | sign=" + (elem(elements, Config.SIGN_ENABLED) != 0) + " len=" + signatureText.length());
         Log.i(TAG, "Custom media card overlay created in " + createAttempts + " attempt(s)");
         createAttempts = 0;
         unlockRestoreLogged = false;

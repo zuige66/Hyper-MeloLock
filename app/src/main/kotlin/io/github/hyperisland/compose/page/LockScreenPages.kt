@@ -30,6 +30,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -43,7 +44,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -508,7 +508,7 @@ internal fun LockAppearancePage() {
             Card {
                 PreferenceSwitch(
                     title = "显示签名",
-                    summary = "日期行上方的自定义文字；关闭或内容为空时不占位",
+                    summary = "日期行下方的自定义文字；关闭或内容为空时不占位",
                     icon = null,
                     checked = value(Config.SIGN_ENABLED) != 0,
                     onCheckedChange = { update(Config.SIGN_ENABLED, if (it) 1 else 0) },
@@ -1088,8 +1088,9 @@ private val CARD_BG_VALUES = intArrayOf(
 private val CARD_BG_LABELS = listOf("深色", "墨蓝", "浅色", "蓝灰", "淡紫", "淡粉")
 
 /**
- * 签名内容输入框。**失焦或 IME 确认才写盘**：签名变化会触发锁屏场景整场重建，
- * 逐键写盘等于每敲一个字重建一次；输入过程中只更新本地 state。
+ * 签名内容输入框。**三重保存**：① 输入停顿 800ms 自动写盘（LaunchedEffect 防抖，text
+ * 变化重启协程）；② 页面退出时兜底写盘（onDispose，兜住「输完直接返回」）；③ IME 确认。
+ * 签名变化会触发锁屏场景整场重建，防抖保证停顿期间至多重建一次。
  */
 @Composable
 private fun SignatureInputField() {
@@ -1100,12 +1101,19 @@ private fun SignatureInputField() {
             Config.setElementText(context, Config.DATE_SIGNATURE, text)
         }
     }
+    LaunchedEffect(text) {
+        if (text != Config.elementString(context, Config.DATE_SIGNATURE)) {
+            kotlinx.coroutines.delay(800)
+            commit()
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { commit() }
+    }
     TextField(
         value = text,
         onValueChange = { text = it },
-        modifier = Modifier
-            .fillMaxWidth()
-            .onFocusChanged { if (!it.isFocused) commit() },
+        modifier = Modifier.fillMaxWidth(),
         label = "签名内容",
         useLabelAsPlaceholder = true,
         singleLine = true,
