@@ -726,7 +726,8 @@ final class LockScreenOverlay {
     /**
      * 计算三元素的最终像素尺寸。
      *
-     * 锁定比例时取默认尺寸乘缩放百分比；解锁时长宽取各自的 dp 值。
+     * 封面/播放器：宽、高为 0 时取各自的自动基准（封面＝屏宽 72% 钳 360dp、播放器＝屏宽-24 钳 160、
+     * 高 178dp），非 0 时为绝对 dp；缩放百分比是**基准的倍率**（最终 = 基准 × 缩放%）。
      * 任何异常取值都只会退回默认值，不会让覆盖层失败。
      */
     private ElementGeometry measureElements(Map<String, Integer> elements) {
@@ -740,25 +741,22 @@ final class LockScreenOverlay {
         geometry.clockWidth = -1;  // MATCH_PARENT
         geometry.clockHeight = -2; // WRAP_CONTENT
 
-        int defaultArt = Math.min((int) (metrics.widthPixels * .72f), dp(360));
-        if (elem(elements, Config.COVER_LOCKED) != 0) {
-            int size = Math.max(dp(40), defaultArt * clamp(elem(elements, Config.COVER_SCALE), 10, 300) / 100);
-            geometry.coverWidth = size;
-            geometry.coverHeight = size;
-        } else {
-            geometry.coverWidth = dp(clamp(elem(elements, Config.COVER_WIDTH), 40, 4096));
-            geometry.coverHeight = dp(clamp(elem(elements, Config.COVER_HEIGHT), 40, 4096));
-        }
+        int defaultArtDp = Math.min((int) (screenWidthDp * .72f), 360);
+        int coverScale = clamp(elem(elements, Config.COVER_SCALE), 10, 300);
+        int coverBaseW = elem(elements, Config.COVER_WIDTH) > 0
+                ? clamp(elem(elements, Config.COVER_WIDTH), 40, 4096) : defaultArtDp;
+        int coverBaseH = elem(elements, Config.COVER_HEIGHT) > 0
+                ? clamp(elem(elements, Config.COVER_HEIGHT), 40, 4096) : defaultArtDp;
+        geometry.coverWidth = Math.max(dp(40), dp(coverBaseW) * coverScale / 100);
+        geometry.coverHeight = Math.max(dp(40), dp(coverBaseH) * coverScale / 100);
 
-        int baseCardWidthDp = Math.max(160, screenWidthDp - 24);
-        if (elem(elements, Config.CARD_LOCKED) != 0) {
-            int scale = clamp(elem(elements, Config.CARD_SCALE), 10, 300);
-            geometry.cardWidth = dp(Math.max(160, baseCardWidthDp * scale / 100));
-            geometry.cardHeight = dp(Math.max(60, 178 * scale / 100));
-        } else {
-            geometry.cardWidth = dp(clamp(elem(elements, Config.CARD_WIDTH), 160, 4096));
-            geometry.cardHeight = dp(clamp(elem(elements, Config.CARD_HEIGHT), 60, 4096));
-        }
+        int cardBaseW = elem(elements, Config.CARD_WIDTH) > 0
+                ? clamp(elem(elements, Config.CARD_WIDTH), 40, 4096) : Math.max(160, screenWidthDp - 24);
+        int cardBaseH = elem(elements, Config.CARD_HEIGHT) > 0
+                ? clamp(elem(elements, Config.CARD_HEIGHT), 40, 4096) : 178;
+        int cardScale = clamp(elem(elements, Config.CARD_SCALE), 10, 300);
+        geometry.cardWidth = Math.max(dp(60), dp(cardBaseW) * cardScale / 100);
+        geometry.cardHeight = Math.max(dp(60), dp(cardBaseH) * cardScale / 100);
         return geometry;
     }
 

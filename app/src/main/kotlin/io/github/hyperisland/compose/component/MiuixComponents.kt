@@ -298,10 +298,10 @@ private fun PageList(
 }
 
 @Composable
-internal fun SectionTitle(title: String) {
+internal fun SectionTitle(title: String, modifier: Modifier = Modifier) {
     SmallTitle(
         text = title,
-        modifier = Modifier.padding(top = 4.dp),
+        modifier = modifier.padding(top = 4.dp),
         insideMargin = PaddingValues(horizontal = 18.dp, vertical = 8.dp),
     )
 }

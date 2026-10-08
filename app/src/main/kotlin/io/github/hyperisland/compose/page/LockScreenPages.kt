@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -39,6 +40,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -436,8 +438,6 @@ internal fun LockMusicAppsPage() {
 internal fun LockAppearancePage() {
     val context = LocalContext.current
     val screenWidthDp = LocalConfiguration.current.screenWidthDp
-    val defaultArtDp = minOf((screenWidthDp * 0.72f).toInt(), 360)
-    val defaultCardWidthDp = maxOf(160, screenWidthDp - 24)
 
     // 一次读出全部元素配置，写回时同步更新本地快照以触发重组。
     var settings by remember { mutableStateOf(Config.elementValues(context)) }
@@ -452,16 +452,15 @@ internal fun LockAppearancePage() {
         settings = settings + (key to newValue)
     }
 
-    /** 从「锁定比例」切到「长宽」时，用当前默认尺寸兜底填充，避免出现 0 值。 */
-    fun seedSize(widthKey: String, heightKey: String, fallbackWidth: Int, fallbackHeight: Int) {
-        if (value(widthKey) <= 0) update(widthKey, fallbackWidth)
-        if (value(heightKey) <= 0) update(heightKey, fallbackHeight)
+    // 分组手风琴：默认全收起，点标题展开/收起；跨页面切换用 rememberSaveable 记住。
+    var expandedSections by rememberSaveable { mutableStateOf(setOf<String>()) }
+    fun toggleSection(key: String) {
+        expandedSections = if (key in expandedSections) expandedSections - key else expandedSections + key
     }
 
     CollapsingPage(title = "外观") {
         item {
-            SectionTitle("取色")
-            Card {
+            CollapsibleSection("取色", "pick", expandedSections, ::toggleSection) {
                 PreferenceDropdown(
                     title = "主色来源",
                     summary = "跟随封面时挑选专辑主色的方式",
@@ -473,8 +472,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            SectionTitle("日期")
-            Card {
+            CollapsibleSection("日期", "date", expandedSections, ::toggleSection) {
                 PreferenceSwitch(
                     title = "显示日期",
                     summary = "时钟上方显示公历、周几与农历",
@@ -499,8 +497,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            SectionTitle("签名")
-            Card {
+            CollapsibleSection("签名", "sign", expandedSections, ::toggleSection) {
                 PreferenceSwitch(
                     title = "显示签名",
                     summary = "日期行下方的自定义文字",
@@ -526,8 +523,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            SectionTitle("时间")
-            Card {
+            CollapsibleSection("时间", "clock", expandedSections, ::toggleSection) {
                 DpSlider("字号", value(Config.CLOCK_SIZE), 20..120, onCommit = { update(Config.CLOCK_SIZE, it) })
                 DpSlider("粗细", value(Config.CLOCK_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.CLOCK_WEIGHT, it) })
                 DpSlider("描边加粗", value(Config.CLOCK_STROKE), 0..8, onCommit = { update(Config.CLOCK_STROKE, it) })
@@ -552,24 +548,10 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            SectionTitle("专辑封面")
-            Card {
-                PreferenceSwitch(
-                    title = "锁定比例",
-                    summary = "关闭后可分别调整宽度和高度",
-                    icon = null,
-                    checked = value(Config.COVER_LOCKED) != 0,
-                    onCheckedChange = { locked ->
-                        update(Config.COVER_LOCKED, if (locked) 1 else 0)
-                        if (!locked) seedSize(Config.COVER_WIDTH, Config.COVER_HEIGHT, defaultArtDp, defaultArtDp)
-                    },
-                )
-                if (value(Config.COVER_LOCKED) != 0) {
-                    DpSlider("缩放", value(Config.COVER_SCALE), 10..300, unit = "%", onCommit = { update(Config.COVER_SCALE, it) })
-                } else {
-                    DpSlider("宽度", value(Config.COVER_WIDTH).coerceAtLeast(40), 40..600, onCommit = { update(Config.COVER_WIDTH, it) })
-                    DpSlider("高度", value(Config.COVER_HEIGHT).coerceAtLeast(40), 40..600, onCommit = { update(Config.COVER_HEIGHT, it) })
-                }
+            CollapsibleSection("专辑封面", "cover", expandedSections, ::toggleSection) {
+                DpSlider("缩放", value(Config.COVER_SCALE), 10..300, unit = "%", onCommit = { update(Config.COVER_SCALE, it) })
+                DpSlider("宽度 (0=自动)", value(Config.COVER_WIDTH), 0..600, onCommit = { update(Config.COVER_WIDTH, it) })
+                DpSlider("高度 (0=自动)", value(Config.COVER_HEIGHT), 0..600, onCommit = { update(Config.COVER_HEIGHT, it) })
                 PreferenceSlider(
                     title = "圆角",
                     summary = "锁屏专辑封面的圆角半径",
@@ -586,24 +568,10 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            SectionTitle("播放器")
-            Card {
-                PreferenceSwitch(
-                    title = "锁定比例",
-                    summary = "关闭后可分别调整卡片宽度和高度",
-                    icon = null,
-                    checked = value(Config.CARD_LOCKED) != 0,
-                    onCheckedChange = { locked ->
-                        update(Config.CARD_LOCKED, if (locked) 1 else 0)
-                        if (!locked) seedSize(Config.CARD_WIDTH, Config.CARD_HEIGHT, defaultCardWidthDp, 178)
-                    },
-                )
-                if (value(Config.CARD_LOCKED) != 0) {
-                    DpSlider("缩放", value(Config.CARD_SCALE), 10..300, unit = "%", onCommit = { update(Config.CARD_SCALE, it) })
-                } else {
-                    DpSlider("宽度", value(Config.CARD_WIDTH).coerceAtLeast(160), 160..600, onCommit = { update(Config.CARD_WIDTH, it) })
-                    DpSlider("高度", value(Config.CARD_HEIGHT).coerceAtLeast(60), 60..600, onCommit = { update(Config.CARD_HEIGHT, it) })
-                }
+            CollapsibleSection("播放器", "card", expandedSections, ::toggleSection) {
+                DpSlider("缩放", value(Config.CARD_SCALE), 10..300, unit = "%", onCommit = { update(Config.CARD_SCALE, it) })
+                DpSlider("宽度 (0=自动)", value(Config.CARD_WIDTH), 0..600, onCommit = { update(Config.CARD_WIDTH, it) })
+                DpSlider("高度 (0=自动)", value(Config.CARD_HEIGHT), 0..600, onCommit = { update(Config.CARD_HEIGHT, it) })
                 DpSlider("圆角", value(Config.CARD_RADIUS), 0..48, onCommit = { update(Config.CARD_RADIUS, it) })
                 DpSlider("上间距", value(Config.CARD_SPACING), 0..160, onCommit = { update(Config.CARD_SPACING, it) })
                 PreferenceDropdown(
@@ -625,8 +593,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            SectionTitle("通知入口")
-            Card {
+            CollapsibleSection("通知入口", "entry", expandedSections, ::toggleSection) {
                 PreferenceDropdown(
                     title = "文字颜色",
                     summary = "「展开通知」的文字颜色，可选跟随封面",
@@ -648,8 +615,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            SectionTitle("背景")
-            Card {
+            CollapsibleSection("背景", "backdrop", expandedSections, ::toggleSection) {
                 PreferenceDropdown(
                     title = "背景样式",
                     summary = "玻璃风格模糊封面，沉浸风格纯色底",
@@ -1209,6 +1175,34 @@ private val TEXT_COLOR_LABELS = listOf("跟随封面", "白", "黑", "浅灰", "
  * 值直接当selectedIndex用（与 PICK_STYLE_LABELS 顺序一致）。
  */
 private val PICK_STYLE_LABELS = listOf("低饱和磨砂 (M3E)", "鲜艳原色")
+
+/**
+ * 外观页分组（手风琴）：标题点击展开/收起，收起时内容完全不组合（页面短、滚动省）。
+ * expandedKeys 由页面持有并 rememberSaveable；箭头指示当前状态。
+ */
+@Composable
+private fun CollapsibleSection(
+    title: String,
+    key: String,
+    expandedKeys: Set<String>,
+    onToggle: (String) -> Unit,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
+) {
+    val expanded = key in expandedKeys
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { onToggle(key) },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        SectionTitle(title, Modifier.weight(1f))
+        Text(
+            text = if (expanded) "▾" else "▸",
+            modifier = Modifier.padding(end = 24.dp),
+            fontSize = 14.sp,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+        )
+    }
+    if (expanded) Card(content = content)
+}
 
 @Composable
 private fun PickStyleDropdown(

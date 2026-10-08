@@ -79,12 +79,10 @@ public final class Config {
     public static final String COVER_SCALE = "cover_scale_percent";
     public static final String COVER_WIDTH = "cover_width_dp";
     public static final String COVER_HEIGHT = "cover_height_dp";
-    public static final String COVER_LOCKED = "cover_aspect_locked";
     public static final String COVER_SPACING = "cover_spacing_dp";
     public static final String CARD_SCALE = "card_scale_percent";
     public static final String CARD_WIDTH = "card_width_dp";
     public static final String CARD_HEIGHT = "card_height_dp";
-    public static final String CARD_LOCKED = "card_aspect_locked";
     public static final String CARD_RADIUS = "card_radius_dp";
     public static final String CARD_SPACING = "card_spacing_dp";
     /**
@@ -156,12 +154,10 @@ public final class Config {
         ELEMENT_DEFAULTS.put(COVER_SCALE, 118);
         ELEMENT_DEFAULTS.put(COVER_WIDTH, 0);
         ELEMENT_DEFAULTS.put(COVER_HEIGHT, 0);
-        ELEMENT_DEFAULTS.put(COVER_LOCKED, 1);
         ELEMENT_DEFAULTS.put(COVER_SPACING, 10);
         ELEMENT_DEFAULTS.put(CARD_SCALE, 100);
         ELEMENT_DEFAULTS.put(CARD_WIDTH, 369);
         ELEMENT_DEFAULTS.put(CARD_HEIGHT, 180);
-        ELEMENT_DEFAULTS.put(CARD_LOCKED, 0);
         ELEMENT_DEFAULTS.put(CARD_RADIUS, 28);
         ELEMENT_DEFAULTS.put(CARD_SPACING, 20);
         ELEMENT_DEFAULTS.put(CARD_BG, 0);

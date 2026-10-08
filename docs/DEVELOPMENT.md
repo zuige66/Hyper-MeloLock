@@ -125,6 +125,12 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 - `pickDominantVivid`：population 前 5 的色块作候选池（覆盖主体色调、排除边角小色块），池内按鲜艳度 **S×V** 取最高。选出的主色仍走各项已有的磨砂/鲜艳推导。
 - 配置端：外观页最顶上加「取色」分组（主色来源下拉）。改键进 elementSignature → 整场重建 → autoSwatch 清零重取，无缓存策略污染问题。诊断日志追加 `swatch=dominant|vibrant`。
 
+**重构（2026-10-08 晚）：去掉「锁定比例」+ 外观页分组手风琴（1db6c88 之后）**
+
+- **锁定比例移除**（`cover_aspect_locked`/`card_aspect_locked` 键删除）：封面、播放器现在**缩放 / 宽度 / 高度三滑杆并存**。几何规则（`measureElements` 重写）：宽或高为 0 时取自动基准（封面＝屏宽 72% 钳 360dp、播放器宽＝屏宽-24 钳 160dp、高 178dp），非 0 为绝对 dp；**缩放是基准的百分比倍率**（最终 = 基准 × 缩放%）。存量行为不变：封面默认宽高 0 + 缩放 118%、播放器 369×180 + 缩放 100% 与旧「锁定/解锁」两态逐像素一致。UI 滑杆 label「宽度 (0=自动)」；`seedSize` 与 `defaultArtDp/defaultCardWidthDp` 死代码清理。
+- **外观页分组手风琴**（用户选定收起/展开方案，默认全收起）：新增 `CollapsibleSection(title, key, expandedKeys, onToggle, content)`——标题行可点（右侧 ▾/▸ 指示），收起时内容完全不组合；展开集合 `rememberSaveable` 跨页面切换记住。8 组（取色/日期/签名/时间/专辑封面/播放器/通知入口/背景）全部改造；`SectionTitle` 加 modifier 默认参数（共享组件不破坏现有调用）。坑：Miuix `Card` 的 content 是 `ColumnScope.() -> Unit`，透传 lambda 签名必须一致，否则编译错。
+- **重装语义确认**：覆盖安装（`install -r`）不清 SharedPreferences，配置保留；卸载重装清空 app data → 走 `ELEMENT_DEFAULTS`（真机调定那套，签名默认关闭空白）。debug↔release 签名不同必须卸载重装 → 必然回默认值。
+
 **补充（2026-10-08 晚）：时钟「描边加粗」滑杆（4ad0ea9）**
 
 - 用户反馈圆体字体拉满粗细仍细。解析字体 `fvar` 表（python struct 手撸）：**中等圆 wght 轴 300~700、很圆 400~800**——滑杆 900 被字体钳制，字体本身没有更粗的空间。
