@@ -660,6 +660,20 @@ adb -s 1b3a7d8 reboot
    - **当前卡点**：`logcat` 全量搜 `WTP` = **0 条**，而 SystemUI 侧 MeloLock 日志正常（57 条）——**Vector 管理器里还没勾选 `com.miui.miwallpaper` 作用域**（`xposed_scope.xml` 只是声明，不勾选不注入；已写进 AGENTS.md 约定）。**待 zuige 在手机上勾选作用域后再次 force-stop 壁纸进程复测。**
    - **成功判据（唯一）**：锁屏亮屏看到整屏品红。同时日志应出现 `WTP hooked ...` / `WTP hit ... self=... keyguard=true` / `WTP replaced ...`。看不到品红但有 `WTP hit ... keyguard=false` → 本机锁屏壁纸不走这些类的 Keyguard 实例，按日志迭代下一版探针。
 
+12. **2026-10-08 探针验证成功 + 重启作用域支持壁纸进程** —— 前者证实了换纹理路线的核心假设，后者是基建补齐。
+
+   **探针结果（全部 `[机]` 实测）**：zuige 在 Vector 勾选 `com.miui.miwallpaper` 作用域后，force-stop 壁纸进程，日志一次命中：
+   - hook 安装：`opengl.ImageWallpaperRenderer#lambda$onSurfaceCreated$0$com-miui-...`（参数 `[Bitmap]`，**前缀匹配成功**）、`container.openGL.KeyguardAnimImageWallpaperRenderer#getBitmap`、`KeyguardStreamAnimImageWallpaperRenderer#getBitmap` 三个全挂上；
+   - **本机锁屏壁纸的真实渲染路径**：`KeyguardAnimImageWallpaperRenderer.getBitmap()`（**不是** `ImageWallpaperRenderer` 的 Keyguard 子类）→ 每次亮屏/壁纸重建都会取图，尺寸 `1440x3200`（壁纸文件尺寸 ≠ 屏幕 1080x2400，印证 HMC 注释——直接用原图副本画色不会错位）；桌面走 `DesktopAnimImageWallpaperRenderer`，探针正确跳过（`keyguard=false`）；
+   - 替换生效：`WTP replaced result/arg 1440x3200` 多次。**结论：换纹理路线成立**，正式方案（专辑图→壁纸纹理）可以开工；锁屏壁纸是静态图（非画报轮播）的前提此前已核实。
+
+   **重启作用域扩展**（zuige 要求）：
+   - `Config.java` 新增 `ACTION_RESTART_WALLPAPER` + `WALLPAPER_PACKAGE`（与 SystemUI 通道同构：配置端发显式广播 → 注入的 hook 自杀 → 系统重绑 → Vector 重新注入）；
+   - `WallpaperTexProbe` 里 hook `WallpaperService#onCreate`（沿父类链找 `onCreate`，`thisObject` 即 Context）注册 receiver，static flag 防重复；
+   - `RestartScopeDialog` 的 `RestartScopeTargets` 新增 `com.miui.miwallpaper`（root 路径，`am force-stop`）；字符串 `wallpaper_process`（英文/中文，其余语言回落默认）；
+   - `LockHomePage` 无 root 分支同时广播 SystemUI 与壁纸进程两条。
+   - **端到端验证**：`rev=WTP-2` 装机后，`am broadcast -a io.github.melolock.action.RESTART_WALLPAPER -p com.miui.miwallpaper` → `killing wallpaper process`（PID 16973）→ 新进程 18696 重新加载 `WTP-2`。**无 root 重启壁纸进程链路完整可用。**
+
 9. 2026-10-06 解锁滑动背景裂缝修复：此前同一张模糊专辑图分别绘制在锁屏根视图和通知窗根视图；解锁手势期间两个根视图由 SystemUI 分别做位移/淡出动画，底部会暴露原壁纸。现删除通知窗根视图里的重复模糊图和遮罩，只保留锁屏根视图内的单一全屏背景层；窗口顶层仅放封面、播放器和通知入口。普通通知继续由守卫隐藏。Debug 构建已通过，待真机滑动解锁验收。
 
 10. 2026-10-06 播放中壁纸与时间页修复：通知页过去调用完整视图恢复，连同系统壁纸层与系统时钟一起恢复，因此播放时可见原壁纸，且该构建的系统时钟会丢失小时。通知页现只临时恢复通知栈，继续隐藏原壁纸、原生前景和两组系统时钟；模块自己的 `TextClock` 留在通知页上方。其后验证发现等待 `ACTION_USER_PRESENT` 会让覆盖层残留到桌面，因此撤回该延迟撤层策略：`isKeyguardLocked()` 变为 false 时立即恢复原生界面，根视图分离仍为第二道清理。为阻止主题在布局动画中动态加入第二个时间或壁纸层，守卫现在遍历锁屏根视图并隐藏所有时钟类及 `wallpaper`/`keyguard_background` 标识的原生层。Debug 构建已通过，待真机验收通知页、上滑解锁和无媒体回退。**其中「`isKeyguardLocked()` 变为 false 时立即恢复原生界面」这条策略已在第 13 条被「淡出 + 保留实例」取代——第 12 条的日志证明它正是上滑露壁纸一秒的直接原因。**

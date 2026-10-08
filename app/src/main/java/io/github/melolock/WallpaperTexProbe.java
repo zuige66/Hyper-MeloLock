@@ -28,7 +28,7 @@ import java.util.Arrays;
 public final class WallpaperTexProbe implements IXposedHookLoadPackage {
     private static final String TAG = "MeloLock";
     /** 修订串：装机后先在日志里看到它，再让人复现（AGENTS.md：别假设装了就生效）。 */
-    private static final String REV = "WTP-1";
+    private static final String REV = "WTP-2";
     private static final int MAGENTA = 0xFFFF00FF;
 
     /** 候选上传点：opengl.ImageWallpaperRenderer（通用）与 container.openGL.KeyguardAnimImageWallpaperRenderer（keyguard 专用）。 */
@@ -46,6 +46,12 @@ public final class WallpaperTexProbe implements IXposedHookLoadPackage {
             Log.i(TAG, "WTP fingerprint mismatch; probe disabled");
             return;
         }
+        try {
+            hookRestartChannel(param.classLoader);
+        } catch (Throwable error) {
+            // 无 root 重启通道装不上只影响「重启作用域按钮对壁纸进程失效」，hook 本体不受影响。
+            Log.w(TAG, "WTP restart channel unavailable (仅该功能放弃)", error);
+        }
         for (String className : RENDERER_CLASSES) {
             try {
                 probeRenderer(param.classLoader, className);
@@ -54,6 +60,50 @@ public final class WallpaperTexProbe implements IXposedHookLoadPackage {
                 Log.w(TAG, "WTP probe " + className + " unavailable (仅该候选放弃)", error);
             }
         }
+    }
+
+    /**
+     * 无 root 重启通道：与 SystemUI 侧的 restartReceiver 同构（[LockScreenOverlay] 122-128）。
+     * 配置端「重启作用域」发显式广播到本包，收到后 kill 自己 —— 壁纸服务被系统自动重绑，
+     * 重绑时 Vector 重新注入模块，新 hook 就装上了（等价 `am force-stop com.miui.miwallpaper`）。
+     *
+     * Context 怎么拿：本进程没有稳定的 View 可以 getContext()，改为 hook WallpaperService#onCreate，
+     * thisObject 就是 Service（本身是 Context）。static flag 防止多个壁纸 engine 重复注册。
+     */
+    private static boolean restartChannelArmed = false;
+
+    private static void hookRestartChannel(ClassLoader loader) throws Throwable {
+        Class<?> service = XposedHelpers.findClass("android.service.wallpaper.WallpaperService", loader);
+        // onCreate 声明在 WallpaperService 或其父类（Service）上，沿父类链找。
+        Method onCreate = null;
+        for (Class<?> type = service; type != null; type = type.getSuperclass()) {
+            try {
+                onCreate = type.getDeclaredMethod("onCreate");
+                break;
+            } catch (NoSuchMethodException ignored) { /* 继续向上 */ }
+        }
+        if (onCreate == null) throw new NoSuchMethodException("WallpaperService.onCreate not found");
+        XposedBridge.hookMethod(onCreate, new XC_MethodHook() {
+            @Override protected void afterHookedMethod(MethodHookParam hook) {
+                if (restartChannelArmed) return;
+                if (!(hook.thisObject instanceof android.content.Context)) return;
+                android.content.Context context = (android.content.Context) hook.thisObject;
+                try {
+                    context.registerReceiver(new android.content.BroadcastReceiver() {
+                        @Override public void onReceive(android.content.Context c, android.content.Intent intent) {
+                            if (!Config.ACTION_RESTART_WALLPAPER.equals(intent.getAction())) return;
+                            Log.i(TAG, "WTP restart requested via broadcast; killing wallpaper process");
+                            android.os.Process.killProcess(android.os.Process.myPid());
+                        }
+                    }, new android.content.IntentFilter(Config.ACTION_RESTART_WALLPAPER),
+                            android.content.Context.RECEIVER_EXPORTED);
+                    restartChannelArmed = true;
+                    Log.i(TAG, "WTP restart channel armed (action=" + Config.ACTION_RESTART_WALLPAPER + ")");
+                } catch (Throwable error) {
+                    Log.w(TAG, "WTP restart channel register failed", error);
+                }
+            }
+        });
     }
 
     private static void probeRenderer(ClassLoader loader, String className) throws Throwable {

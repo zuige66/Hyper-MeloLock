@@ -50,6 +50,13 @@ internal val RestartScopeTargets = listOf(
         command = "killall com.android.systemui",
     ),
     RestartScopeTarget(
+        // 2026-10-08 新增：模块扩展了壁纸进程作用域（换纹理探针/封面壁纸化），
+        // force-stop 后系统自动重绑壁纸服务并重新注入模块（已实测）。
+        packageName = "com.miui.miwallpaper",
+        label = R.string.wallpaper_process,
+        command = "am force-stop com.miui.miwallpaper",
+    ),
+    RestartScopeTarget(
         packageName = "com.milink.service",
         label = R.string.milink_service,
         command = "am force-stop com.milink.service",

@@ -39,6 +39,16 @@ public final class Config {
     /** 广播的目标包：显式指定才能送达 SystemUI 进程里注册的接收器。 */
     public static final String SYSTEMUI_PACKAGE = "com.android.systemui";
 
+    /**
+     * 无 root 时重启壁纸进程（com.miui.miwallpaper）的通道，机制与 [ACTION_RESTART_SYSTEMUI]
+     * 相同：注入在该进程里的 hook 代码注册接收器，收到后 kill 自己，系统自动重绑壁纸服务。
+     * 2026-10-08 起模块扩展了壁纸进程作用域（换纹理探针 → 未来的封面壁纸化），
+     * 「重启作用域」必须能同时重启它，否则壁纸侧的新 hook 永远装不上。
+     */
+    public static final String ACTION_RESTART_WALLPAPER = "io.github.melolock.action.RESTART_WALLPAPER";
+    /** 壁纸进程包名：本机锁屏壁纸（含 GL 纹理上传点）由它绘制，独立于 SystemUI。 */
+    public static final String WALLPAPER_PACKAGE = "com.miui.miwallpaper";
+
     // ── 锁屏三元素（时间 / 专辑封面 / 播放器）的可编辑参数 ──────────────────────
     // 键名同时用作 SharedPreferences 键与 Provider 的 key 列，值统一按字符串存取，
     // 这样新增参数不需要再改 Provider 的列投影。
