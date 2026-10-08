@@ -131,6 +131,12 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 - **外观页分组手风琴**（用户选定收起/展开方案，默认全收起）：新增 `CollapsibleSection(title, key, expandedKeys, onToggle, content)`——标题行可点（右侧 ▾/▸ 指示），收起时内容完全不组合；展开集合 `rememberSaveable` 跨页面切换记住。8 组（取色/日期/签名/时间/专辑封面/播放器/通知入口/背景）全部改造；`SectionTitle` 加 modifier 默认参数（共享组件不破坏现有调用）。坑：Miuix `Card` 的 content 是 `ColumnScope.() -> Unit`，透传 lambda 签名必须一致，否则编译错。
 - **重装语义确认**：覆盖安装（`install -r`）不清 SharedPreferences，配置保留；卸载重装清空 app data → 走 `ELEMENT_DEFAULTS`（真机调定那套，签名默认关闭空白）。debug↔release 签名不同必须卸载重装 → 必然回默认值。
 
+**修复（2026-10-08 晚）：配置变更立即生效（334919e）**
+
+- **现象**：改外观后灭屏亮屏不生效，必须「关闭再重新激活」模块。根因链：① App 端每次写盘 `notifyChange`，SystemUI 的 `switchObserver` 收到通知却**只打日志不重建**；② 锁屏重现走「唤醒预显」`applyPreShow()`——只摆可见性、**不经过 `resume()` 的指纹比对**，suspended 旧场景直接复活，旧外观端出来。两条路都不重建，只剩关开模块（restore("switch-off")）一条路。
+- **修复**：`onChange` 改为 120ms 防抖（合并一次应用内操作的连续写盘，如重置一组连写 7 键）后执行 `applyPendingConfig`：先 `updateSwitch()`（开关语义不变），再比对指纹——三元素变了走 `restore("config-changed")` + 下一帧 `render(keep)`（与 `resume()` 的 elements-changed 路径完全同款），背景三态/圆角变了 `applyBackdrop()` 就地更新。改完回锁屏直接是新外观，无需灭屏亮屏、无需关开模块。
+- 顺带：音乐应用页标题改「应用」，其页脚与关于页「开源说明」改 footnote 页脚小字（与外观页一致）。
+
 **补充（2026-10-08 晚）：时钟「描边加粗」滑杆（4ad0ea9）**
 
 - 用户反馈圆体字体拉满粗细仍细。解析字体 `fvar` 表（python struct 手撸）：**中等圆 wght 轴 300~700、很圆 400~800**——滑杆 900 被字体钳制，字体本身没有更粗的空间。
