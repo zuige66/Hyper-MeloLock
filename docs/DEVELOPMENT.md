@@ -94,6 +94,12 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 
 **改完参数后重启 SystemUI 才稳妥**：覆盖层在 `create()` 时读一次配置。自「熄屏唤醒防闪」之后 `ACTION_SCREEN_OFF` 不再撤层，场景若仍存活就会继续沿用旧参数——灭屏再亮屏**不一定**生效，只有场景已被销毁（解锁、关闭模块、锁屏根视图分离）后重建才会读到新值。没有做实时重建——在锁屏期间动态增删 SystemUI 视图风险不可控。
 
+**补充（2026-10-08 晚）：默认值真机化 + 「关于」页检查更新（43cd442）**
+
+- **默认值＝真机配置**（`content query /elements` 全量抄回）：时钟 80/900/跟随封面/距顶 0，封面间距 10，卡片解锁 369×180（**注意：绝对 dp，其他屏宽设备会偏**）/底色跟随封面，日期 22/520/跟随封面/距顶 50、签名间距 8，入口背景跟随封面。**签名例外**：默认关 + 内容空白（用户指定），不随真机。state 三项（背景样式/遮罩/强度）与圆角 28 本就一致未动。存量用户 SharedPreferences 已有值不受影响，默认值只对新装生效。
+- **导航「开发者」→「关于」**：`about` 字符串（zh/en）改「关于/About」；页内 SectionTitle `about_developer` 保留「开发者」。
+- **检查更新**：恢复 Manifest 的 INTERNET（上游曾 `tools:node="remove"`）；`UpdateService.fetchIfNewer` 参数化 api/downloadUrl（默认仍指上游 HyperIsland），LockAboutPage 传本仓库 `zuige66/Hyper-MeloLock/releases/latest` + releaseUrl 指向 Releases 页。UI：原「模块」分组的灰度检查更新删除，在「项目」分组 GitHub 之下、更新日志之上插入可用项（点击转圈 → 有新版弹 `UpdateDialogHost`、无新版 Toast `already_latest`、失败弹失败对话框）。上游已有全套字符串/对话框组件，直接复用。
+
 **补充（2026-10-08 晚）：时钟「描边加粗」滑杆（4ad0ea9）**
 
 - 用户反馈圆体字体拉满粗细仍细。解析字体 `fvar` 表（python struct 手撸）：**中等圆 wght 轴 300~700、很圆 400~800**——滑杆 900 被字体钳制，字体本身没有更粗的空间。
