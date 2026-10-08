@@ -140,9 +140,11 @@ public final class Config {
     /** 宽/高为 0 表示“跟随默认”，由覆盖层按屏幕计算。 */
     private static final Map<String, Integer> ELEMENT_DEFAULTS = new LinkedHashMap<>();
     /**
-     * 元素默认值＝2026-10-08 真机（gauguinpro）调定的一套抄回：时钟 80/900/跟随封面、
-     * 日期 22/520/跟随封面/距顶 50、卡片解锁 369x180/底色跟随封面、入口背景跟随封面。
+     * 元素默认值＝真机（gauguinpro）调定的一套抄回（2026-10-08 第二次同步，v0.3.1）：
+     * 时钟 80/900/跟随封面、封面缩放 125%、卡片 369x180/底色跟随封面、
+     * 日期 22/520/跟随封面/**鲜艳**取色/距顶 50、主色来源**占比优先**、入口背景跟随封面。
      * 签名例外：默认**关闭且内容空白**（用户指定），不随真机。
+     * 存量用户 SharedPreferences 已有值不受影响，默认值只对新装生效。
      */
     static {
         ELEMENT_DEFAULTS.put(CLOCK_SIZE, 80);
@@ -151,7 +153,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(CLOCK_COLOR, 0);
         ELEMENT_DEFAULTS.put(CLOCK_ROUNDNESS, 0);
         ELEMENT_DEFAULTS.put(CLOCK_STROKE, 0);
-        ELEMENT_DEFAULTS.put(COVER_SCALE, 118);
+        ELEMENT_DEFAULTS.put(COVER_SCALE, 125);
         ELEMENT_DEFAULTS.put(COVER_WIDTH, 0);
         ELEMENT_DEFAULTS.put(COVER_HEIGHT, 0);
         ELEMENT_DEFAULTS.put(COVER_SPACING, 10);
@@ -176,11 +178,11 @@ public final class Config {
         ELEMENT_DEFAULTS.put(ENTRY_BG, 0);
         ELEMENT_DEFAULTS.put(CARD_BG_PICK, 0);
         ELEMENT_DEFAULTS.put(CLOCK_PICK, 0);
-        ELEMENT_DEFAULTS.put(DATE_PICK, 0);
+        ELEMENT_DEFAULTS.put(DATE_PICK, 1);
         ELEMENT_DEFAULTS.put(SIGN_PICK, 0);
         ELEMENT_DEFAULTS.put(ENTRY_COLOR_PICK, 0);
         ELEMENT_DEFAULTS.put(ENTRY_BG_PICK, 0);
-        ELEMENT_DEFAULTS.put(SWATCH_PICK, 0);
+        ELEMENT_DEFAULTS.put(SWATCH_PICK, 1);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */

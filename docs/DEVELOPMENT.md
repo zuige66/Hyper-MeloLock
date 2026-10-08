@@ -97,6 +97,7 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 **补充（2026-10-08 晚）：默认值真机化 + 「关于」页检查更新（43cd442）**
 
 - **默认值＝真机配置**（`content query /elements` 全量抄回）：时钟 80/900/跟随封面/距顶 0，封面间距 10，卡片解锁 369×180（**注意：绝对 dp，其他屏宽设备会偏**）/底色跟随封面，日期 22/520/跟随封面/距顶 50、签名间距 8，入口背景跟随封面。**签名例外**：默认关 + 内容空白（用户指定），不随真机。state 三项（背景样式/遮罩/强度）与圆角 28 本就一致未动。存量用户 SharedPreferences 已有值不受影响，默认值只对新装生效。
+- **第二次同步（v0.3.1）**：真机又调过三处——封面缩放 118→**125%**、日期取色风格→**鲜艳**（`date_pick=1`）、主色来源→**占比优先**（`swatch_pick=1`）。做法不变：`adb shell content query --uri content://io.github.melolock.config/elements` 全量抄回，与 `ELEMENT_DEFAULTS` 逐项 diff 后再改（用户以为只改了缩放，实际三项——**必须 diff 不能听描述**）。
 - **导航「开发者」→「关于」**：`about` 字符串（zh/en）改「关于/About」；页内 SectionTitle `about_developer` 保留「开发者」。
 - **检查更新**：恢复 Manifest 的 INTERNET（上游曾 `tools:node="remove"`）；`UpdateService.fetchIfNewer` 参数化 api/downloadUrl（默认仍指上游 HyperIsland），LockAboutPage 传本仓库 `zuige66/Hyper-MeloLock/releases/latest` + releaseUrl 指向 Releases 页。UI：原「模块」分组的灰度检查更新删除，在「项目」分组 GitHub 之下、更新日志之上插入可用项（点击转圈 → 有新版弹 `UpdateDialogHost`、无新版 Toast `already_latest`、失败弹失败对话框）。上游已有全套字符串/对话框组件，直接复用。
 
@@ -130,6 +131,12 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 - **锁定比例移除**（`cover_aspect_locked`/`card_aspect_locked` 键删除）：封面、播放器现在**缩放 / 宽度 / 高度三滑杆并存**。几何规则（`measureElements` 重写）：宽或高为 0 时取自动基准（封面＝屏宽 72% 钳 360dp、播放器宽＝屏宽-24 钳 160dp、高 178dp），非 0 为绝对 dp；**缩放是基准的百分比倍率**（最终 = 基准 × 缩放%）。存量行为不变：封面默认宽高 0 + 缩放 118%、播放器 369×180 + 缩放 100% 与旧「锁定/解锁」两态逐像素一致。UI 滑杆 label「宽度 (0=自动)」；`seedSize` 与 `defaultArtDp/defaultCardWidthDp` 死代码清理。
 - **外观页分组手风琴**（用户选定收起/展开方案，默认全收起）：新增 `CollapsibleSection(title, key, expandedKeys, onToggle, content)`——标题行可点（右侧 ▾/▸ 指示），收起时内容完全不组合；展开集合 `rememberSaveable` 跨页面切换记住。8 组（取色/日期/签名/时间/专辑封面/播放器/通知入口/背景）全部改造；`SectionTitle` 加 modifier 默认参数（共享组件不破坏现有调用）。坑：Miuix `Card` 的 content 是 `ColumnScope.() -> Unit`，透传 lambda 签名必须一致，否则编译错。
 - **重装语义确认**：覆盖安装（`install -r`）不清 SharedPreferences，配置保留；卸载重装清空 app data → 走 `ELEMENT_DEFAULTS`（真机调定那套，签名默认关闭空白）。debug↔release 签名不同必须卸载重装 → 必然回默认值。
+
+**修复（2026-10-08 晚）：元素指纹取错数据源 —— 改外观不生效的真正根因（bd6d2f0）**
+
+- 表象：改外观后必须「关闭再重新激活」模块才生效。前一版以为是「observer 收到通知却不重建」，加了防抖重建（那步本身没错：唤醒预显 `applyPreShow()` 确实绕过 `resume()` 指纹比对），但装上去仍不生效。
+- **真正的根因**：`currentElementSignature()` 用 `Config.elementInt(context, key)` 取值，而 `elementInt()/elementString()` 在 SystemUI 进程读的是**本进程的 SharedPreferences**（那份永远是空的 → 恒等于默认值）。于是指纹恒等于「默认值集合」，**怎么改配置指纹都不变**，比对形同虚设。只有 `elementValues()` 才是跨进程查 Provider 拿到配置端真实值的那张表；`readInt()`（背景三态）有跨进程分支所以背景没问题。
+- 修复：指纹改用 `elementValues()` 的 Map 值，签名正文改实时 `elementText()` 跨进程读取。教训：**跨进程读配置必须确认那个方法有没有「同进程直读 / 跨进程 query」分支**，SystemUI 侧的本地 prefs 永远是空的。
 
 **修复（2026-10-08 晚）：配置变更立即生效（334919e）**
 
