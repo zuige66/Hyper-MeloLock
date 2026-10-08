@@ -464,7 +464,7 @@ internal fun LockAppearancePage() {
             Card {
                 PreferenceDropdown(
                     title = "主色来源",
-                    summary = "跟随封面时从专辑封面选主色的方式：「最鲜艳优先」按鲜艳色桶取，可能选到占比很小的点缀色；「占比优先」在占比前 5 的主色块里挑最鲜艳的，更贴近封面主体色调",
+                    summary = "跟随封面时挑选专辑主色的方式",
                     icon = null,
                     items = listOf("最鲜艳优先", "占比优先"),
                     selectedIndex = value(Config.SWATCH_PICK).coerceIn(0, 1),
@@ -477,7 +477,7 @@ internal fun LockAppearancePage() {
             Card {
                 PreferenceSwitch(
                     title = "显示日期",
-                    summary = "时钟上方的「公历 + 周几 + 农历」，如「6月28日周六 · 乙巳年六月初四」",
+                    summary = "时钟上方显示公历、周几与农历",
                     icon = null,
                     checked = value(Config.DATE_ENABLED) != 0,
                     onCheckedChange = { update(Config.DATE_ENABLED, if (it) 1 else 0) },
@@ -503,7 +503,7 @@ internal fun LockAppearancePage() {
             Card {
                 PreferenceSwitch(
                     title = "显示签名",
-                    summary = "日期行下方的自定义文字；关闭或内容为空时不占位",
+                    summary = "日期行下方的自定义文字",
                     icon = null,
                     checked = value(Config.SIGN_ENABLED) != 0,
                     onCheckedChange = { update(Config.SIGN_ENABLED, if (it) 1 else 0) },
@@ -533,7 +533,7 @@ internal fun LockAppearancePage() {
                 DpSlider("描边加粗", value(Config.CLOCK_STROKE), 0..8, onCommit = { update(Config.CLOCK_STROKE, it) })
                 PreferenceDropdown(
                     title = "字体圆润",
-                    summary = "内置开源圆体数字字体，只影响 0-9 与冒号",
+                    summary = "圆体数字字体，只影响数字与冒号",
                     icon = null,
                     items = ROUNDNESS_LABELS,
                     selectedIndex = value(Config.CLOCK_ROUNDNESS).coerceIn(0, ROUNDNESS_LABELS.lastIndex),
@@ -556,7 +556,7 @@ internal fun LockAppearancePage() {
             Card {
                 PreferenceSwitch(
                     title = "锁定比例",
-                    summary = "关闭后可分别调整宽度和高度，封面按居中裁切填充",
+                    summary = "关闭后可分别调整宽度和高度",
                     icon = null,
                     checked = value(Config.COVER_LOCKED) != 0,
                     onCheckedChange = { locked ->
@@ -608,7 +608,7 @@ internal fun LockAppearancePage() {
                 DpSlider("上间距", value(Config.CARD_SPACING), 0..160, onCommit = { update(Config.CARD_SPACING, it) })
                 PreferenceDropdown(
                     title = "底色",
-                    summary = "播放器卡片的背景色；文字颜色按底色亮度自动适配",
+                    summary = "卡片背景色，文字按亮度自动适配",
                     icon = null,
                     items = CARD_BG_LABELS,
                     selectedIndex = CARD_BG_VALUES.indexOf(value(Config.CARD_BG)).coerceAtLeast(0),
@@ -617,7 +617,7 @@ internal fun LockAppearancePage() {
                 PickStyleDropdown(Config.CARD_BG, Config.CARD_BG_PICK, ::value, ::update)
                 PreferenceSwitch(
                     title = "锁屏禁止左下拉",
-                    summary = "沉浸场景显示时吃掉左侧下拉手势，不再和通知栏抢层级。注意：左半屏起始的上滑解锁也会失效（右半屏、指纹、电源键正常）",
+                    summary = "锁屏时禁用左侧下拉；左半屏上滑解锁随之失效",
                     icon = null,
                     checked = value(Config.BLOCK_LEFT_SHADE) != 0,
                     onCheckedChange = { update(Config.BLOCK_LEFT_SHADE, if (it) 1 else 0) },
@@ -629,7 +629,7 @@ internal fun LockAppearancePage() {
             Card {
                 PreferenceDropdown(
                     title = "文字颜色",
-                    summary = "底部「展开通知」按钮的文字颜色，可选跟随封面",
+                    summary = "「展开通知」的文字颜色，可选跟随封面",
                     icon = null,
                     items = TEXT_COLOR_LABELS,
                     selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.ENTRY_COLOR)).coerceAtLeast(0),
@@ -652,7 +652,7 @@ internal fun LockAppearancePage() {
             Card {
                 PreferenceDropdown(
                     title = "背景样式",
-                    summary = "深色玻璃＝强模糊封面 + 遮罩原样；浅色玻璃＝轻模糊 + 遮罩更淡；纯色沉浸＝不用封面，整块底色",
+                    summary = "玻璃风格模糊封面，沉浸风格纯色底",
                     icon = null,
                     items = listOf("深色玻璃", "浅色玻璃", "纯色沉浸"),
                     selectedIndex = style,
@@ -1220,7 +1220,7 @@ private fun PickStyleDropdown(
     if (value(colorKey) != 0) return   // 手选固定色时取色管线不跑，子选项无意义
     PreferenceDropdown(
         title = "取色风格",
-        summary = "「跟随封面」从专辑主色提取颜色的方式",
+        summary = "跟随封面时对主色的处理方式",
         icon = null,
         items = PICK_STYLE_LABELS,
         selectedIndex = value(pickKey).coerceIn(0, PICK_STYLE_LABELS.lastIndex),
@@ -1251,18 +1251,16 @@ private fun SignatureInputField() {
     DisposableEffect(Unit) {
         onDispose { commit() }
     }
-    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        TextField(
-            value = text,
-            onValueChange = { text = it },
-            modifier = Modifier.fillMaxWidth(0.72f),   // 全宽显得空旷，收窄到约 3/4 居中
-            label = "签名内容",
-            useLabelAsPlaceholder = true,
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { commit() }),
-        )
-    }
+    TextField(
+        value = text,
+        onValueChange = { text = it },
+        modifier = Modifier.fillMaxWidth(),   // 与下方滑条同宽
+        label = "签名内容",
+        useLabelAsPlaceholder = true,
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { commit() }),
+    )
 }
 
 /** 时间字体的圆润档位；0 用系统字体，1 / 2 用内置的开源圆体数字字体。 */
