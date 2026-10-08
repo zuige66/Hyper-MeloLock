@@ -49,6 +49,7 @@ internal class UpdateDownloadService : Service() {
                 notifyDone(target, launchInstall(target))
             } catch (error: Throwable) {
                 Log.w(TAG, "Update download failed: ${error::class.simpleName}: ${error.message}")
+                broadcastProgress(-1, done = true)
                 notifyFailed()
             } finally {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -81,15 +82,19 @@ internal class UpdateDownloadService : Service() {
                         output.write(buffer, 0, read)
                         downloaded += read
                         val now = System.currentTimeMillis()
-                        if (now - lastNotify > 500) {
+                        if (now - lastNotify > PROGRESS_INTERVAL_MILLIS) {
                             lastNotify = now
                             val percent = if (total > 0) (downloaded * 100 / total).toInt() else 0
                             notificationManager.notify(NOTIFICATION_ID, progressNotification(percent))
+                            // 应用内进度：系统通知在 HyperOS 上可能不显示（通知权限未授予 /
+                            // 前台服务通知被折叠），关于页靠这条显式广播显示百分比。
+                            broadcastProgress(percent)
                         }
                     }
                 }
             }
             if (cancelled) return
+            broadcastProgress(100, done = true)
             Log.i(TAG, "Update downloaded ${target.length()} bytes -> ${target.name}")
         } finally {
             connection.disconnect()
@@ -120,6 +125,16 @@ internal class UpdateDownloadService : Service() {
             }
             false
         }
+    }
+
+    /** 应用内进度广播（显式 setPackage 到本 App，不跨应用，注册时用 RECEIVER_NOT_EXPORTED）。 */
+    private fun broadcastProgress(percent: Int, done: Boolean = false) {
+        sendBroadcast(
+            Intent(ACTION_UPDATE_PROGRESS)
+                .setPackage(packageName)
+                .putExtra(EXTRA_PROGRESS, percent)
+                .putExtra(EXTRA_DONE, done),
+        )
     }
 
     private fun ensureChannel() {
@@ -169,7 +184,12 @@ internal class UpdateDownloadService : Service() {
         private const val NOTIFICATION_ID = 9101
         private const val APK_MIME = "application/vnd.android.package-archive"
         private const val NETWORK_TIMEOUT_MILLIS = 30_000
+        private const val PROGRESS_INTERVAL_MILLIS = 300L
         const val EXTRA_URL = "extra_apk_url"
         const val EXTRA_NAME = "extra_apk_name"
+        /** 下载进度广播：ACTION + progress(0..100) + done(是否结束，结束即清除 UI 进度)。 */
+        const val ACTION_UPDATE_PROGRESS = "io.github.melolock.action.UPDATE_PROGRESS"
+        const val EXTRA_PROGRESS = "extra_progress"
+        const val EXTRA_DONE = "extra_done"
     }
 }

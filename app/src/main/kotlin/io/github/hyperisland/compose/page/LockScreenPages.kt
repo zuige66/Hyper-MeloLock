@@ -1,5 +1,7 @@
 package io.github.hyperisland.compose.page
 
+import android.content.BroadcastReceiver
+import android.content.IntentFilter
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -86,6 +88,7 @@ import io.github.hyperisland.compose.service.ApkInstaller
 import io.github.hyperisland.compose.service.HomeSystemInfo
 import io.github.hyperisland.compose.service.RestartScopeService
 import io.github.hyperisland.compose.service.SystemInfoProvider
+import io.github.hyperisland.compose.service.UpdateDownloadService
 import io.github.hyperisland.compose.service.UpdateService
 import io.github.melolock.Config
 import kotlinx.coroutines.Dispatchers
@@ -730,6 +733,24 @@ internal fun LockAboutPage(isActive: Boolean) {
     // 检查更新：请求本仓库 GitHub Releases；有新版弹更新对话框，无新版 Toast，失败弹失败对话框。
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var updateDialogState by remember { mutableStateOf<UpdateDialogState?>(null) }
+    /** APK 下载进度（0..100）；-1＝未在下载。由 UpdateDownloadService 的显式广播驱动。 */
+    var downloadPercent by remember { mutableIntStateOf(-1) }
+    DisposableEffect(Unit) {
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(receiverContext: Context, intent: Intent) {
+                val percent = intent.getIntExtra(UpdateDownloadService.EXTRA_PROGRESS, -1)
+                val done = intent.getBooleanExtra(UpdateDownloadService.EXTRA_DONE, false)
+                downloadPercent = if (done) -1 else percent.coerceIn(0, 100)
+            }
+        }
+        val filter = IntentFilter(UpdateDownloadService.ACTION_UPDATE_PROGRESS)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            context.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            context.registerReceiver(receiver, filter)
+        }
+        onDispose { try { context.unregisterReceiver(receiver) } catch (_: Throwable) { } }
+    }
     val scope = rememberCoroutineScope()
     fun requestUpdateCheck() {
         if (isCheckingUpdate) return
@@ -837,7 +858,24 @@ internal fun LockAboutPage(isActive: Boolean) {
                     SettingsAction(
                         title = stringResource(R.string.check_update_action),
                         icon = MiuixIcons.Update,
-                        endContent = if (isCheckingUpdate) {
+                        // 右端：下载中显示转圈 + 百分比（系统通知在 HyperOS 上常被折叠/不显示，
+                        // 应用内进度才是用户真正看得到的），检查中显示纯转圈。
+                        endContent = if (downloadPercent >= 0) {
+                            {
+                                Row(
+                                    modifier = Modifier.padding(end = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    CircularProgressIndicator(size = 18.dp)
+                                    Text(
+                                        text = "下载中 $downloadPercent%",
+                                        fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                                    )
+                                }
+                            }
+                        } else if (isCheckingUpdate) {
                             {
                                 Box(
                                     modifier = Modifier.padding(end = 8.dp).size(26.dp),
@@ -849,7 +887,7 @@ internal fun LockAboutPage(isActive: Boolean) {
                         } else {
                             null
                         },
-                        enabled = !isCheckingUpdate,
+                        enabled = !isCheckingUpdate && downloadPercent < 0,
                         onClick = { requestUpdateCheck() },
                     )
                     SettingsAction(
