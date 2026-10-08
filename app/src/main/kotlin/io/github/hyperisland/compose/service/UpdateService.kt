@@ -1,5 +1,6 @@
 package io.github.hyperisland.compose.service
 
+import android.util.Log
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -14,10 +15,26 @@ internal data class AppUpdate(
 )
 
 internal object UpdateService {
+    private const val TAG = "MeloLock[App]"
+
     suspend fun fetchIfNewer(
         currentVersion: String,
         api: String = LATEST_RELEASE_API,
         downloadUrl: String = MODULE_DOWNLOAD_URL,
+    ): AppUpdate? = withContext(Dispatchers.IO) {
+        try {
+            fetchInternal(currentVersion, api, downloadUrl)
+        } catch (error: Exception) {
+            // 失败原因要落到日志（DNS 污染 / 连接超时 / TLS 重置 是三种不同的病，药方不同）
+            Log.w(TAG, "Update check failed: ${error::class.simpleName}: ${error.message}")
+            throw error
+        }
+    }
+
+    private suspend fun fetchInternal(
+        currentVersion: String,
+        api: String,
+        downloadUrl: String,
     ): AppUpdate? = withContext(Dispatchers.IO) {
         val connection = (URL(api).openConnection() as HttpURLConnection).apply {
             connectTimeout = NETWORK_TIMEOUT_MILLIS
