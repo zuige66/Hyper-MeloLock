@@ -24,7 +24,7 @@ import java.util.concurrent.Executors;
  */
 public final class WallpaperCoverPush {
     private static final String TAG = "MeloLock";
-    private static final String REV = "WCV-1";
+    private static final String REV = "WCV-2";
     /** 封面最长边：锁屏壁纸 cover-crop 后约 1440x3200，源图 1080 足够清晰且 JPEG 体积可控。 */
     private static final int MAX_EDGE = 1080;
 
