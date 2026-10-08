@@ -253,9 +253,11 @@ final class LockScreenOverlay {
     private TextView iconWave, iconHeart, iconQueue;
     /** 卡片底色配置（create 时读一次）：0＝跟随封面，其余为手选 ARGB。 */
     private int cardBgConfig;
-    /** 「跟随封面」缓存：取色时的封面引用 → 磨砂容器色（0＝还没取过）。主线程读写。 */
-    private Bitmap autoArtwork;
-    private int autoCardBg;
+    /** 「跟随封面」缓存（主线程读写）：按曲目 key（title|artist|尺寸）缓存取色结果——
+     * 该设备的媒体源每 2 秒交一个新 Bitmap 实例，按引用缓存会每帧重跑 Palette。 */
+    private String autoMediaKey;
+    /** 取色结果：磨砂容器色（卡片底）/ 主文字色（时间、入口）/ 辅助文字色（日期、签名）。 */
+    private int autoCardBg, autoTextMain, autoTextSub;
     /** 取色专用单线程（Palette 数百 ms，绝不占主线程）；daemon 防泄漏。 */
     private final java.util.concurrent.ExecutorService paletteExecutor =
             java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
@@ -481,7 +483,9 @@ final class LockScreenOverlay {
         if (snapshot.art != shownArtwork) {
             shownArtwork = snapshot.art;
             baseBlur.setImageBitmap(snapshot.art); cover.setImageBitmap(snapshot.art); cardArt.setImageBitmap(snapshot.art);
-            maybeExtractCardPalette(snapshot.art);   // 「跟随封面」档：换歌时后台取色回填卡片配色
+            // 「跟随封面」档：换歌（曲目 key 变化）才后台取色回填卡片与各文字配色
+            maybeExtractCardPalette(snapshot.art, emptyAs(snapshot.title, "") + "|" + emptyAs(snapshot.artist, "")
+                    + "|" + snapshot.art.getWidth() + "x" + snapshot.art.getHeight());
         }
         title.setText(emptyAs(snapshot.title, "未知曲目")); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
         playPause.setText(snapshot.playing ? "Ⅱ" : "▶");
@@ -883,51 +887,58 @@ final class LockScreenOverlay {
         progress.setProgressBackgroundTintList(ColorStateList.valueOf(lightCard ? 0xFF9E9EA3 : 0xFF444449));
     }
 
-    /** 「跟随封面」文字色的当前值：取色缓存命中按容器亮度联动（主文字/辅助文字两档），未命中先用白兜底（回填时更新）。 */
+    /** 「跟随封面」文字色的当前值：按曲目缓存的主/辅文字色；未取到色时先用白兜底（回填时更新）。 */
     private int elemOrFollow(Map<String, Integer> elements, String key, boolean asMain) {
         int value = elem(elements, key);
         if (value != 0) return value;
         if (autoCardBg == 0) return Color.WHITE;
-        boolean light = isLightColor(autoCardBg);
-        return asMain ? (light ? 0xFF1C1C1E : Color.WHITE) : (light ? 0xFF6C6C70 : 0xFF9E9EA3);
+        return asMain ? autoTextMain : autoTextSub;
     }
 
     /** 取色回填时统一刷新所有「跟随封面」档的文字/入口配色（主线程调用）。 */
     private void applyFollowColors() {
         if (autoCardBg == 0) return;
-        boolean light = isLightColor(autoCardBg);
-        int main = light ? 0xFF1C1C1E : Color.WHITE;
-        int sub = light ? 0xFF6C6C70 : 0xFF9E9EA3;
-        if (clockColorFollow && immersiveClock != null) immersiveClock.setTextColor(main);
-        if (dateColorFollow && dateLine != null) dateLine.setTextColor(sub);
-        if (signColorFollow && signatureLine != null) signatureLine.setTextColor(sub);
-        if (entryColorFollow && notificationButton != null) notificationButton.setTextColor(main);
+        if (clockColorFollow && immersiveClock != null) immersiveClock.setTextColor(autoTextMain);
+        if (dateColorFollow && dateLine != null) dateLine.setTextColor(autoTextSub);
+        if (signColorFollow && signatureLine != null) signatureLine.setTextColor(autoTextSub);
+        if (entryColorFollow && notificationButton != null) notificationButton.setTextColor(autoTextMain);
         if (entryBgFollow && entryBackgroundDrawable != null) entryBackgroundDrawable.setColor(autoCardBg);
     }
 
-    /** 「跟随封面」模式：封面真的换了才在后台取色（Palette 要几百 ms，绝不占主线程）；结果按封面引用缓存。 */
-    private void maybeExtractCardPalette(final Bitmap art) {
-        if (cardBgConfig != 0 || art == null || art.isRecycled()) return;
-        if (art == autoArtwork) {
-            if (autoCardBg != 0) applyCardColors(autoCardBg);   // 缓存命中（场景重建后同曲）直接同步回填
+    /** 是否任一处处于「跟随封面」档：全部手选时取色管线完全不跑。 */
+    private boolean anyFollow() {
+        return cardBgConfig == 0 || clockColorFollow || dateColorFollow
+                || signColorFollow || entryColorFollow || entryBgFollow;
+    }
+
+    /** 「跟随封面」模式：曲目变了才在后台取色（Palette 要几百 ms，绝不占主线程）；结果按曲目 key 缓存。 */
+    private void maybeExtractCardPalette(final Bitmap art, final String mediaKey) {
+        if (!anyFollow() || art == null || art.isRecycled()) return;
+        if (mediaKey != null && mediaKey.equals(autoMediaKey)) {
+            if (autoCardBg != 0) {   // 缓存命中（场景重建后同曲）直接同步回填
+                if (cardBgConfig == 0) applyCardColors(autoCardBg);
+                applyFollowColors();
+            }
             return;
         }
         paletteExecutor.execute(() -> {
-            int container;
+            int container, textMain, textSub;
             try {
                 Palette palette = Palette.from(art).maximumColorCount(24).resizeBitmapSize(112).generate();
                 Palette.Swatch swatch = pickSwatch(palette);
                 container = containerFromSwatch(swatch);
+                int[] texts = textColorsFromSwatch(swatch);
+                textMain = texts[0]; textSub = texts[1];
             } catch (Throwable error) {
                 Log.w(TAG, "Card palette extract failed", error);
-                container = 0xF2181818;   // 失败关闭：退回历史黑
+                container = 0xF2181818; textMain = Color.WHITE; textSub = 0xFF9E9EA3;   // 失败关闭
             }
-            final int bg = container;
+            final int bg = container, mainColor = textMain, subColor = textSub;
             main.post(() -> {
-                autoArtwork = art; autoCardBg = bg;
+                autoMediaKey = mediaKey; autoCardBg = bg; autoTextMain = mainColor; autoTextSub = subColor;
                 if (cardBgConfig == 0) {
                     applyCardColors(bg);
-                    Log.i(TAG, "Card palette applied bg=" + Integer.toHexString(bg));
+                    Log.i(TAG, "Card palette applied key=" + mediaKey + " bg=" + Integer.toHexString(bg));
                 }
                 applyFollowColors();   // 时间/日期/签名/入口的「跟随封面」档一并刷新
             });
@@ -944,6 +955,22 @@ final class LockScreenOverlay {
         if (s == null) s = palette.getDarkMutedSwatch();
         if (s == null) s = palette.getDominantSwatch();
         return s;
+    }
+
+    /**
+     * 专辑主色 → 文字色对 [主, 辅]：**真·跟随专辑色**（保留色相），不是黑白灰切换。
+     * 主文字（时间/入口）= 主色提亮到可读区间（V 0.80~0.92）；辅助（日期/签名）= 降饱和弱化版。
+     * 近乎无彩的封面回白/灰（此时没有任何彩可跟）。
+     */
+    private static int[] textColorsFromSwatch(Palette.Swatch swatch) {
+        if (swatch == null) return new int[] { Color.WHITE, 0xFF9E9EA3 };
+        float[] hsv = new float[3];
+        Color.colorToHSV(swatch.getRgb(), hsv);
+        if (hsv[1] < 0.10f) return new int[] { Color.WHITE, 0xFF9E9EA3 };
+        float v = hsv[2] < 0.55f ? 0.80f : Math.min(hsv[2] + 0.10f, 0.92f);
+        float[] mainHsv = { hsv[0], Math.min(hsv[1] + 0.05f, 0.85f), v };
+        float[] subHsv = { hsv[0], hsv[1] * 0.45f, Math.min(v + 0.02f, 0.90f) };
+        return new int[] { Color.HSVToColor(0xFF, mainHsv), Color.HSVToColor(0xE6, subHsv) };
     }
 
     /**
