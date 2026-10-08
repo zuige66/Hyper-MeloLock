@@ -86,7 +86,7 @@
 
     <!-- Compose / Miuix 中文界面 -->
     <string name="nav_home">主页</string>
-    <string name="nav_apps">音乐应用</string>
+    <string name="nav_apps">应用</string>
     <string name="nav_settings">外观</string>
     <string name="module_status">模块状态</string>
     <string name="activated">已激活</string>

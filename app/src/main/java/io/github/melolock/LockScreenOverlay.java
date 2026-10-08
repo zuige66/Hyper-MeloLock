@@ -141,6 +141,10 @@ final class LockScreenOverlay {
     private final Runnable applyPendingConfig = new Runnable() {
         @Override public void run() {
             updateSwitch();
+            // 诊断：确认「配置端写盘 → SystemUI 收到 → 与当前场景不一致」链路通不通。
+            // 只在配置变更时打一次（防抖合并后），不会刷屏。
+            Log.i(TAG, "Config notify: fg=" + (foreground != null) + " suspended=" + suspended
+                    + " hasElementSig=" + (elementSignature != null) + " hasBackdropSig=" + (backdropSignature != null));
             if (foreground == null || elementSignature == null || backdropSignature == null) return;
             boolean elementsChanged = !elementSignature.equals(currentElementSignature());
             boolean backdropChanged = !backdropSignature.equals(currentBackdropSignature());

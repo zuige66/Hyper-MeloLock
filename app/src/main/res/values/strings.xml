@@ -80,7 +80,7 @@
     <string name="bluetooth_battery_unknown">Battery: --</string>
     <!-- Compose / Miuix 中文界面 -->
     <string name="nav_home">Home</string>
-    <string name="nav_apps">Music Apps</string>
+    <string name="nav_apps">Apps</string>
     <string name="nav_settings">Appearance</string>
     <string name="module_status">Module Status</string>
     <string name="activated">Activated</string>
