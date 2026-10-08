@@ -24,6 +24,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
@@ -1177,8 +1181,9 @@ private val TEXT_COLOR_LABELS = listOf("跟随封面", "白", "黑", "浅灰", "
 private val PICK_STYLE_LABELS = listOf("低饱和磨砂 (M3E)", "鲜艳原色")
 
 /**
- * 外观页分组（手风琴）：标题点击展开/收起，收起时内容完全不组合（页面短、滚动省）。
- * expandedKeys 由页面持有并 rememberSaveable；箭头指示当前状态。
+ * 外观页分组（M3E 折叠卡）：**每组一张完整卡片**——标题是卡片头（可点、涟漪反馈，
+ * 箭头随展开状态弹性旋转 90°），内容在同一张卡内 animateContentSize 弹性展开/收起；
+ * 收起时是一张矮卡，整页保持完整卡片列表的结构感。expandedKeys 由页面持有并 rememberSaveable。
  */
 @Composable
 private fun CollapsibleSection(
@@ -1189,19 +1194,46 @@ private fun CollapsibleSection(
     content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     val expanded = key in expandedKeys
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable { onToggle(key) },
-        verticalAlignment = Alignment.CenterVertically,
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "sectionArrow",
+    )
+    Card(
+        modifier = Modifier.fillMaxWidth().animateContentSize(
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioLowBouncy,
+                stiffness = Spring.StiffnessMediumLow,
+            ),
+        ),
     ) {
-        SectionTitle(title, Modifier.weight(1f))
-        Text(
-            text = if (expanded) "▾" else "▸",
-            modifier = Modifier.padding(end = 24.dp),
-            fontSize = 14.sp,
-            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onToggle(key) }
+                .padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                modifier = Modifier.weight(1f),
+                fontSize = MiuixTheme.textStyles.body1.fontSize,
+                color = MiuixTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = "▸",
+                modifier = Modifier.graphicsLayer { rotationZ = arrowRotation },
+                fontSize = 15.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            )
+        }
+        if (expanded) {
+            Column(modifier = Modifier.padding(bottom = 8.dp), content = content)
+        }
     }
-    if (expanded) Card(content = content)
 }
 
 @Composable
