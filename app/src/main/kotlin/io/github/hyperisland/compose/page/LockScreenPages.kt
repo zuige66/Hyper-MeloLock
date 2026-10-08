@@ -455,30 +455,6 @@ internal fun LockAppearancePage() {
 
     CollapsingPage(title = "外观") {
         item {
-            SectionTitle("时间")
-            Card {
-                DpSlider("字号", value(Config.CLOCK_SIZE), 20..120, onCommit = { update(Config.CLOCK_SIZE, it) })
-                DpSlider("粗细", value(Config.CLOCK_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.CLOCK_WEIGHT, it) })
-                PreferenceDropdown(
-                    title = "字体圆润",
-                    summary = "内置开源圆体数字字体，只影响 0-9 与冒号",
-                    icon = null,
-                    items = ROUNDNESS_LABELS,
-                    selectedIndex = value(Config.CLOCK_ROUNDNESS).coerceIn(0, ROUNDNESS_LABELS.lastIndex),
-                    onSelectedIndexChange = { update(Config.CLOCK_ROUNDNESS, it) },
-                )
-                PreferenceDropdown(
-                    title = "颜色",
-                    summary = "时间文字颜色",
-                    icon = null,
-                    items = CLOCK_COLOR_LABELS,
-                    selectedIndex = CLOCK_COLORS.indexOf(value(Config.CLOCK_COLOR)).coerceAtLeast(0),
-                    onSelectedIndexChange = { update(Config.CLOCK_COLOR, CLOCK_COLORS[it]) },
-                )
-                DpSlider("距顶部", value(Config.CLOCK_SPACING), 0..160, onCommit = { update(Config.CLOCK_SPACING, it) })
-            }
-        }
-        item {
             SectionTitle("日期")
             Card {
                 PreferenceSwitch(
@@ -493,11 +469,11 @@ internal fun LockAppearancePage() {
                     DpSlider("粗细", value(Config.DATE_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.DATE_WEIGHT, it) })
                     PreferenceDropdown(
                         title = "颜色",
-                        summary = "日期文字颜色",
+                        summary = "日期文字颜色，可选跟随封面",
                         icon = null,
-                        items = CLOCK_COLOR_LABELS,
-                        selectedIndex = CLOCK_COLORS.indexOf(value(Config.DATE_COLOR)).coerceAtLeast(0),
-                        onSelectedIndexChange = { update(Config.DATE_COLOR, CLOCK_COLORS[it]) },
+                        items = TEXT_COLOR_LABELS,
+                        selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.DATE_COLOR)).coerceAtLeast(0),
+                        onSelectedIndexChange = { update(Config.DATE_COLOR, TEXT_COLOR_VALUES[it]) },
                     )
                     DpSlider("距顶部", value(Config.DATE_SPACING), 0..160, onCommit = { update(Config.DATE_SPACING, it) })
                 }
@@ -519,14 +495,38 @@ internal fun LockAppearancePage() {
                     DpSlider("粗细", value(Config.SIGN_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.SIGN_WEIGHT, it) })
                     PreferenceDropdown(
                         title = "颜色",
-                        summary = "签名文字颜色",
+                        summary = "签名文字颜色，可选跟随封面",
                         icon = null,
-                        items = CLOCK_COLOR_LABELS,
-                        selectedIndex = CLOCK_COLORS.indexOf(value(Config.SIGN_COLOR)).coerceAtLeast(0),
-                        onSelectedIndexChange = { update(Config.SIGN_COLOR, CLOCK_COLORS[it]) },
+                        items = TEXT_COLOR_LABELS,
+                        selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.SIGN_COLOR)).coerceAtLeast(0),
+                        onSelectedIndexChange = { update(Config.SIGN_COLOR, TEXT_COLOR_VALUES[it]) },
                     )
                     DpSlider("距顶部", value(Config.SIGN_SPACING), 0..160, onCommit = { update(Config.SIGN_SPACING, it) })
                 }
+            }
+        }
+        item {
+            SectionTitle("时间")
+            Card {
+                DpSlider("字号", value(Config.CLOCK_SIZE), 20..120, onCommit = { update(Config.CLOCK_SIZE, it) })
+                DpSlider("粗细", value(Config.CLOCK_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.CLOCK_WEIGHT, it) })
+                PreferenceDropdown(
+                    title = "字体圆润",
+                    summary = "内置开源圆体数字字体，只影响 0-9 与冒号",
+                    icon = null,
+                    items = ROUNDNESS_LABELS,
+                    selectedIndex = value(Config.CLOCK_ROUNDNESS).coerceIn(0, ROUNDNESS_LABELS.lastIndex),
+                    onSelectedIndexChange = { update(Config.CLOCK_ROUNDNESS, it) },
+                )
+                PreferenceDropdown(
+                    title = "颜色",
+                    summary = "时间文字颜色，可选跟随封面",
+                    icon = null,
+                    items = TEXT_COLOR_LABELS,
+                    selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.CLOCK_COLOR)).coerceAtLeast(0),
+                    onSelectedIndexChange = { update(Config.CLOCK_COLOR, TEXT_COLOR_VALUES[it]) },
+                )
+                DpSlider("距顶部", value(Config.CLOCK_SPACING), 0..160, onCommit = { update(Config.CLOCK_SPACING, it) })
             }
         }
         item {
@@ -598,6 +598,27 @@ internal fun LockAppearancePage() {
                     icon = null,
                     checked = value(Config.BLOCK_LEFT_SHADE) != 0,
                     onCheckedChange = { update(Config.BLOCK_LEFT_SHADE, if (it) 1 else 0) },
+                )
+            }
+        }
+        item {
+            SectionTitle("通知入口")
+            Card {
+                PreferenceDropdown(
+                    title = "文字颜色",
+                    summary = "底部「展开通知」按钮的文字颜色，可选跟随封面",
+                    icon = null,
+                    items = TEXT_COLOR_LABELS,
+                    selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.ENTRY_COLOR)).coerceAtLeast(0),
+                    onSelectedIndexChange = { update(Config.ENTRY_COLOR, TEXT_COLOR_VALUES[it]) },
+                )
+                PreferenceDropdown(
+                    title = "胶囊背景",
+                    summary = "按钮胶囊的背景色，可选跟随封面",
+                    icon = null,
+                    items = CARD_BG_LABELS,
+                    selectedIndex = CARD_BG_VALUES.indexOf(value(Config.ENTRY_BG)).coerceAtLeast(0),
+                    onSelectedIndexChange = { update(Config.ENTRY_BG, CARD_BG_VALUES[it]) },
                 )
             }
         }
@@ -1090,6 +1111,21 @@ private val CARD_BG_VALUES = intArrayOf(
 private val CARD_BG_LABELS = listOf("跟随封面", "深色", "墨蓝", "浅色", "蓝灰", "淡紫", "淡粉")
 
 /**
+ * 文字颜色统一档位（时间/日期/签名/通知入口共用，与播放器「配色统一」）：
+ * 「跟随封面」值 0＝文字颜色按取色容器亮度联动（主文字深/白，辅助文字灰阶）；其余为固定色。
+ */
+private val TEXT_COLOR_VALUES = intArrayOf(
+    0, //                跟随封面
+    0xFFFFFFFF.toInt(), // 白
+    0xFF000000.toInt(), // 黑
+    0xFFC7C7CC.toInt(), // 浅灰
+    0xFFFFD479.toInt(), // 暖黄
+    0xFF7EC8FF.toInt(), // 天蓝
+    0xFFFF9EAD.toInt(), // 粉
+)
+private val TEXT_COLOR_LABELS = listOf("跟随封面", "白", "黑", "浅灰", "暖黄", "天蓝", "粉")
+
+/**
  * 签名内容输入框。**三重保存**：① 输入停顿 800ms 自动写盘（LaunchedEffect 防抖，text
  * 变化重启协程）；② 页面退出时兜底写盘（onDispose，兜住「输完直接返回」）；③ IME 确认。
  * 签名变化会触发锁屏场景整场重建，防抖保证停顿期间至多重建一次。
@@ -1126,12 +1162,3 @@ private fun SignatureInputField() {
 
 /** 时间字体的圆润档位；0 用系统字体，1 / 2 用内置的开源圆体数字字体。 */
 private val ROUNDNESS_LABELS = listOf("直角", "中等圆", "很圆")
-private val CLOCK_COLOR_LABELS = listOf("白色", "黑色", "浅灰", "暖黄", "天蓝", "粉")
-private val CLOCK_COLORS = intArrayOf(
-    0xFFFFFFFF.toInt(),
-    0xFF000000.toInt(),
-    0xFFC7C7CC.toInt(),
-    0xFFFFD479.toInt(),
-    0xFF7EC8FF.toInt(),
-    0xFFFFB4C8.toInt(),
-)

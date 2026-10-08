@@ -261,6 +261,10 @@ final class LockScreenOverlay {
             java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
                 Thread t = new Thread(r, "MeloLockPalette"); t.setDaemon(true); return t;
             });
+    /** 「展开通知」入口胶囊背景（可回填配色）。 */
+    private GradientDrawable entryBackgroundDrawable;
+    /** 各文字/入口颜色是否处于「跟随封面」档（create 时读定；配置变化走整场重建）。 */
+    private boolean clockColorFollow, dateColorFollow, signColorFollow, entryColorFollow, entryBgFollow;
     /** 签名正文（create 时读一次）；进 elementSignature，改签名会触发整场重建。 */
     private String signatureText = "";
     /** 日期行文本对应的天（epoch day）；跨天时重算。 */
@@ -561,6 +565,11 @@ final class LockScreenOverlay {
         // 后面的行距上一行。两行都关时保持老布局（时钟距顶 = CLOCK_SPACING）。
         // 顺序＝日期行在上、签名行在日期下方（用户指定）。
         cardBgConfig = elem(elements, Config.CARD_BG);
+        clockColorFollow = elem(elements, Config.CLOCK_COLOR) == 0;
+        dateColorFollow = elem(elements, Config.DATE_COLOR) == 0;
+        signColorFollow = elem(elements, Config.SIGN_COLOR) == 0;
+        entryColorFollow = elem(elements, Config.ENTRY_COLOR) == 0;
+        entryBgFollow = elem(elements, Config.ENTRY_BG) == 0;
         signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
         boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
         boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
@@ -572,7 +581,7 @@ final class LockScreenOverlay {
         if (dateOn) {
             dateLine = new TextView(context); dateLine.setGravity(Gravity.CENTER);
             dateLine.setTextSize(elem(elements, Config.DATE_SIZE));
-            dateLine.setTextColor(elem(elements, Config.DATE_COLOR));
+            dateLine.setTextColor(elemOrFollow(elements, Config.DATE_COLOR, false));
             applyTextWeight(dateLine, elem(elements, Config.DATE_WEIGHT));
             content.addView(dateLine, new LinearLayout.LayoutParams(-1, -2));
             refreshDateLine(true);
@@ -580,7 +589,7 @@ final class LockScreenOverlay {
         if (signOn) {
             signatureLine = new TextView(context); signatureLine.setGravity(Gravity.CENTER);
             signatureLine.setTextSize(elem(elements, Config.SIGN_SIZE));
-            signatureLine.setTextColor(elem(elements, Config.SIGN_COLOR));
+            signatureLine.setTextColor(elemOrFollow(elements, Config.SIGN_COLOR, false));
             signatureLine.setText(signatureText);
             applyTextWeight(signatureLine, elem(elements, Config.SIGN_WEIGHT));
             LinearLayout.LayoutParams signParams = new LinearLayout.LayoutParams(-1, -2);
@@ -590,7 +599,7 @@ final class LockScreenOverlay {
         immersiveClock = new TextClock(context);
         immersiveClock.setFormat12Hour("h:mm"); immersiveClock.setFormat24Hour("HH:mm"); immersiveClock.setGravity(Gravity.CENTER);
         immersiveClock.setTextSize(elem(elements, Config.CLOCK_SIZE));
-        immersiveClock.setTextColor(elem(elements, Config.CLOCK_COLOR));
+        immersiveClock.setTextColor(elemOrFollow(elements, Config.CLOCK_COLOR, true));
         applyClockTypeface(immersiveClock, elem(elements, Config.CLOCK_ROUNDNESS), elem(elements, Config.CLOCK_WEIGHT));
         LinearLayout.LayoutParams clockParams = new LinearLayout.LayoutParams(geometry.clockWidth, geometry.clockHeight);
         if (signOn || dateOn) clockParams.topMargin = dp(elem(elements, Config.CLOCK_SPACING));
@@ -605,6 +614,14 @@ final class LockScreenOverlay {
         cardParams.topMargin = dp(elem(elements, Config.CARD_SPACING));
         content.addView(playerCard, cardParams);
         notificationButton = new Button(context); notificationButton.setText("展开通知");
+        notificationButton.setTextColor(elemOrFollow(elements, Config.ENTRY_COLOR, true));
+        // 自绘胶囊替换系统默认背景：配色可配（含跟随封面）。默认半透明黑近似系统观感。
+        entryBackgroundDrawable = new GradientDrawable();
+        int entryBg = elem(elements, Config.ENTRY_BG);
+        entryBackgroundDrawable.setColor(entryBg == 0 ? (autoCardBg != 0 ? autoCardBg : 0x66101010) : entryBg);
+        entryBackgroundDrawable.setCornerRadius(dp(24));
+        notificationButton.setBackground(entryBackgroundDrawable);
+        notificationButton.setAllCaps(false);
         notificationButton.setOnClickListener(v -> { if (expanded) showMusic(); else showNotifications(); });
         // 放在我们自己的 FrameLayout 内，避免 HyperOS 动画期间根容器忽略 gravity
         // 而把入口落到左上角；底部位置低于充电文案。
@@ -866,6 +883,28 @@ final class LockScreenOverlay {
         progress.setProgressBackgroundTintList(ColorStateList.valueOf(lightCard ? 0xFF9E9EA3 : 0xFF444449));
     }
 
+    /** 「跟随封面」文字色的当前值：取色缓存命中按容器亮度联动（主文字/辅助文字两档），未命中先用白兜底（回填时更新）。 */
+    private int elemOrFollow(Map<String, Integer> elements, String key, boolean asMain) {
+        int value = elem(elements, key);
+        if (value != 0) return value;
+        if (autoCardBg == 0) return Color.WHITE;
+        boolean light = isLightColor(autoCardBg);
+        return asMain ? (light ? 0xFF1C1C1E : Color.WHITE) : (light ? 0xFF6C6C70 : 0xFF9E9EA3);
+    }
+
+    /** 取色回填时统一刷新所有「跟随封面」档的文字/入口配色（主线程调用）。 */
+    private void applyFollowColors() {
+        if (autoCardBg == 0) return;
+        boolean light = isLightColor(autoCardBg);
+        int main = light ? 0xFF1C1C1E : Color.WHITE;
+        int sub = light ? 0xFF6C6C70 : 0xFF9E9EA3;
+        if (clockColorFollow && immersiveClock != null) immersiveClock.setTextColor(main);
+        if (dateColorFollow && dateLine != null) dateLine.setTextColor(sub);
+        if (signColorFollow && signatureLine != null) signatureLine.setTextColor(sub);
+        if (entryColorFollow && notificationButton != null) notificationButton.setTextColor(main);
+        if (entryBgFollow && entryBackgroundDrawable != null) entryBackgroundDrawable.setColor(autoCardBg);
+    }
+
     /** 「跟随封面」模式：封面真的换了才在后台取色（Palette 要几百 ms，绝不占主线程）；结果按封面引用缓存。 */
     private void maybeExtractCardPalette(final Bitmap art) {
         if (cardBgConfig != 0 || art == null || art.isRecycled()) return;
@@ -890,6 +929,7 @@ final class LockScreenOverlay {
                     applyCardColors(bg);
                     Log.i(TAG, "Card palette applied bg=" + Integer.toHexString(bg));
                 }
+                applyFollowColors();   // 时间/日期/签名/入口的「跟随封面」档一并刷新
             });
         });
     }

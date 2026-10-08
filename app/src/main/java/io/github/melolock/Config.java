@@ -107,6 +107,10 @@ public final class Config {
     public static final String SIGN_COLOR = "sign_color";
     public static final String SIGN_SPACING = "sign_spacing_dp";
 
+    /** 底部「展开通知」入口胶囊：文字色与背景色（0＝跟随封面）。默认近似系统胶囊观感。 */
+    public static final String ENTRY_COLOR = "entry_color";
+    public static final String ENTRY_BG = "entry_bg";
+
     /** 字符串值元素：签名正文。走同一条 /elements 通道（value 列本来就是字符串形式），但不进整数解析。 */
     public static final String DATE_SIGNATURE = "date_signature";
 
@@ -141,6 +145,8 @@ public final class Config {
         ELEMENT_DEFAULTS.put(SIGN_WEIGHT, 500);
         ELEMENT_DEFAULTS.put(SIGN_COLOR, 0xFFFFFFFF);
         ELEMENT_DEFAULTS.put(SIGN_SPACING, 6);
+        ELEMENT_DEFAULTS.put(ENTRY_COLOR, 0xFFFFFFFF);
+        ELEMENT_DEFAULTS.put(ENTRY_BG, 0x66101010);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */
