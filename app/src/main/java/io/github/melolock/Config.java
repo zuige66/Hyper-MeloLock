@@ -129,6 +129,13 @@ public final class Config {
     public static final String ENTRY_COLOR_PICK = "entry_color_pick";
     public static final String ENTRY_BG_PICK = "entry_bg_pick";
 
+    /**
+     * 主色来源（全局一项，所有跟随档共用同一主色保证色相统一）：
+     * 0＝最鲜艳优先（Palette 鲜艳桶 vibrant→darkVibrant→lightVibrant→muted→…，现状），
+     * 1＝占比优先（population 前 5 的主色块里挑鲜艳度 S×V 最高者）。
+     */
+    public static final String SWATCH_PICK = "swatch_pick";
+
     /** 字符串值元素：签名正文。走同一条 /elements 通道（value 列本来就是字符串形式），但不进整数解析。 */
     public static final String DATE_SIGNATURE = "date_signature";
 
@@ -177,6 +184,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(SIGN_PICK, 0);
         ELEMENT_DEFAULTS.put(ENTRY_COLOR_PICK, 0);
         ELEMENT_DEFAULTS.put(ENTRY_BG_PICK, 0);
+        ELEMENT_DEFAULTS.put(SWATCH_PICK, 0);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */

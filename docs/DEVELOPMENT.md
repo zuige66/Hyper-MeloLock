@@ -118,6 +118,13 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 - 派生函数 `followText(vivid, asMain)` / `followCardBg()` / `followEntryBg()` 统一兜底：`autoSwatch==0` 时黑卡/白主字/灰辅字/`0x66101010` 入口底（失败关闭）。`applyFollowColors()` 现在连卡片底色一起刷（原来在 maybeExtractCardPalette 里单刷）；`textColorsFromSwatch`/`containerFromSwatch` 参数从 `Palette.Swatch` 改为 `int` 主色。
 - 配置端：`PickStyleDropdown(colorKey, pickKey, ::value, ::update)` 复用组件（`PICK_STYLE_LABELS` 两档），插在 6 个颜色下拉下方；手选固定色时组件直接 return 不显示。Elements 诊断日志追加各档 pick 状态。
 
+**补充（2026-10-08 晚）：主色来源（最鲜艳优先 / 占比优先，全局一项）**
+
+- 需求：现有 `pickSwatch` 是 Palette 鲜艳桶优先（vibrant→darkVibrant→lightVibrant→muted→darkMuted→dominant），**不是全图最鲜艳也不保证占比多**——鲜艳桶可能选中封面上占比很小的点缀色。用户要「占比最多的颜色里面的最鲜艳」。
+- 新键 `swatch_pick`（默认 0）：**全局一项**（用户选定，非逐项——所有跟随档共用同一主色保证色相统一）。0＝最鲜艳优先（现状），1＝占比优先。
+- `pickDominantVivid`：population 前 5 的色块作候选池（覆盖主体色调、排除边角小色块），池内按鲜艳度 **S×V** 取最高。选出的主色仍走各项已有的磨砂/鲜艳推导。
+- 配置端：外观页最顶上加「取色」分组（主色来源下拉）。改键进 elementSignature → 整场重建 → autoSwatch 清零重取，无缓存策略污染问题。诊断日志追加 `swatch=dominant|vibrant`。
+
 **补充（2026-10-08 晚）：时钟「描边加粗」滑杆（4ad0ea9）**
 
 - 用户反馈圆体字体拉满粗细仍细。解析字体 `fvar` 表（python struct 手撸）：**中等圆 wght 轴 300~700、很圆 400~800**——滑杆 900 被字体钳制，字体本身没有更粗的空间。

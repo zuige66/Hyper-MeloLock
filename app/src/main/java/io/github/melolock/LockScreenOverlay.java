@@ -270,6 +270,8 @@ final class LockScreenOverlay {
     private boolean clockColorFollow, dateColorFollow, signColorFollow, entryColorFollow, entryBgFollow;
     /** 各「跟随封面」档的取色风格（create 时读定）：false＝低饱和磨砂（M3E），true＝鲜艳原色直出。 */
     private boolean cardBgPick, clockPick, datePick, signPick, entryColorPick, entryBgPick;
+    /** 主色来源（全局，create 时读定）：false＝最鲜艳优先（现状），true＝占比前 5 里挑最鲜艳。 */
+    private boolean swatchDominant;
     /** 签名正文（create 时读一次）；进 elementSignature，改签名会触发整场重建。 */
     private String signatureText = "";
     /** 日期行文本对应的天（epoch day）；跨天时重算。 */
@@ -583,6 +585,7 @@ final class LockScreenOverlay {
         signPick = elem(elements, Config.SIGN_PICK) != 0;
         entryColorPick = elem(elements, Config.ENTRY_COLOR_PICK) != 0;
         entryBgPick = elem(elements, Config.ENTRY_BG_PICK) != 0;
+        swatchDominant = elem(elements, Config.SWATCH_PICK) != 0;
         signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
         boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
         boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
@@ -666,7 +669,8 @@ final class LockScreenOverlay {
                 + " | date=" + (elem(elements, Config.DATE_ENABLED) != 0) + "/" + elem(elements, Config.DATE_SIZE)
                 + "sp | sign=" + (elem(elements, Config.SIGN_ENABLED) != 0) + " len=" + signatureText.length()
                 + " | pick vivid: card" + cardBgPick + " clock" + clockPick + " date" + datePick
-                + " sign" + signPick + " entry" + entryColorPick + "/" + entryBgPick);
+                + " sign" + signPick + " entry" + entryColorPick + "/" + entryBgPick
+                + " | swatch=" + (swatchDominant ? "dominant" : "vibrant"));
         Log.i(TAG, "Custom media card overlay created in " + createAttempts + " attempt(s)");
         createAttempts = 0;
         unlockRestoreLogged = false;
@@ -969,7 +973,7 @@ final class LockScreenOverlay {
             int swatchRgb = 0;
             try {
                 Palette palette = Palette.from(art).maximumColorCount(24).resizeBitmapSize(112).generate();
-                Palette.Swatch swatch = pickSwatch(palette);
+                Palette.Swatch swatch = swatchDominant ? pickDominantVivid(palette) : pickSwatch(palette);
                 if (swatch != null) swatchRgb = swatch.getRgb();
             } catch (Throwable error) {
                 Log.w(TAG, "Card palette extract failed", error);   // swatchRgb=0 → 各档回兜底色（失败关闭）
@@ -993,6 +997,30 @@ final class LockScreenOverlay {
         if (s == null) s = palette.getDarkMutedSwatch();
         if (s == null) s = palette.getDominantSwatch();
         return s;
+    }
+
+    /**
+     * 「占比优先」主色：候选池＝ population 前 5 的色块（覆盖封面主体色调，不取边角小色块），
+     * 其中取鲜艳度（饱和度 × 亮度）最高者。与 {@link #pickSwatch} 的鲜艳桶优先互补：
+     * 鲜艳桶可能选中封面上占比很小的点缀色，占比优先保证主色「像这张封面」。
+     */
+    private static Palette.Swatch pickDominantVivid(Palette palette) {
+        if (palette == null) return null;
+        java.util.List<Palette.Swatch> swatches = palette.getSwatches();
+        if (swatches == null || swatches.isEmpty()) return null;
+        java.util.List<Palette.Swatch> sorted = new java.util.ArrayList<>(swatches);
+        sorted.sort((a, b) -> Integer.compare(b.getPopulation(), a.getPopulation()));
+        Palette.Swatch best = null;
+        float bestScore = -1f;
+        int limit = Math.min(5, sorted.size());
+        for (int i = 0; i < limit; i++) {
+            Palette.Swatch s = sorted.get(i);
+            float[] hsv = new float[3];
+            Color.colorToHSV(s.getRgb(), hsv);
+            float score = hsv[1] * hsv[2];
+            if (score > bestScore) { bestScore = score; best = s; }
+        }
+        return best;
     }
 
     /**

@@ -460,6 +460,19 @@ internal fun LockAppearancePage() {
 
     CollapsingPage(title = "外观") {
         item {
+            SectionTitle("取色")
+            Card {
+                PreferenceDropdown(
+                    title = "主色来源",
+                    summary = "跟随封面时从专辑封面选主色的方式：「最鲜艳优先」按鲜艳色桶取，可能选到占比很小的点缀色；「占比优先」在占比前 5 的主色块里挑最鲜艳的，更贴近封面主体色调",
+                    icon = null,
+                    items = listOf("最鲜艳优先", "占比优先"),
+                    selectedIndex = value(Config.SWATCH_PICK).coerceIn(0, 1),
+                    onSelectedIndexChange = { update(Config.SWATCH_PICK, it) },
+                )
+            }
+        }
+        item {
             SectionTitle("日期")
             Card {
                 PreferenceSwitch(
