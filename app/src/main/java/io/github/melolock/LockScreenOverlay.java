@@ -129,6 +129,39 @@ final class LockScreenOverlay {
             android.os.Process.killProcess(android.os.Process.myPid());
         }
     };
+    /**
+     * 配置变更后的防抖重建：与 {@link #resume()} 的指纹比对走同一条路径——
+     * 三元素变了撤掉重建（下一帧 render，避开 pre-draw 内改视图树），
+     * 背景三态/圆角变了 applyBackdrop() 就地更新。
+     *
+     * 为什么必须在这里重建：熄屏唤醒走 applyPreShow()「只摆可见性」，**不经过 resume() 的
+     * 指纹比对**——suspended 场景直接复活，旧外观又端了出来。这是「改了配置必须关开模块
+     * 才生效」的根因；observer 收到通知后立即撤场，锁屏重现时 create() 读到的就是新配置。
+     */
+    private final Runnable applyPendingConfig = new Runnable() {
+        @Override public void run() {
+            updateSwitch();
+            if (foreground == null || elementSignature == null || backdropSignature == null) return;
+            boolean elementsChanged = !elementSignature.equals(currentElementSignature());
+            boolean backdropChanged = !backdropSignature.equals(currentBackdropSignature());
+            if (!elementsChanged && !backdropChanged) return;
+            Log.i(TAG, "Config changed while scene alive; applying now (elements=" + elementsChanged
+                    + " backdrop=" + backdropChanged + ")");
+            if (elementsChanged) {
+                MediaSource.Snapshot keep = shown;
+                restore("config-changed");
+                if (keep != null) {
+                    // 下一帧再重建：此刻可能在视图回调里，直接 addView 会与 layout 互相打断。
+                    main.post(() -> {
+                        if (foreground != null || suspended || !lockscreenCycle || !keyguardLocked()) return;
+                        render(keep);
+                    });
+                }
+            } else {
+                applyBackdrop();
+            }
+        }
+    };
     private final BroadcastReceiver screenReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context ignored, Intent intent) {
             if (Intent.ACTION_SCREEN_OFF.equals(intent.getAction())) {
@@ -348,16 +381,10 @@ final class LockScreenOverlay {
         });
         switchObserver = new ContentObserver(main) {
             @Override public void onChange(boolean ignored) {
-                updateSwitch();
-                // 诊断：确认「配置端写盘 → SystemUI 收到 → 与当前场景不一致」这条链路是通的。
-                // 只在真的不一致时打一行，滑块拖动 commit 几次也不会刷屏。
-                if (foreground == null || backdropSignature == null) return;
-                boolean elements = !elementSignature.equals(currentElementSignature());
-                boolean backdrop = !backdropSignature.equals(currentBackdropSignature());
-                if (elements || backdrop) {
-                    Log.i(TAG, "Config differs from scene (elements=" + elements + " backdrop=" + backdrop
-                            + "); will apply on next lock");
-                }
+                // App 端每次写盘都会 notifyChange；一次应用内操作（重置一组、签名落盘）可能连写
+                // 多个键，120ms 防抖合并成一次重建。改完即生效，不再依赖灭屏亮屏或关开模块。
+                main.removeCallbacks(applyPendingConfig);
+                main.postDelayed(applyPendingConfig, 120);
             }
         };
     }

@@ -361,7 +361,7 @@ internal fun LockMusicAppsPage() {
     val allVisibleSelected = filtered.isNotEmpty() &&
         filtered.all { selection.isSelected(it.packageName) }
 
-    CollapsingPage(title = "音乐应用") {
+    CollapsingPage(title = "应用") {
         item {
             SearchBar(
                 inputField = {
@@ -424,14 +424,12 @@ internal fun LockMusicAppsPage() {
             }
         }
         item {
-            SectionTitle("说明")
-            Card {
-                InfoText(
-                    "这里列出全部已安装应用。默认一个都不勾选，必须显式勾选播放器，" +
-                        "锁屏才会接管它的播放信息；全部取消后锁屏不再接管任何播放器。" +
-                        "上方的「全选」只作用于当前列表（受搜索与「显示系统应用」过滤影响）。",
-                )
-            }
+            Text(
+                text = "默认不接管任何播放器，需在此显式勾选；「全选」只作用于当前列表。",
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+            )
         }
     }
 }
@@ -883,14 +881,12 @@ internal fun LockAboutPage(isActive: Boolean) {
                 }
             }
             item {
-                SectionTitle("开源说明")
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    InfoText(
-                        "本项目：AGPL-3.0\n" +
-                            "界面来源：HyperIsland（MIT License），配置端 Compose/Miuix 组件直接复用。" +
-                            "锁屏 Hook 与配置链路为本项目独立实现。",
-                    )
-                }
+                Text(
+                    text = "本项目 AGPL-3.0；界面基于 HyperIsland（MIT）复用，锁屏 Hook 与配置链路独立实现。",
+                    modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                )
             }
         }
         UpdateDialogHost(
