@@ -82,6 +82,7 @@ import io.github.hyperisland.compose.data.InstalledAppsRepository
 import io.github.hyperisland.compose.page.home.OverviewAlertCard
 import io.github.hyperisland.compose.page.home.OverviewInfoCard
 import io.github.hyperisland.compose.page.home.OverviewStatusGrid
+import io.github.hyperisland.compose.service.ApkInstaller
 import io.github.hyperisland.compose.service.HomeSystemInfo
 import io.github.hyperisland.compose.service.RestartScopeService
 import io.github.hyperisland.compose.service.SystemInfoProvider
@@ -265,14 +266,12 @@ internal fun LockHomePage(
             }
         }
         item {
-            SectionTitle("使用说明")
-            Card {
-                InfoText(
-                    "请在 Vector 中仅勾选 SystemUI。更新 APK 后需重新确认模块总开关；" +
-                        "点击上方状态卡可随时开关模块，关闭后立即恢复原生锁屏。" +
-                        "右上角按钮用于重启作用域（SystemUI）。",
-                )
-            }
+            Text(
+                text = "Vector 中仅勾选 SystemUI；右上角按钮可重启作用域；更新 APK 后需重新确认模块开关。",
+                modifier = Modifier.padding(horizontal = 18.dp, vertical = 12.dp),
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+            )
         }
     }
     RestartScopeDialog(
@@ -892,9 +891,15 @@ internal fun LockAboutPage(isActive: Boolean) {
         UpdateDialogHost(
             state = updateDialogState,
             onDismiss = { updateDialogState = null },
-            onViewUpdate = { url ->
+            onDownload = { url ->
+                val version = (updateDialogState as? UpdateDialogState.Available)?.update?.version
                 updateDialogState = null
-                context.openUrl(url)
+                // 下载交给系统 DownloadManager，下完自动拉起安装界面（见 ApkInstaller）
+                ApkInstaller.downloadAndInstall(
+                    context,
+                    url,
+                    "Hyper-MeloLock-v${version ?: "update"}.apk",
+                )
             },
         )
         // hero 画在列表之后（更上层），淡出过程中列表内容是「从下面盖上来」的观感。

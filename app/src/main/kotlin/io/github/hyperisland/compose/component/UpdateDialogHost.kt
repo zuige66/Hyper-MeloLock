@@ -40,7 +40,7 @@ internal sealed interface UpdateDialogState {
 internal fun UpdateDialogHost(
     state: UpdateDialogState?,
     onDismiss: () -> Unit,
-    onViewUpdate: (String) -> Unit,
+    onDownload: (String) -> Unit,
 ) {
     val available = state as? UpdateDialogState.Available
     WindowDialog(
@@ -64,7 +64,7 @@ internal fun UpdateDialogHost(
                 }
                 DialogActions(
                     onCancel = onDismiss,
-                    onConfirm = { onViewUpdate(available.update.releaseUrl) },
+                    onConfirm = { onDownload(available.update.apkUrl) },
                 )
             }
         }
@@ -144,7 +144,7 @@ private fun DialogActions(
             modifier = Modifier.weight(1f),
             colors = ButtonDefaults.buttonColorsPrimary(),
         ) {
-            Text(stringResource(R.string.view))
+            Text(stringResource(R.string.download))
         }
     }
 }

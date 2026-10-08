@@ -18,7 +18,7 @@
 
 ---
 
-独立的 Android Vector / LSPosed 模块，只给 `com.android.systemui` 注入一个锁屏视图适配器，媒体发现、封面与播放控制全部走标准 `MediaSessionManager` / `MediaController`。**不修改任何播放器**，也不改系统 APK、壁纸或通知数据。默认关闭、失败关闭：找不到锁屏视图或媒体无效时立刻恢复原生锁屏。
+独立的 Android Vector / LSPosed 模块，给 `com.android.systemui` 注入一个锁屏视图适配器，并把专辑封面作为壁纸纹理送进 `com.miui.miwallpaper`。媒体发现、封面与播放控制全部走标准 `MediaSessionManager` / `MediaController`。**不修改任何播放器**，也不改系统 APK、壁纸或通知数据。默认关闭、失败关闭：找不到锁屏视图或媒体无效时立刻恢复原生锁屏。
 
 ## ✨ 功能介绍
 
@@ -79,6 +79,29 @@
 锁屏播放器卡片上的小专辑封面可以点：轻点后由系统先弹解锁验证，通过后直接打开当前正在播放的音乐应用。底色支持 7 档（含跟随封面动态取色），浅色档文字自动换深色。
 
 </td>
+<td width="50%">
+
+### 🖼️ 封面壁纸化
+
+专辑封面会被替换成**真正的壁纸纹理**（在壁纸进程的 GL 上传点换图）。MIUI 的液态玻璃时钟与通知卡毛玻璃采样的是壁纸窗口，只在 SystemUI 里叠 View 永远采样不到——封面成为壁纸后它们才真正吃到专辑色，解锁时「早掀盖露原生壁纸 / 晚掀盖挡桌面动效」的两头堵也一并消失。
+
+</td>
+</tr>
+<tr>
+<td width="50%">
+
+### ⚙️ 改参数即时生效
+
+外观页里改完字号、颜色、间距、底色，回到锁屏就是新的，不需要重启 SystemUI、不需要灭屏亮屏、也不需要关掉再重新打开模块。
+
+</td>
+<td width="50%">
+
+### 🔍 内置检查更新
+
+「关于」页可以直接查更新：优先读 GitHub Releases，拉不到时自动回退国内静态源，国内网络也能正常拿到新版本提示。
+
+</td>
 </tr>
 </table>
 
@@ -123,7 +146,7 @@
 | --- | --- |
 | 系统 | 澎湃 OS 3（HyperOS 3），Android 16 / API 36 |
 | 设备 | Redmi Note 9 Pro（`M2007J17C` / `gauguinpro`） |
-| 框架 | Vector / LSPosed，作用域**只勾** `com.android.systemui` |
+| 框架 | Vector / LSPosed，作用域**勾两项**：`com.android.systemui` 与 `com.miui.miwallpaper` |
 | 播放器 | 任何提供标准 `MediaSession` 的音乐应用 |
 
 ---
@@ -131,11 +154,19 @@
 ## 🚀 安装
 
 1. 到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases) 下载最新 APK 安装（正式签名，可直接覆盖升级）。
-2. 在 Vector 中启用本模块，**只勾选 `com.android.systemui`**，然后重启 SystemUI 或设备。
-3. 打开应用，点首页状态卡开启模块开关。
-4. 播放带封面的歌曲，熄屏再点亮即可看到沉浸锁屏。
+2. 在 Vector 中启用本模块，**作用域勾这两项**，缺一项对应功能就不生效：
+   - `com.android.systemui` —— 锁屏覆盖层本体，**必须**
+   - `com.miui.miwallpaper` —— 封面壁纸化（不勾则仍是「在 SystemUI 里叠一层」的旧效果）
+3. 重启设备（或分别重启这两个进程）。
+4. 打开应用，点首页状态卡开启模块开关。
+5. 在「应用」页**勾选你的音乐播放器**（默认一个都不勾，必须手动选，没勾锁屏不会接管）。
+6. 播放带封面的歌曲，熄屏再点亮即可看到沉浸锁屏。
 
-> 📌 安装 APK 或修改外观参数后，都需要**重启 SystemUI** 才会生效。SystemUI 启动时会读一次配置，之后不再重读。
+> 📌 **装完 APK、或改动作用域后，需要重启对应进程**才会加载新代码：SystemUI 用首页右上角的「重启作用域」按钮，
+> 或 `adb shell am crash com.android.systemui`；壁纸进程要重启设备、或用模块通道 `ACTION_RESTART_WALLPAPER`。
+> 管理器里勾上作用域只是「声明」，目标进程没重启就注入不进去。
+>
+> 📌 **改外观参数不需要重启**：v0.3.1 起配置变更会被即时感知，回锁屏就是新外观。
 
 ---
 
@@ -159,6 +190,7 @@ apksigner verify --print-certs -v app/build/outputs/apk/release/app-release.apk
 ## ⚠️ 已知限制
 
 - 只对上表的精确构建指纹生效，其他机型会主动放弃覆盖、保持原生锁屏。
+- 封面壁纸化依赖 `com.miui.miwallpaper` 作用域，且该进程必须重启过一次才会注入新入口；没勾或没重启时退回「SystemUI 内叠层」的旧观感，其余功能不受影响。
 - 沉浸场景显示期间，**从屏幕左半边起始的上滑解锁会失效**，用右半边上滑、指纹或电源键解锁正常。
 - 「Xposed 框架」一行在 legacy 模块下固定显示「未知」，这是读取方式的限制，不是故障。
 - 配置端的联系方式 / 支持开发 / 使用教程 / 相关资源四项仍是占位状态。
@@ -168,6 +200,7 @@ apksigner verify --print-certs -v app/build/outputs/apk/release/app-release.apk
 ## 📖 文档
 
 - **[开发文档](docs/DEVELOPMENT.md)** — 实现细节、SystemUI 侧机制、排查手册与完整变更日志
+- **[酷安发布文案](docs/COOLAPK-v0.3.1.md)** — v0.3.1 的对外介绍与更新说明（含发布前检查项）
 - **[AGENTS.md](AGENTS.md)** — 面向 AI 协作者的工程约定与铁律
 
 ---

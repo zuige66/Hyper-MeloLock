@@ -94,6 +94,12 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 
 **改完参数后重启 SystemUI 才稳妥**：覆盖层在 `create()` 时读一次配置。自「熄屏唤醒防闪」之后 `ACTION_SCREEN_OFF` 不再撤层，场景若仍存活就会继续沿用旧参数——灭屏再亮屏**不一定**生效，只有场景已被销毁（解锁、关闭模块、锁屏根视图分离）后重建才会读到新值。没有做实时重建——在锁屏期间动态增删 SystemUI 视图风险不可控。
 
+> **2026-10-08 更正（v0.3.1）：这段已不成立，保留仅为记录当时的认知。** 现在的机制是
+> `switchObserver.onChange` 收到 `notifyChange` 后 120ms 防抖 → `applyPendingConfig()`：三元素变了走
+> `restore("config-changed")` + 下一帧 `render(keep)`，背景三态/圆角变了就地 `applyBackdrop()`。
+> 指纹比对用 `elementValues()`（跨进程真值）而非 `Config.elementInt()`（SystemUI 进程本地的空 prefs）——
+> 后者恒等于默认值，是这个 bug 的真正根因。详见上文「配置变更立即生效」一节。
+
 **补充（2026-10-08 晚）：默认值真机化 + 「关于」页检查更新（43cd442）**
 
 - **默认值＝真机配置**（`content query /elements` 全量抄回）：时钟 80/900/跟随封面/距顶 0，封面间距 10，卡片解锁 369×180（**注意：绝对 dp，其他屏宽设备会偏**）/底色跟随封面，日期 22/520/跟随封面/距顶 50、签名间距 8，入口背景跟随封面。**签名例外**：默认关 + 内容空白（用户指定），不随真机。state 三项（背景样式/遮罩/强度）与圆角 28 本就一致未动。存量用户 SharedPreferences 已有值不受影响，默认值只对新装生效。
@@ -131,6 +137,13 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 - **锁定比例移除**（`cover_aspect_locked`/`card_aspect_locked` 键删除）：封面、播放器现在**缩放 / 宽度 / 高度三滑杆并存**。几何规则（`measureElements` 重写）：宽或高为 0 时取自动基准（封面＝屏宽 72% 钳 360dp、播放器宽＝屏宽-24 钳 160dp、高 178dp），非 0 为绝对 dp；**缩放是基准的百分比倍率**（最终 = 基准 × 缩放%）。存量行为不变：封面默认宽高 0 + 缩放 118%、播放器 369×180 + 缩放 100% 与旧「锁定/解锁」两态逐像素一致。UI 滑杆 label「宽度 (0=自动)」；`seedSize` 与 `defaultArtDp/defaultCardWidthDp` 死代码清理。
 - **外观页分组手风琴**（用户选定收起/展开方案，默认全收起）：新增 `CollapsibleSection(title, key, expandedKeys, onToggle, content)`——标题行可点（右侧 ▾/▸ 指示），收起时内容完全不组合；展开集合 `rememberSaveable` 跨页面切换记住。8 组（取色/日期/签名/时间/专辑封面/播放器/通知入口/背景）全部改造；`SectionTitle` 加 modifier 默认参数（共享组件不破坏现有调用）。坑：Miuix `Card` 的 content 是 `ColumnScope.() -> Unit`，透传 lambda 签名必须一致，否则编译错。
 - **重装语义确认**：覆盖安装（`install -r`）不清 SharedPreferences，配置保留；卸载重装清空 app data → 走 `ELEMENT_DEFAULTS`（真机调定那套，签名默认关闭空白）。debug↔release 签名不同必须卸载重装 → 必然回默认值。
+
+**补充（2026-10-09 凌晨）：检查更新「下载并安装」、页脚统一**
+
+- **下载并安装**：`UpdateDialogHost` 的确认按钮从「查看」改「下载（`R.string.download`）」，回调 `onViewUpdate` → `onDownload(apkUrl)`。`AppUpdate` 新增 `apkUrl` 字段：GitHub 源从 `assets[]` 里挑 `.apk` 的 `browser_download_url`（**releases 页是 HTML，不能拿来下载**），blog 源本就是直链。
+- `ApkInstaller.downloadAndInstall()`：走系统 `DownloadManager`（有通知、进程被杀也能下完）→ 下载完成广播里取 `getUriForDownloadedFile` 的 content URI → `ACTION_VIEW` 拉起安装（`FLAG_GRANT_READ_URI_PERMISSION`）。Manifest 补 `REQUEST_INSTALL_PACKAGES`（Android 8+ 装未知应用需要；首次会引导用户开「允许来自此来源的应用」）。**同名文件重复下载**由 DownloadManager 自动加后缀，旧包留在下载目录无害。
+- **页脚统一**：主页「使用说明」也改成 footnote 页脚小字（此前已改外观页/应用页/关于页），文案精简到一行半。
+- 默认值再同步：通知入口文字/胶囊背景取色风格默认**鲜艳**（`entry_color_pick=1`、`entry_bg_pick=1`）。
 
 **修复（2026-10-08 晚）：元素指纹取错数据源 —— 改外观不生效的真正根因（bd6d2f0）**
 
@@ -500,7 +513,11 @@ Window{miui_keyguard_shortcut  type=2017(TYPE_STATUS_BAR_SUB_PANEL)}     ← 按
 日志：`Page swap: to notifications, shared offset=<n>px` / `Page swap: back to player, shared offset=<n>px`。
 **两个值应该一致**（有缓存）；一直等于回退值（-52dp 附近）说明测量没生效。
 
-### 改配置后必须重启 SystemUI
+### 改代码后必须重启 SystemUI（改配置不需要）
+
+> **2026-10-08 更新**：「改**配置**」与「装**新代码**」是两件事，别再混为一谈。
+> v0.3.1（`334919e` + `bd6d2f0`）修掉元素指纹取错数据源的根因后，**外观参数的变更会被即时感知，回锁屏即生效**，
+> 不需要重启 SystemUI、不需要灭屏亮屏、更不需要关掉再重新打开模块。下面这一节现在只适用于**换了 APK**。
 
 这是本项目最容易误判成 bug 的地方：**Hook 代码是注入 SystemUI 进程执行的，装完新 APK 不重启 SystemUI，跑的还是旧代码。**
 
@@ -612,7 +629,7 @@ rm -f ~/.gradle/caches/journal-1/journal-1.lock
 adb -s 1b3a7d8 install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-在 Vector 中启用“Hyper MeloLock”，只勾选 `com.android.systemui`，然后按 Vector 提示重启 SystemUI 或设备。首次启动应用时开关应显示关闭；先确认无音乐锁屏、通知、解锁和紧急操作都保持原样，再开启模块开关。之前授予的“修改系统设置”权限不再使用，可以在系统设置中撤销。
+在 Vector 中启用“Hyper MeloLock”，勾选 `com.android.systemui` 与 `com.miui.miwallpaper` 两项，然后按 Vector 提示重启 SystemUI 或设备（壁纸化要生效，壁纸进程也必须重启过）。首次启动应用时开关应显示关闭；先确认无音乐锁屏、通知、解锁和紧急操作都保持原样，再开启模块开关。之前授予的“修改系统设置”权限不再使用，可以在系统设置中撤销。
 
 ## 真机逐步验收
 
@@ -689,9 +706,42 @@ adb -s 1b3a7d8 reboot
 
 **启动更新检查已禁用**：本模块在 Manifest 里移除了 `INTERNET`，HyperIsland 原本的启动期更新检查必然失败并弹「检查更新失败」，已在 `AppShell` 中移除该调用。
 
+> **2026-10-08 更正（v0.3.1）**：这条只对「启动期自动检查」成立。**「关于」页的手动检查更新已恢复**——
+> Manifest 的 `INTERNET` 已重新声明（上游曾是 `tools:node="remove"`，必须去掉），`LockAboutPage` 里点击才触发，
+> 不是启动期。详见上文「检查更新 blog 回退源」一节。
+
 **滑条点击行为**：HyperIsland 的 `PreferenceSlider` 把点击当作手动输入入口（弹对话框）。本模块的调参滑条通过新增的 `allowManualInput = false` 让点击轨道直接跳到位。默认值 `true`，HyperIsland 自身页面行为未变。
 
 **第三方字体许可**：`app/src/main/assets/fonts/` 下的 `clock_round_1.ttf`（Quicksand）与 `clock_round_2.ttf`（Baloo 2）来自 Google Fonts，按 SIL Open Font License 1.1 授权，可随应用一起分发。OFL 要求分发时附带许可证全文并保留字体名称，**对外发布前需要把 OFL-1.1 全文一并放进仓库并在应用内可查看**（当前尚未加入，只在文档里记录）。
+
+## Xposed 作用域：现在是两项（v0.3.1 起）
+
+`assets/xposed_init` 有三个入口，对应两个进程：
+
+| 入口 | 目标进程 | 作用域 | 作用 |
+| --- | --- | --- | --- |
+| `HookEntry` | `com.android.systemui` | 必勾 | 锁屏覆盖层主体 |
+| `ShortcutAnimBackdrop` | `com.android.systemui` | 必勾 | 手电筒 / 相机转场遮罩换封面 |
+| `WallpaperCover` | `com.miui.miwallpaper` | **新增** | 封面壁纸化（GL 纹理替换） |
+
+**`com.miui.miwallpaper` 是 v0.3.1 新加的**（`97fd449`，rev `WCV-1`）。只勾 SystemUI 时模块照常工作，但没有壁纸化：
+锁屏观感退回「在 SystemUI 里叠一层」，MIUI 液态玻璃时钟与通知卡模糊采样的仍是系统壁纸。
+
+**勾上不等于生效**。往 `xposed_scope.xml` 加包名只是模块声明，Vector 管理器里不实际勾选就不会注入；
+勾了之后还要**重启该进程**。判别方法：重启后 logcat 里找 `WallpaperCover rev=WCV-`，一行都没有就是没注入
+（先查管理器勾选，别急着查代码）。壁纸进程可以用 `ACTION_RESTART_WALLPAPER` 通道重启，无 root 时重启设备最省事。
+
+## 发布记录
+
+| 版本 | versionCode | 说明 |
+| --- | --- | --- |
+| v0.3.1 | 11 | 元素指纹取错数据源的根因级修复（改外观即时生效）、取色风格与主色来源、外观页折叠卡与分组恢复默认、移除锁定比例 |
+| v0.3.0 | 10 | 默认值真机化、导航「开发者」→「关于」、关于页检查更新（含 blog 国内回退源） |
+
+v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
+`https://blog.zuiges.com/downloads/melolock/Hyper-MeloLock-v0.3.1.apk`（blog 侧 `latest.json` 供检查更新回退）。
+
+对外发布文案见 **[docs/COOLAPK-v0.3.1.md](COOLAPK-v0.3.1.md)**，里面标了发布前检查项（配图需重截、两侧源版本一致）。
 
 ## 后续
 
@@ -712,7 +762,7 @@ adb -s 1b3a7d8 reboot
 
 8. 2026-10-06 第三轮（**已实拍验收**）：① 首页大标题降到 22sp，`Hyper MeloLock` 单行放下；② Manifest 补声明 `com.android.permission.GET_INSTALLED_APPS`，进入「音乐应用」页实测弹出 MIUI 授权框；③ 系统信息卡恢复真值（系统版本 `OS3.0.303.0.WNKCNXM`）；④ 启动时不再弹「检查更新失败」。
 
-   **仍未验收**：锁屏三元素调参（需要重启 SystemUI，见上文「改配置后必须重启 SystemUI」）。「Xposed 框架」一行在 legacy 模块下固定显示「未知」——`XposedPrefsSyncApp` 依赖 libxposed 的 service 绑定，legacy 模块拿不到；设备上也没找到可识别的框架管理器包（`pm list packages | grep -i vector/lsposed` 无结果），所以暂时无法用包名版本号兜底。这不算 bug，但要显示真值需要换读取方式。
+   **仍未验收**：锁屏三元素调参（换 APK 后需重启 SystemUI，见上文「改代码后必须重启 SystemUI」；只改配置则不需要）。「Xposed 框架」一行在 legacy 模块下固定显示「未知」——`XposedPrefsSyncApp` 依赖 libxposed 的 service 绑定，legacy 模块拿不到；设备上也没找到可识别的框架管理器包（`pm list packages | grep -i vector/lsposed` 无结果），所以暂时无法用包名版本号兜底。这不算 bug，但要显示真值需要换读取方式。
 
 7. 2026-10-06 熄屏唤醒防闪：不再在 `ACTION_SCREEN_OFF` 时移除已经渲染的沉浸层，也不会因为熄屏期间的媒体回调撤掉它；`ACTION_SCREEN_ON` 先立即恢复缓存场景，再刷新 `MediaSession`。解锁、关闭模块、锁屏根视图分离，或亮屏后确认没有有效会话时仍恢复原生锁屏。该修复已完成 Debug 构建，待真机验证首次唤醒是否消除原生锁屏的一秒闪现。
 

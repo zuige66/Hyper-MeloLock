@@ -12,6 +12,8 @@ internal data class AppUpdate(
     val version: String,
     val releaseUrl: String,
     val changelog: String,
+    /** APK 直链（用于「下载并安装」）；GitHub 源取 assets 里的 .apk，blog 源直接用 apkUrl。 */
+    val apkUrl: String = releaseUrl,
 )
 
 internal object UpdateService {
@@ -64,10 +66,22 @@ internal object UpdateService {
             if (remoteVersion.isBlank() || !isNewer(remoteVersion, currentVersion)) {
                 return@withContext null
             }
+            // APK 直链：优先取 assets 里的 .apk（下载安装要用直链，releases 页是 HTML 不能下）
+            var apkUrl = ""
+            val assets = release.optJSONArray("assets")
+            if (assets != null) {
+                for (index in 0 until assets.length()) {
+                    val assetUrl = assets.optJSONObject(index)?.optString("browser_download_url").orEmpty()
+                    if (assetUrl.endsWith(".apk", ignoreCase = true)) { apkUrl = assetUrl; break }
+                    if (apkUrl.isEmpty()) apkUrl = assetUrl
+                }
+            }
+            Log.i(TAG, "GitHub release v$remoteVersion apk=" + (apkUrl.ifBlank { "(none)" }))
             AppUpdate(
                 version = remoteVersion,
                 releaseUrl = downloadUrl,
                 changelog = release.optString("body"),
+                apkUrl = apkUrl.ifBlank { downloadUrl },
             )
         } finally {
             connection.disconnect()
@@ -108,7 +122,12 @@ internal object UpdateService {
                 return@withContext null   // 已是最新
             }
             Log.i(TAG, "Blog fallback hit: v$remoteName (code $remoteCode)")
-            AppUpdate(version = remoteName, releaseUrl = apkUrl, changelog = manifest.optString("changelog"))
+            AppUpdate(
+                version = remoteName,
+                releaseUrl = apkUrl,
+                changelog = manifest.optString("changelog"),
+                apkUrl = apkUrl,
+            )
         } finally {
             connection.disconnect()
         }

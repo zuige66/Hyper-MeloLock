@@ -622,6 +622,7 @@
     <string name="update_check_failed">Check for updates failed</string>
     <string name="update_check_failed_message">Failed to check for updates, please check the network connection</string>
     <string name="view">Check</string>
+    <string name="download">Download</string>
     <string name="github">GitHub</string>
     <string name="changelog">Change log</string>
     <string name="telegram">Telegram</string>

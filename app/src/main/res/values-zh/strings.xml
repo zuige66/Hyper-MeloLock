@@ -628,6 +628,7 @@
     <string name="update_check_failed">检查更新失败</string>
     <string name="update_check_failed_message">检查更新失败，请检查网络连接</string>
     <string name="view">查看</string>
+    <string name="download">下载</string>
     <string name="github">GitHub</string>
     <string name="changelog">更新日志</string>
     <string name="telegram">Telegram</string>

@@ -7,6 +7,9 @@
     <!-- INTERNET：上游 HyperIsland 曾显式移除（App 无网络需求）。
          本模块「检查更新」要请求 GitHub Releases API，因此恢复该权限。 -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 「检查更新 → 下载」后拉起系统安装界面（Android 8+ 安装未知应用需要此权限声明）；
+         首次安装时系统会引导用户开启「允许来自此来源的应用」。 -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <queries>
         <intent>
             <action android:name="android.media.browse.MediaBrowserService" />
