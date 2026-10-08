@@ -227,7 +227,91 @@ if (current != null && current.revision == configuration.revision && current.has
 
 ---
 
-## 六、附录：验证方法与可复现命令
+## 五之二、专题：解锁节奏「两头堵」的根因，以及换纹理为什么是解法
+
+> 2026-10-08 追加。这是用户当前最痛的问题，也是判断是否值得走 B1（换纹理）的直接依据。
+
+### 现象
+
+解锁时两种都不对，且只能二选一：
+
+- **早掀盖** → 看到「原生壁纸（只有壁纸，没有时钟/组件）」，能看见桌面入场动效；
+- **晚掀盖** → 封面盖太久，看不到桌面入场动效，像「卡在专辑锁屏」。
+
+### 根因：我们的封面不在系统解锁动画的作用域里
+
+真机时间线（`keyguardGoingAway` 为 0 点，2026-10-08 实测）：
+
+```text
++127ms  wms.showSurfaceRobustly …Launcher            ← 桌面窗口合成
++148ms  KeyguardService IRemoteAnimationRunner       ← 系统解锁动画开始
++340ms  updateKeyguardWallpaperStateAnim anim=true   ← 系统开始收「锁屏壁纸窗口」
++685ms  updateKeyguardWallpaperStateAnim onAnimationFinished
++742ms  WallpaperWindowToken{lock} isVisible=false / {desktop} isVisible=true
+```
+
+`updateKeyguardWallpaperState`（`[机]` 在 `WallpaperOS3.apk` 的 dex 中命中 9 次，含
+`updateKeyguardWallpaperState: show = `）说明：**系统解锁时会让「锁屏壁纸窗口」自己跑一段退场动画**，
+时长约 340→685ms（≈345ms）。
+
+而我们的封面是 **SystemUI 视图树里的一层 View**：
+
+- 不 lift：锁屏根会被系统置 `INVISIBLE + alpha 0`，封面**硬消失**（不是渐变），且此时桌面可能还没合成完 → 露出原生壁纸；
+- lift 到窗口根：我们自己掐 `HOLD/FADE` 淡出；封面一淡，底下露出的是**还没退完的原生锁屏壁纸窗口**。
+
+**两条路都有一个共同的本质问题：封面之外还活着一层原生壁纸，它比我们活得久。**
+早掀盖它露脸，晚掀盖它虽然不露脸但我们把桌面动效也盖住了——**这是一个旋钮的两端，调参无解**。
+
+> 这也解释了为什么 `UNLOCK_COVER_HOLD_MS` 从 130 → 240 → 280 → 760 反复调都不对：
+> 我们是在用「自己一层 View 的 alpha 动画」去模拟「系统壁纸窗口的退场动画」，
+> 两条时间线永远对不齐。
+
+### 换纹理为什么能解
+
+如果专辑图**就是锁屏壁纸的纹理**，那么：
+
+| | 当前 | 换纹理后 |
+| --- | --- | --- |
+| 封面属于谁 | 我们的一层 View | 系统壁纸窗口的一部分 |
+| 解锁时谁负责让它退场 | 我们掐 `HOLD/FADE` | **系统** `updateKeyguardWallpaperStateAnim` |
+| 时间线 | 我们的 + 系统的，两条 | **同一条** |
+| 背景层还需要吗 | 需要，且要 lift / 掐时机 | **不需要** —— 掀盖时机这个问题整体消失 |
+| 中间态 | 必然露出原生壁纸 | 无中间态：专辑壁纸随系统动画直接交叉到桌面 |
+
+换句话说：**不是把参数调准，而是把「我们自己掀盖子」这件事从架构里删掉**，
+让系统用它对壁纸的原生处理方式带走我们的封面。桌面动效该露出就露出——因为那本来就是系统自己的节奏。
+
+### 本机前提核查结果 `[机]`
+
+| 核查项 | 结果 | 含义 |
+| --- | --- | --- |
+| `flag_lock_wallpaper_type` | **`image`** | 锁屏壁纸是静态图，**不是画报轮播** → 不会和系统「每次亮屏自动换图」打架 ✅ |
+| `lockscreenInfo.wallpaperInfo.resourceType` | `image`，`originResourcePath` 指向 `02_XiaomiCar/XiaomiCar02.jpg` | 同上，单张静态图 |
+| `wallpaper_changed_1/2` | `com.miui.aod` | 壁纸由 AOD 服务管理 |
+| `wallpaper_matting_support_1/2` | `1`，且 `supportSubject: true` + 存在 `*_MASK.jpg` | ⚠️ 本机是**景深/抠图壁纸**（有 subject + mask）。换纹理时若不处理 mask，可能出现主体抠图异常——**新增的已知风险** |
+| `com.miui.miwallpaper` 进程 | 存活（PID 3803） | 可注入 |
+
+`MiuiKeyguardPictorialWallpaper` 是窗口类名，**不代表启用了画报轮播**（`flag_lock_wallpaper_type=image` 已证伪）。
+
+### 必须说清的不确定性
+
+1. **没有人替我们验证过这一点**。HMC / HyperChanger 自己**并未**宣称解决了解锁节奏——它们仍然保留自己的延迟释放逻辑（如 `ImmersiveHost` 解锁后 3000ms 才释放）。所以「换纹理能根治解锁节奏」是**基于机制的推断 `[推]`**，不是别人的实测结论。
+2. **跨进程传封面的延迟**：切歌时壁纸更新可能滞后于前景卡片（它们用广播 + 原子文件交接）。
+3. **景深壁纸路径未知**：本机壁纸带 subject/mask，换纹理后系统是否照常合成 subject 未验。
+4. **注入成本**：要加 `com.miui.miwallpaper` 作用域，并重启**该进程**（不是 SystemUI）。
+
+### 建议的推进方式
+
+不要直接改 `LockScreenOverlay`。先做一个**只回答「能不能换掉一帧」**的最小探针（半天）：
+
+1. 独立 Xposed 入口 `WallpaperTexProbe`（登记进 `xposed_init`，结论拿到后源码与清单一并删除——按 AGENTS.md 的约定）；
+2. 只做一件事：在 `ImageWallpaperRenderer` 的 lambda 上传点把 Bitmap 换成**纯品红**；
+3. **成功判据**：锁屏亮屏看到整屏品红。看到 = 核心假设成立，值得继续；看不到 = 立刻回头，省下几天。
+4. 第二步才验证「换的是 Keyguard 那个实例」（用类名含 `Keyguard` 判据），以及景深壁纸下是否仍成立。
+
+---
+
+## 六、附录：验证方法与可复现命令命令
 
 ```bash
 ADB="C:/Users/lirui/AppData/Local/Android/Sdk/platform-tools/adb.exe"

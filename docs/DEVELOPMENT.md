@@ -7,6 +7,20 @@
 
 独立的 Android Vector/LSPosed 模块；不修改 Cool Music 或其他播放器。只给 `com.android.systemui` 注入一个锁屏视图适配器。媒体发现、封面和播放控制使用 Android `MediaSessionManager` / `MediaController`。当前仅为指定真机构建开放，默认关闭。
 
+## 真机日志驱动调试技能（已接入）
+
+本项目已接入 WorkBuddy 的 `ondevice-log-driven-debug` 技能（来源：`C:\Users\lirui\.workbuddy\skills\ondevice-log-driven-debug\SKILL.md`）。之后涉及 SystemUI、锁屏覆盖层、Vector/LSPosed 或窗口转场的排查，统一按以下闭环执行：
+
+1. 先用 `adb logcat -c` 清现场，再以 `logcat -d -v time -s MeloLock:V` 或事件窗口 `-T 1` 抓取原始日志；不要用错误的 `Tag:` 文本过滤器判断模块是否运行。
+2. 日志落盘后计算相邻时间戳，超过 60 ms 的间隔与主线程工作逐条对账；不靠截图主观判断卡顿。
+3. 锁屏亮起时用 `uiautomator dump` 获取真实资源 ID、坐标和层级；配置通过 `content query` 直接读取 Provider 真值。
+4. 结论明确区分“日志证明的事实、合理推断、尚无法判断”；每条 `restore` / `skip` 都带原因，且重复状态去重。
+5. 改 ROM 行为前先从设备 APK 的 DEX/资源表核实真实类名、方法名和资源 ID；不要按日志文案、网上布局名或猜测的方法名下注入。
+6. 不把 `KeyguardManager.isKeyguardLocked()` 当作“覆盖层是否仍遮挡”的唯一判据；优先使用 ROM 的解锁/遮挡回调，并核对 `keyguardRoot` 父容器可见性。
+7. 诊断探针独立登记、结论拿到后删除；不在每帧回调里写日志、改视图树或 `bringToFront()`，避免探针本身制造卡顿。
+
+完整原文保留在上述 WorkBuddy 路径；本节是当前仓库的执行约定，后续变更日志也按该技能的“装包 → 重启作用域 → 用户复现 → 日志对账 → 文档更新”闭环记录。
+
 - **仓库**：<https://github.com/zuige66/Hyper-MeloLock>
 - **下载**：[Releases](https://github.com/zuige66/Hyper-MeloLock/releases) → 最新版 [v0.2.0](https://github.com/zuige66/Hyper-MeloLock/releases/download/v0.2.0/Hyper-MeloLock-v0.2.0.apk)（`Hyper-MeloLock-v0.2.0.apk`，正式签名，37.1 MB）
 - **许可**：AGPL-3.0（见 `LICENSE`）
@@ -625,6 +639,26 @@ adb -s 1b3a7d8 reboot
    - **SystemUI 侧的挂载点候选得到补名单**：本机 `resources.arsc` 里 `keyguard_translation_info`、`keyguard_background_layer`、`keyguard_foreground_layer`、`keyguard_clock_container`、`keyguard_root_view` **全部存在**（注意这些名字不在 dex 里，要在 arsc 中搜）。`keyguard_background_layer` 本身就在时钟栈之后，可作为「不用把层提升出 keyguard 根」的候选。
 
    调研文档给出了分级建议（A 立即做 / B 先验证 / C 不要照搬），其中**不建议**的有：迁移到 libxposed API 102（我们是 Vector legacy，收益划不来）；在 SystemUI 内跑 Compose（所谓 `CoverCompose.java` 其实是纯 Bitmap+Canvas 合成，名字骗人）；抄歌词子系统；用 MIUI 的渐变私有模糊（已知会 RenderThread SIGSEGV）。**代码改动尚未开始，等 zuige 决策后再动手。**
+
+10. **2026-10-08 解锁节奏「两头堵」的根因分析**（承接第 9 条，详见调研文档「五之二、专题」一節）—— 用户反馈解锁时「早掀盖就看到原生壁纸，晚掀盖就看不到桌面入场动效」。结论：**这不是参数没调准，是当前架构下的固有矛盾，调参无解。**
+
+   - **根因**：我们封面之下还活着一层「原生锁屏壁纸窗口」，它比我们活得久。不 lift 时锁屏根被系统置 `INVISIBLE`、封面硬消失；lift 时我们自己掐 `HOLD/FADE` 淡出，一淡就露出还没退完的原生壁纸。**两头只能选一头。**
+   - **系统侧真正在做的是**：解锁时执行 `updateKeyguardWallpaperState(show=false, anim=true)`，让**锁屏壁纸窗口**自己跑约 345ms 的退场动画（+340ms 开始 → +685ms 结束 → +742ms 切到桌面壁纸窗口）。该符号已在 `WallpaperOS3.apk` 的 dex 中核实存在。
+   - **即**：我们是在用「自己一层 View 的 alpha 动画」去模拟「系统壁纸窗口的退场动画」，两条时间线永远对不齐——这正是 `UNLOCK_COVER_HOLD_MS` 从 130→240→280→760 反复调都不对的真正原因。
+   - **换纹理为何能解**：封面成为壁纸后，它由**系统**用原生动画带走，时间线变成同一条，背景层与「掀盖时机」整体消失，中间态不再露出另一张壁纸。
+   - **本机前提已核实 `[机]`**：`flag_lock_wallpaper_type=image`、锁屏壁纸为单张静态图 → **不是画报轮播，不会和系统自动换图打架**（`MiuiKeyguardPictorialWallpaper` 只是窗口类名，不代表启用画报）。
+   - **新增已知风险**：本机壁纸是**景深/抠图壁纸**（`wallpaper_matting_support=1`、`supportSubject: true`、存在 `*_MASK.jpg`），换纹理时若忽略 mask 可能导致主体抠图异常。
+   - **诚实标注**：HMC / HyperChanger **并未**宣称解决解锁节奏（它们仍保留自己的延迟释放逻辑），所以「换纹理能根治」是**基于机制的推断**，不是别人的实测结论。
+   - **下一步建议**：不动 `LockScreenOverlay`，先做一个只验证「能否把锁屏壁纸换成纯品红」的最小探针（独立入口、结论拿到即删）。**待 zuige 拍板。**
+
+11. **2026-10-08 换纹理可行性探针（`WallpaperTexProbe`，WTP-1）已编写并装机，等作用域勾选** —— zuige 拍板「可以，继续」后动手。
+
+   - **新增文件**：`app/src/main/java/io/github/melolock/WallpaperTexProbe.java`（独立 Xposed 入口，AGENTS.md 探针约定：结论拿到后源码与 `xposed_init` 清单一并删除）。**未触碰 `LockScreenOverlay.java`**。
+   - **入口与作用域**：`xposed_init` 追加 `io.github.melolock.WallpaperTexProbe`；`res/values/xposed_scope.xml` 追加 `com.miui.miwallpaper`。
+   - **探针行为**：对三个候选渲染器（`opengl.ImageWallpaperRenderer`、`container.openGL.KeyguardAnimImageWallpaperRenderer`、`container.openGL.KeyguardStreamAnimImageWallpaperRenderer`）逐个独立 try/catch 地 hook「参数带 Bitmap 的方法 / `lambda$onSurfaceCreated$` 前缀 lambda / `getBitmap`」；**日志全打**（含非 keyguard 命中，便于摸清本机真实路径），**替换只动类名含 `Keyguard` 的实例**（桌面壁纸绝不动，否则用户回不到桌面）；替换方式是**在原图的副本上画品红**（尺寸/配置不变，避免 GL 矩阵源矩形错位，无需 hook `getTextureDimensions`）。
+   - **构建与自证**：`assembleDebug` 通过；装前逐 dex 搜串确认 `WallpaperTexProbe` / `WTP-1` / 候选类名都在 APK 里；设备上原包是 `DEBUGGABLE`，debug 直接覆盖安装成功；`am force-stop com.miui.miwallpaper` 重启壁纸进程（新 PID 10446）。
+   - **当前卡点**：`logcat` 全量搜 `WTP` = **0 条**，而 SystemUI 侧 MeloLock 日志正常（57 条）——**Vector 管理器里还没勾选 `com.miui.miwallpaper` 作用域**（`xposed_scope.xml` 只是声明，不勾选不注入；已写进 AGENTS.md 约定）。**待 zuige 在手机上勾选作用域后再次 force-stop 壁纸进程复测。**
+   - **成功判据（唯一）**：锁屏亮屏看到整屏品红。同时日志应出现 `WTP hooked ...` / `WTP hit ... self=... keyguard=true` / `WTP replaced ...`。看不到品红但有 `WTP hit ... keyguard=false` → 本机锁屏壁纸不走这些类的 Keyguard 实例，按日志迭代下一版探针。
 
 9. 2026-10-06 解锁滑动背景裂缝修复：此前同一张模糊专辑图分别绘制在锁屏根视图和通知窗根视图；解锁手势期间两个根视图由 SystemUI 分别做位移/淡出动画，底部会暴露原壁纸。现删除通知窗根视图里的重复模糊图和遮罩，只保留锁屏根视图内的单一全屏背景层；窗口顶层仅放封面、播放器和通知入口。普通通知继续由守卫隐藏。Debug 构建已通过，待真机滑动解锁验收。
 
