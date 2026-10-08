@@ -27,9 +27,13 @@ public final class HookEntry implements IXposedHookLoadPackage {
                             View view = (View) hook.thisObject;
                             view.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
                                 @Override public void onViewAttachedToWindow(View attached) {
-                                    Log.i(TAG, "Keyguard root attached; visibility=" + attached.getVisibility()
-                                            + " shown=" + attached.isShown() + " window=" + attached.getWindowToken());
-                                    attached.post(() -> attach(attached));
+                            Log.i(TAG, "Keyguard root attached; visibility=" + attached.getVisibility()
+                                    + " shown=" + attached.isShown() + " window=" + attached.getWindowToken());
+                            attached.post(() -> attach(attached));
+                            // 封面壁纸化（2026-10-08）：SystemUI 侧把媒体封面下发给壁纸进程。
+                            // 独立 try：它失败只损失「封面成为壁纸」，覆盖层不受影响。
+                            try { WallpaperCoverPush.install(attached.getContext()); }
+                            catch (Throwable error) { Log.w(TAG, "WallpaperCoverPush install failed", error); }
                                 }
                                 @Override public void onViewDetachedFromWindow(View detached) {
                                     LockScreenOverlay overlay = overlays.remove(detached);

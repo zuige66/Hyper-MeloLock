@@ -49,6 +49,17 @@ public final class Config {
     /** 壁纸进程包名：本机锁屏壁纸（含 GL 纹理上传点）由它绘制，独立于 SystemUI。 */
     public static final String WALLPAPER_PACKAGE = "com.miui.miwallpaper";
 
+    /**
+     * 封面下发通道：SystemUI 侧把媒体封面压成 JPEG 放进 extra 发给壁纸进程，
+     * 壁纸侧 hook `KeyguardAnimImageWallpaperRenderer#getBitmap` 时把封面铺到壁纸尺寸。
+     * 为什么不走文件：SystemUI（system 域）与 miwallpaper（wallpaper 域）互相读写对方
+     * data 目录会被 SELinux 拦，JPEG bytes 直接走 Binder 最省事且无权限坑（实测单帧 ~100KB）。
+     * extra 为空＝清除封面回退原生壁纸（fail closed）。
+     */
+    public static final String ACTION_WALLPAPER_COVER = "io.github.melolock.action.WALLPAPER_COVER";
+    /** 封面 JPEG 字节数组的 extra 键；缺省该 extra 表示清除。 */
+    public static final String EXTRA_COVER_JPEG = "art";
+
     // ── 锁屏三元素（时间 / 专辑封面 / 播放器）的可编辑参数 ──────────────────────
     // 键名同时用作 SharedPreferences 键与 Provider 的 key 列，值统一按字符串存取，
     // 这样新增参数不需要再改 Provider 的列投影。

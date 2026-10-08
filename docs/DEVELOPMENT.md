@@ -674,6 +674,21 @@ adb -s 1b3a7d8 reboot
    - `LockHomePage` 无 root 分支同时广播 SystemUI 与壁纸进程两条。
    - **端到端验证**：`rev=WTP-2` 装机后，`am broadcast -a io.github.melolock.action.RESTART_WALLPAPER -p com.miui.miwallpaper` → `killing wallpaper process`（PID 16973）→ 新进程 18696 重新加载 `WTP-2`。**无 root 重启壁纸进程链路完整可用。**
 
+13. **2026-10-08 封面壁纸化正式实现（WCV-1）落地** —— 用户确认看到整屏品红后开工。探针 `WallpaperTexProbe` 按约定删除（源码 + `xposed_init` 条目），由两个正式类替代：
+
+   - **壁纸进程侧 `WallpaperCover.java`**（新入口，登记进 `xposed_init`）：
+     - hook 实测命中的 `KeyguardAnimImageWallpaperRenderer#getBitmap`：after 里若有封面缓存则 `setResult(缓存位图)`——**每次返回同一引用**（GL 上传去重红线）；无缓存/被清除 → 原样返回（原生壁纸，fail closed）；
+     - 目标位图尺寸**动态记录**自 getBitmap 的原生返回值（本机 1440x3200），不硬编码；
+     - 广播接收（`ACTION_WALLPAPER_COVER`）：JPEG 解码 → 黑底 cover-crop 铺满 → 换引用；解码/合成在单线程 worker，失败清缓存回退原生；
+     - 无 root 重启通道（`ACTION_RESTART_WALLPAPER` 自杀 receiver）从探针移植进来。
+   - **SystemUI 侧 `WallpaperCoverPush.java`**（由 `HookEntry` 在 keyguard 根 attach 时安装，独立 try 包裹，**未触碰 `LockScreenOverlay`**）：
+     - 自己起一个 `MediaSource` 实例（不侵入现有媒体层），封面 Bitmap 引用去重（引用没变不发）；
+     - 压缩到最长边 1080、JPEG q85（~百 KB，走 Binder extra，避开 SELinux 文件权限坑）后发显式广播；
+     - `ACTION_SCREEN_ON` 时用缓存的最近快照补发（壁纸进程重启丢缓存 → 亮屏补上；补发前壁纸就是原生，无残缺态）。
+   - **配置策略**：壁纸进程读不到模块配置（SELinux），开关与封面全由 SystemUI 侧决策随广播下发；壁纸侧零配置依赖。
+   - **装机验证**：`assembleDebug` 通过；dex 自证 `WCV-1`/`WallpaperCoverPush` 在、`WallpaperTexProbe` 已移除；装机 + `am crash com.android.systemui` + `am force-stop com.miui.miwallpaper` 后日志确认双侧就位（`WCV renderer hook installed` / `broadcast channel armed` / `WallpaperCoverPush installed`）。
+   - **待人工验收**：播放音乐 → 锁屏亮屏，应看到锁屏壁纸变成专辑封面；切歌 → 下次亮屏壁纸跟随；关模块/无会话 → 回退原生壁纸。**解锁动效是否随之解决（本方案的核心目标）待实测**。已知边界：锁屏显示期间切歌，新封面要等下次亮屏/壁纸重建才上墙（未做主动重绘请求）。
+
 9. 2026-10-06 解锁滑动背景裂缝修复：此前同一张模糊专辑图分别绘制在锁屏根视图和通知窗根视图；解锁手势期间两个根视图由 SystemUI 分别做位移/淡出动画，底部会暴露原壁纸。现删除通知窗根视图里的重复模糊图和遮罩，只保留锁屏根视图内的单一全屏背景层；窗口顶层仅放封面、播放器和通知入口。普通通知继续由守卫隐藏。Debug 构建已通过，待真机滑动解锁验收。
 
 10. 2026-10-06 播放中壁纸与时间页修复：通知页过去调用完整视图恢复，连同系统壁纸层与系统时钟一起恢复，因此播放时可见原壁纸，且该构建的系统时钟会丢失小时。通知页现只临时恢复通知栈，继续隐藏原壁纸、原生前景和两组系统时钟；模块自己的 `TextClock` 留在通知页上方。其后验证发现等待 `ACTION_USER_PRESENT` 会让覆盖层残留到桌面，因此撤回该延迟撤层策略：`isKeyguardLocked()` 变为 false 时立即恢复原生界面，根视图分离仍为第二道清理。为阻止主题在布局动画中动态加入第二个时间或壁纸层，守卫现在遍历锁屏根视图并隐藏所有时钟类及 `wallpaper`/`keyguard_background` 标识的原生层。Debug 构建已通过，待真机验收通知页、上滑解锁和无媒体回退。**其中「`isKeyguardLocked()` 变为 false 时立即恢复原生界面」这条策略已在第 13 条被「淡出 + 保留实例」取代——第 12 条的日志证明它正是上滑露壁纸一秒的直接原因。**
