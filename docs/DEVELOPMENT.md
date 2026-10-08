@@ -94,7 +94,7 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 
 **补充（2026-10-08）：播放器卡片底色 + 点小封面跳音乐 App**
 
-- **底色**：新增 element 键 `card_bg`（`Config.ELEMENT_DEFAULTS` 默认 `0xF2181818`＝历史硬编码黑，老配置外观不变）。外观页「播放器」分组两档：深色 `0xF2181818` / 浅色 `0xF2C7C7CC`。**浅色档不只是换背景**：`buildPlayerCard` 里按底色 sRGB 亮度（`isLightColor`，alpha 折算）联动标题/副标题/时间/图标/进度条配色——浅灰底配白字根本看不清，所以整套联动换深字。`card_bg` 进 `elementSignature`，改完自动触发整场重建，无需额外处理。
+- **底色**：新增 element 键 `card_bg`（`Config.ELEMENT_DEFAULTS` 默认 `0xF2181818`＝历史硬编码黑，老配置外观不变）。外观页「播放器」分组现在共 **6 档 M3 风格 tonal 配色**（`CARD_BG_VALUES`，与标签一一对应）：深色 `0xF2181818`（原硬编码黑）/ 墨蓝 `0xF21E2A3C`（M3 深色容器调）/ 浅色 `0xF2C7C7CC`（中性浅灰）/ 蓝灰 `0xF2B6C1D6`（系统浅色磨砂同款，用户截图取色）/ 淡紫 `0xF2D8CEF4`（M3 secondaryContainer 系）/ 淡粉 `0xF2F4CEDA`（M3 tertiaryContainer 系）。**浅色档不只是换背景**：`buildPlayerCard` 里按底色 sRGB 亮度（`isLightColor`，alpha 折算，阈值 0.5）联动标题/副标题/时间/图标/进度条配色——浅灰底配白字根本看不清，所以整套联动换深字。`card_bg` 进 `elementSignature`，改完自动触发整场重建，无需额外处理。加新档位只改 Compose 端 `CARD_BG_VALUES`，SystemUI 端亮度判定是通用的。
 - **点击跳转**：`cardArt` 挂 `OnClickListener`（`launchMusicApp()`）：从 `shown.controller` 拿当前媒体会话包名 → `getLaunchIntentForPackage` + `FLAG_ACTIVITY_NEW_TASK` → `startActivity`。没有会话/包名起不来时静默忽略并打日志。锁屏上点它走系统标准路径：**先弹解锁验证（bouncer），通过后直达 App**（与点锁屏通知一致，不绕过锁屏）。
 
 ### 左侧通知栏下拉：改成直接禁用该手势（当前方案）
