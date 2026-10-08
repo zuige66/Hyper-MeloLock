@@ -100,6 +100,14 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 - **导航「开发者」→「关于」**：`about` 字符串（zh/en）改「关于/About」；页内 SectionTitle `about_developer` 保留「开发者」。
 - **检查更新**：恢复 Manifest 的 INTERNET（上游曾 `tools:node="remove"`）；`UpdateService.fetchIfNewer` 参数化 api/downloadUrl（默认仍指上游 HyperIsland），LockAboutPage 传本仓库 `zuige66/Hyper-MeloLock/releases/latest` + releaseUrl 指向 Releases 页。UI：原「模块」分组的灰度检查更新删除，在「项目」分组 GitHub 之下、更新日志之上插入可用项（点击转圈 → 有新版弹 `UpdateDialogHost`、无新版 Toast `already_latest`、失败弹失败对话框）。上游已有全套字符串/对话框组件，直接复用。
 
+**补充（2026-10-08 晚）：检查更新 blog 回退源 + v0.3.0 发版（f4635c0、2c9e284 及后续）**
+
+- **发版**：versionCode 10 / versionName 0.3.0，tag `v0.3.0`，Release 用临时 PAT 经 api.github.com 创建、uploads.github.com 上传 APK（39,157,583 字节，apksigner 校验 SHA-1 `2b73…c1f7` ✓）。
+- **blog 回退源**：GitHub Releases API 失败（国内网络常态）→ 回退 Hexo blog 的静态 `latest.json`（`https://blog.zuiges.com/downloads/melolock/latest.json`，字段 versionName/versionCode/changelog/apkUrl，versionCode 整数比较）。两源都失败才抛原始 GitHub 错误弹失败框。`fetchIfNewer` 新增 `currentVersionCode` 参数（blog 侧没有 tag 可解析，只能整数比较）。**注意 Manifest 的 INTERNET 上游曾是 `tools:node="remove"`，必须恢复**。
+- **blog 端部署**：`D:\Workplace\hexo\source\downloads\melolock\` 放 `latest.json` + APK，`hexo generate && hexo deploy`（**本机跑法：用 managed node 直接跑 `node_modules/hexo/bin/hexo`，pnpm exec 会失败**；部署目标是 gh-pages 分支）。
+- **验证 404 的教训**：deploy 推送成功后立即 curl 仍 404，**别急着排查代码**——是 GitHub Pages 构建延迟（约几分钟）+ CDN 缓存旧 404 响应。正确排查顺序：① api.github.com 查 gh-pages 分支 `downloads/melolock` 目录（文件在）→ ② raw.githubusercontent.com 直链（200）→ ③ 等 CDN 过期后 blog 域名恢复 200。链路：Cloudflare → GitHub Pages（Fastly）。
+- **发版红线**：必须打 tag，否则 GitHub API 的 `releases/latest` 检不到该版本；blog 仓库旧 APK 会随版本堆积，可删。
+
 **补充（2026-10-08 晚）：时钟「描边加粗」滑杆（4ad0ea9）**
 
 - 用户反馈圆体字体拉满粗细仍细。解析字体 `fvar` 表（python struct 手撸）：**中等圆 wght 轴 300~700、很圆 400~800**——滑杆 900 被字体钳制，字体本身没有更粗的空间。

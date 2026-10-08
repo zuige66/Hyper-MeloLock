@@ -726,6 +726,7 @@ internal fun LockAboutPage(isActive: Boolean) {
             try {
                 val update = UpdateService.fetchIfNewer(
                     BuildConfig.VERSION_NAME,
+                    currentVersionCode = BuildConfig.VERSION_CODE,
                     api = UPDATE_CHECK_API,
                     downloadUrl = RELEASES_URL,
                 )
