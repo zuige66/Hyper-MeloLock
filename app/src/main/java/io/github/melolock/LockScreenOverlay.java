@@ -244,6 +244,12 @@ final class LockScreenOverlay {
     private LinearLayout content;
     private LinearLayout playerCard;
     private ImageView baseBlur, cover, cardArt;
+    /** 顶部日期行（公历+周几+农历）与自定义签名行；两行共存、各自独立开关，均在时钟上方。 */
+    private TextView dateLine, signatureLine;
+    /** 签名正文（create 时读一次）；进 elementSignature，改签名会触发整场重建。 */
+    private String signatureText = "";
+    /** 日期行文本对应的天（epoch day）；跨天时重算。 */
+    private int dateTextDay = -1;
     /** 背景三层：模糊封面 / 纯色底（style==2 才可见）/ 遮罩。提为字段以便 resume() 就地更新。 */
     private View solidFill, baseScrim;
     private TextView title, artist, previous, playPause, next, elapsed, duration;
@@ -460,6 +466,7 @@ final class LockScreenOverlay {
         title.setText(emptyAs(snapshot.title, "未知曲目")); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
         playPause.setText(snapshot.playing ? "Ⅱ" : "▶");
         updateProgress();
+        refreshDateLine(false);   // 跨天时日期行最多 2 秒后自动翻页；同天只是一次整数比较
     }
 
     /**
@@ -534,14 +541,42 @@ final class LockScreenOverlay {
 
         content = new LinearLayout(context);
         content.setOrientation(LinearLayout.VERTICAL); content.setGravity(Gravity.CENTER_HORIZONTAL);
-        FrameLayout.LayoutParams contentParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP); contentParams.topMargin = dp(elem(elements, Config.CLOCK_SPACING));
+        // 顶部三段（签名行/日期行/时钟）沿「距上一个元素」语义链：第一行距内容区顶，
+        // 后面的行距上一行。两行都关时保持老布局（时钟距顶 = CLOCK_SPACING）。
+        signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
+        boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
+        boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
+        int leadSpacing = signOn ? elem(elements, Config.SIGN_SPACING)
+                : dateOn ? elem(elements, Config.DATE_SPACING)
+                : elem(elements, Config.CLOCK_SPACING);
+        FrameLayout.LayoutParams contentParams = new FrameLayout.LayoutParams(-1, -2, Gravity.TOP); contentParams.topMargin = dp(leadSpacing);
         foreground.addView(content, contentParams);
+        if (signOn) {
+            signatureLine = new TextView(context); signatureLine.setGravity(Gravity.CENTER);
+            signatureLine.setTextSize(elem(elements, Config.SIGN_SIZE));
+            signatureLine.setTextColor(elem(elements, Config.SIGN_COLOR));
+            signatureLine.setText(signatureText);
+            applyTextWeight(signatureLine, elem(elements, Config.SIGN_WEIGHT));
+            content.addView(signatureLine, new LinearLayout.LayoutParams(-1, -2));
+        }
+        if (dateOn) {
+            dateLine = new TextView(context); dateLine.setGravity(Gravity.CENTER);
+            dateLine.setTextSize(elem(elements, Config.DATE_SIZE));
+            dateLine.setTextColor(elem(elements, Config.DATE_COLOR));
+            applyTextWeight(dateLine, elem(elements, Config.DATE_WEIGHT));
+            LinearLayout.LayoutParams dateParams = new LinearLayout.LayoutParams(-1, -2);
+            if (signOn) dateParams.topMargin = dp(elem(elements, Config.DATE_SPACING));
+            content.addView(dateLine, dateParams);
+            refreshDateLine(true);
+        }
         immersiveClock = new TextClock(context);
         immersiveClock.setFormat12Hour("h:mm"); immersiveClock.setFormat24Hour("HH:mm"); immersiveClock.setGravity(Gravity.CENTER);
         immersiveClock.setTextSize(elem(elements, Config.CLOCK_SIZE));
         immersiveClock.setTextColor(elem(elements, Config.CLOCK_COLOR));
         applyClockTypeface(immersiveClock, elem(elements, Config.CLOCK_ROUNDNESS), elem(elements, Config.CLOCK_WEIGHT));
-        content.addView(immersiveClock, new LinearLayout.LayoutParams(geometry.clockWidth, geometry.clockHeight));
+        LinearLayout.LayoutParams clockParams = new LinearLayout.LayoutParams(geometry.clockWidth, geometry.clockHeight);
+        if (signOn || dateOn) clockParams.topMargin = dp(elem(elements, Config.CLOCK_SPACING));
+        content.addView(immersiveClock, clockParams);
         cover = new ImageView(context); cover.setScaleType(ImageView.ScaleType.CENTER_CROP); cover.setClipToOutline(true);
         GradientDrawable coverShape = new GradientDrawable(); coverShape.setColor(Color.WHITE); coverShape.setCornerRadius(dp(Config.cornerRadiusDp(context))); cover.setBackground(coverShape);
         LinearLayout.LayoutParams artParams = new LinearLayout.LayoutParams(geometry.coverWidth, geometry.coverHeight);
@@ -674,6 +709,60 @@ final class LockScreenOverlay {
             Log.w(TAG, "Clock typeface not applied: " + error);
         }
     }
+
+    /** 文本行（日期/签名）粗细：系统字体的可变粗细，不走只含数字的圆体字体。 */
+    private void applyTextWeight(TextView view, int weight) {
+        int wght = clamp(weight, 100, 1000);
+        try {
+            view.setTypeface(Typeface.create(Typeface.SANS_SERIF, wght, false));
+            view.getPaint().setFontVariationSettings("'wght' " + wght);
+        } catch (Throwable error) {
+            Log.w(TAG, "Text weight not applied: " + error);
+        }
+    }
+
+    /**
+     * 日期行刷新：按「天」缓存，只在跨天时重算文本（applySnapshot 的 2 秒节拍里只是
+     * 一次整数比较，不产生渲染成本）。跨 0 点最多 2 秒后自动翻到新的一天。
+     */
+    private void refreshDateLine(boolean force) {
+        if (dateLine == null) return;
+        int dayKey = (int) (System.currentTimeMillis() / 86400000L);
+        if (!force && dayKey == dateTextDay) return;
+        dateTextDay = dayKey;
+        try {
+            dateLine.setText(buildDateText());
+        } catch (Throwable error) {
+            // 农历换算出任何意外都不能影响主场景：退化为纯公历
+            Log.w(TAG, "Date line build failed: " + error);
+            java.util.Calendar g = java.util.Calendar.getInstance();
+            dateLine.setText((g.get(java.util.Calendar.MONTH) + 1) + "月" + g.get(java.util.Calendar.DAY_OF_MONTH) + "日");
+        }
+    }
+
+    /** 顶部日期行文本：「6月28日周六 · 乙巳年六月初四」（格式对齐系统原生锁屏）。 */
+    private static String buildDateText() {
+        java.util.Calendar g = java.util.Calendar.getInstance();
+        String solar = (g.get(java.util.Calendar.MONTH) + 1) + "月" + g.get(java.util.Calendar.DAY_OF_MONTH) + "日"
+                + "周" + "日一二三四五六".charAt(g.get(java.util.Calendar.DAY_OF_WEEK) - 1);
+        // ICU ChineseCalendar 是 Android 自带农历实现；干支年 = 60 甲子循环序号（epoch 2637 BC＝甲子）。
+        android.icu.util.ChineseCalendar cc = new android.icu.util.ChineseCalendar();
+        int cycle = Math.floorMod(cc.get(android.icu.util.ChineseCalendar.EXTENDED_YEAR), 60);
+        char stem = "甲乙丙丁戊己庚辛壬癸".charAt((cycle + 59) % 60 % 10);
+        char branch = "子丑寅卯辰巳午未申酉戌亥".charAt((cycle + 59) % 60 % 12);
+        int month = cc.get(android.icu.util.ChineseCalendar.MONTH);
+        boolean leap = cc.get(android.icu.util.ChineseCalendar.IS_LEAP_MONTH) != 0;
+        int day = cc.get(android.icu.util.ChineseCalendar.DAY_OF_MONTH);
+        String lunar = (leap ? "闰" : "") + "正二三四五六七八九十冬腊".charAt(month) + "月"
+                + LUNAR_DAY_NAMES[day];
+        return solar + " · " + stem + "" + branch + "年" + lunar;
+    }
+
+    private static final String[] LUNAR_DAY_NAMES = {
+            "", "初一", "初二", "初三", "初四", "初五", "初六", "初七", "初八", "初九", "初十",
+            "十一", "十二", "十三", "十四", "十五", "十六", "十七", "十八", "十九", "二十",
+            "廿一", "廿二", "廿三", "廿四", "廿五", "廿六", "廿七", "廿八", "廿九", "三十",
+    };
 
     /** 从本模块 APK 的 assets 解出圆体字体并缓存；SystemUI 读不到模块资源时返回 null。 */
     private Typeface roundTypeface(int roundness) {
@@ -1406,6 +1495,8 @@ final class LockScreenOverlay {
         StringBuilder text = new StringBuilder(192);
         for (String key : new java.util.TreeSet<>(Config.elementValues(context).keySet()))
             text.append(key).append('=').append(Config.elementInt(context, key)).append(';');
+        // 签名正文不在整数表里，单独拼进签名；否则改签名不会触发整场重建
+        text.append("sig=").append(signatureText).append(';');
         return text.toString();
     }
 

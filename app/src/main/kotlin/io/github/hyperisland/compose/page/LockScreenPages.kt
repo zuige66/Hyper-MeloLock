@@ -27,6 +27,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -41,6 +43,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -51,6 +54,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -85,6 +89,7 @@ import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.SearchBar
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
 import top.yukonga.miuix.kmp.icon.extended.Backup
@@ -471,6 +476,57 @@ internal fun LockAppearancePage() {
                     onSelectedIndexChange = { update(Config.CLOCK_COLOR, CLOCK_COLORS[it]) },
                 )
                 DpSlider("距顶部", value(Config.CLOCK_SPACING), 0..160, onCommit = { update(Config.CLOCK_SPACING, it) })
+            }
+        }
+        item {
+            SectionTitle("日期")
+            Card {
+                PreferenceSwitch(
+                    title = "显示日期",
+                    summary = "时钟上方的「公历 + 周几 + 农历」，如「6月28日周六 · 乙巳年六月初四」",
+                    icon = null,
+                    checked = value(Config.DATE_ENABLED) != 0,
+                    onCheckedChange = { update(Config.DATE_ENABLED, if (it) 1 else 0) },
+                )
+                if (value(Config.DATE_ENABLED) != 0) {
+                    DpSlider("字号", value(Config.DATE_SIZE), 12..48, onCommit = { update(Config.DATE_SIZE, it) })
+                    DpSlider("粗细", value(Config.DATE_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.DATE_WEIGHT, it) })
+                    PreferenceDropdown(
+                        title = "颜色",
+                        summary = "日期文字颜色",
+                        icon = null,
+                        items = CLOCK_COLOR_LABELS,
+                        selectedIndex = CLOCK_COLORS.indexOf(value(Config.DATE_COLOR)).coerceAtLeast(0),
+                        onSelectedIndexChange = { update(Config.DATE_COLOR, CLOCK_COLORS[it]) },
+                    )
+                    DpSlider("距顶部", value(Config.DATE_SPACING), 0..160, onCommit = { update(Config.DATE_SPACING, it) })
+                }
+            }
+        }
+        item {
+            SectionTitle("签名")
+            Card {
+                PreferenceSwitch(
+                    title = "显示签名",
+                    summary = "日期行上方的自定义文字；关闭或内容为空时不占位",
+                    icon = null,
+                    checked = value(Config.SIGN_ENABLED) != 0,
+                    onCheckedChange = { update(Config.SIGN_ENABLED, if (it) 1 else 0) },
+                )
+                if (value(Config.SIGN_ENABLED) != 0) {
+                    SignatureInputField()
+                    DpSlider("字号", value(Config.SIGN_SIZE), 10..40, onCommit = { update(Config.SIGN_SIZE, it) })
+                    DpSlider("粗细", value(Config.SIGN_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.SIGN_WEIGHT, it) })
+                    PreferenceDropdown(
+                        title = "颜色",
+                        summary = "签名文字颜色",
+                        icon = null,
+                        items = CLOCK_COLOR_LABELS,
+                        selectedIndex = CLOCK_COLORS.indexOf(value(Config.SIGN_COLOR)).coerceAtLeast(0),
+                        onSelectedIndexChange = { update(Config.SIGN_COLOR, CLOCK_COLORS[it]) },
+                    )
+                    DpSlider("距顶部", value(Config.SIGN_SPACING), 0..160, onCommit = { update(Config.SIGN_SPACING, it) })
+                }
             }
         }
         item {
@@ -1030,6 +1086,33 @@ private val CARD_BG_VALUES = intArrayOf(
     0xF2F4CEDA.toInt(), // 淡粉：M3 tertiaryContainer 系
 )
 private val CARD_BG_LABELS = listOf("深色", "墨蓝", "浅色", "蓝灰", "淡紫", "淡粉")
+
+/**
+ * 签名内容输入框。**失焦或 IME 确认才写盘**：签名变化会触发锁屏场景整场重建，
+ * 逐键写盘等于每敲一个字重建一次；输入过程中只更新本地 state。
+ */
+@Composable
+private fun SignatureInputField() {
+    val context = LocalContext.current
+    var text by remember { mutableStateOf(Config.elementString(context, Config.DATE_SIGNATURE)) }
+    fun commit() {
+        if (text != Config.elementString(context, Config.DATE_SIGNATURE)) {
+            Config.setElementText(context, Config.DATE_SIGNATURE, text)
+        }
+    }
+    TextField(
+        value = text,
+        onValueChange = { text = it },
+        modifier = Modifier
+            .fillMaxWidth()
+            .onFocusChanged { if (!it.isFocused) commit() },
+        label = "签名内容",
+        useLabelAsPlaceholder = true,
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+        keyboardActions = KeyboardActions(onDone = { commit() }),
+    )
+}
 
 /** 时间字体的圆润档位；0 用系统字体，1 / 2 用内置的开源圆体数字字体。 */
 private val ROUNDNESS_LABELS = listOf("直角", "中等圆", "很圆")

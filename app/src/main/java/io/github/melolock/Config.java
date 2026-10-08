@@ -8,6 +8,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -93,6 +94,22 @@ public final class Config {
      */
     public static final String BLOCK_LEFT_SHADE = "block_left_shade";
 
+    // 顶部日期行 / 自定义签名行（两行共存，各自独立开关）。日期行内容＝「公历+周几 · 农历」，
+    // 由覆盖层用 ICU ChineseCalendar 换算。不提供「字体圆润」：圆体字体只含数字，对汉字无效。
+    public static final String DATE_ENABLED = "date_enabled";
+    public static final String DATE_SIZE = "date_text_size_sp";
+    public static final String DATE_WEIGHT = "date_weight";
+    public static final String DATE_COLOR = "date_color";
+    public static final String DATE_SPACING = "date_spacing_dp";
+    public static final String SIGN_ENABLED = "signature_enabled";
+    public static final String SIGN_SIZE = "sign_text_size_sp";
+    public static final String SIGN_WEIGHT = "sign_weight";
+    public static final String SIGN_COLOR = "sign_color";
+    public static final String SIGN_SPACING = "sign_spacing_dp";
+
+    /** 字符串值元素：签名正文。走同一条 /elements 通道（value 列本来就是字符串形式），但不进整数解析。 */
+    public static final String DATE_SIGNATURE = "date_signature";
+
     /** 宽/高为 0 表示“跟随默认”，由覆盖层按屏幕计算。 */
     private static final Map<String, Integer> ELEMENT_DEFAULTS = new LinkedHashMap<>();
     static {
@@ -114,11 +131,32 @@ public final class Config {
         ELEMENT_DEFAULTS.put(CARD_SPACING, 20);
         ELEMENT_DEFAULTS.put(CARD_BG, 0xF2181818);
         ELEMENT_DEFAULTS.put(BLOCK_LEFT_SHADE, 1);
+        ELEMENT_DEFAULTS.put(DATE_ENABLED, 1);
+        ELEMENT_DEFAULTS.put(DATE_SIZE, 20);
+        ELEMENT_DEFAULTS.put(DATE_WEIGHT, 500);
+        ELEMENT_DEFAULTS.put(DATE_COLOR, 0xFFFFFFFF);
+        ELEMENT_DEFAULTS.put(DATE_SPACING, 6);
+        ELEMENT_DEFAULTS.put(SIGN_ENABLED, 0);
+        ELEMENT_DEFAULTS.put(SIGN_SIZE, 16);
+        ELEMENT_DEFAULTS.put(SIGN_WEIGHT, 500);
+        ELEMENT_DEFAULTS.put(SIGN_COLOR, 0xFFFFFFFF);
+        ELEMENT_DEFAULTS.put(SIGN_SPACING, 6);
+    }
+
+    /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */
+    private static final Map<String, String> TEXT_ELEMENT_DEFAULTS = new LinkedHashMap<>();
+    static {
+        TEXT_ELEMENT_DEFAULTS.put(DATE_SIGNATURE, "");
     }
 
     private Config() {}
 
-    public static Set<String> elementKeys() { return Collections.unmodifiableSet(ELEMENT_DEFAULTS.keySet()); }
+    /** /elements 导出的全部键：整数元素 + 字符串元素（签名正文）。 */
+    public static Set<String> elementKeys() {
+        Set<String> keys = new LinkedHashSet<>(ELEMENT_DEFAULTS.keySet());
+        keys.addAll(TEXT_ELEMENT_DEFAULTS.keySet());
+        return Collections.unmodifiableSet(keys);
+    }
 
     public static int elementDefault(String key) {
         Integer value = ELEMENT_DEFAULTS.get(key);
@@ -128,7 +166,9 @@ public final class Config {
     /** 本地读取原始字符串；未设置时返回默认值，因此调用方永远拿得到可解析的值。 */
     public static String elementString(Context context, String key) {
         String raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(key, null);
-        return raw == null ? String.valueOf(elementDefault(key)) : raw;
+        if (raw != null) return raw;
+        String textDefault = TEXT_ELEMENT_DEFAULTS.get(key);
+        return textDefault != null ? textDefault : String.valueOf(elementDefault(key));
     }
 
     public static int elementInt(Context context, String key) {
@@ -139,6 +179,32 @@ public final class Config {
 
     public static void setElementInt(Context context, String key, int value) {
         write(context, key, String.valueOf(value));
+    }
+
+    /** 写字符串值元素（签名正文）。写盘触发 notifyChange，覆盖层靠 elementSignature 里的签名段感知变化。 */
+    public static void setElementText(Context context, String key, String value) {
+        write(context, key, value == null ? "" : value);
+    }
+
+    /**
+     * 读取字符串值元素（签名正文）。SystemUI 侧与 {@link #elementValues} 一样走 /elements
+     * 查询；签名不在整数解析表里，需要单独取（create 时一次，代价可忽略）。
+     */
+    public static String elementText(Context context, String key) {
+        if (PACKAGE.equals(context.getPackageName())) {
+            return elementString(context, key);
+        }
+        try (Cursor cursor = context.getContentResolver().query(ELEMENTS_URI, null, null, null, null)) {
+            if (cursor != null) {
+                while (cursor.moveToNext()) {
+                    if (key.equals(cursor.getString(0))) {
+                        String raw = cursor.getString(1);
+                        return raw != null ? raw : TEXT_ELEMENT_DEFAULTS.getOrDefault(key, "");
+                    }
+                }
+            }
+        } catch (RuntimeException error) { /* 读不到走默认值，失败关闭 */ }
+        return TEXT_ELEMENT_DEFAULTS.getOrDefault(key, "");
     }
 
     public static int parseElement(String raw, int fallback) {
