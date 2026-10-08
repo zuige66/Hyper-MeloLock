@@ -1760,11 +1760,16 @@ final class LockScreenOverlay {
      * SystemUI 侧一次 `Config.elementValues()` 查询即可，调用点只有 create() 收尾与 resume()。
      */
     private String currentElementSignature() {
+        // 取值必须走 elementValues() 的那张表：只有它跨进程查 Provider 拿到配置端的真实值。
+        // Config.elementInt()/elementString() 在 SystemUI 进程读的是**本进程**的 SharedPreferences
+        // （那份永远是空的，于是恒等于默认值）——早先签名用它取值，指纹因此恒定不变，
+        // 比对形同虚设，改外观不重建，只能靠关开模块撤场才有新配置。
+        Map<String, Integer> values = Config.elementValues(context);
         StringBuilder text = new StringBuilder(192);
-        for (String key : new java.util.TreeSet<>(Config.elementValues(context).keySet()))
-            text.append(key).append('=').append(Config.elementInt(context, key)).append(';');
-        // 签名正文不在整数表里，单独拼进签名；否则改签名不会触发整场重建
-        text.append("sig=").append(signatureText).append(';');
+        for (String key : new java.util.TreeSet<>(values.keySet()))
+            text.append(key).append('=').append(values.get(key)).append(';');
+        // 签名正文是字符串值元素，不在整数表里，单独读一次（跨进程）；改签名也要触发重建
+        text.append("sig=").append(Config.elementText(context, Config.DATE_SIGNATURE)).append(';');
         return text.toString();
     }
 
