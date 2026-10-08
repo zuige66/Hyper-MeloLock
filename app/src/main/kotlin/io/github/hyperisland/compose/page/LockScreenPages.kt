@@ -530,11 +530,11 @@ internal fun LockAppearancePage() {
                 DpSlider("间距", value(Config.CARD_SPACING), 0..160, onCommit = { update(Config.CARD_SPACING, it) })
                 PreferenceDropdown(
                     title = "底色",
-                    summary = "播放器卡片的背景色；浅色档卡片内文字自动换深色",
+                    summary = "播放器卡片的背景色；文字颜色按底色亮度自动适配",
                     icon = null,
                     items = CARD_BG_LABELS,
-                    selectedIndex = if (value(Config.CARD_BG) == CARD_BG_LIGHT) 1 else 0,
-                    onSelectedIndexChange = { update(Config.CARD_BG, if (it == 1) CARD_BG_LIGHT else CARD_BG_DARK) },
+                    selectedIndex = CARD_BG_VALUES.indexOf(value(Config.CARD_BG)).coerceAtLeast(0),
+                    onSelectedIndexChange = { update(Config.CARD_BG, CARD_BG_VALUES[it]) },
                 )
                 PreferenceSwitch(
                     title = "锁屏禁止左下拉",
@@ -1016,10 +1016,20 @@ private const val APP_LOG_TAG = "MeloLock[App]"
 
 private val PALETTE = intArrayOf(0xFF111827.toInt(), 0xFF253B80.toInt(), 0xFF5B2C83.toInt(), 0xFF14532D.toInt(), 0xFF000000.toInt())
 
-/** 播放器卡片底色两档；与覆盖层 isLightColor 的亮度联动判定相配（浅档必须足够亮，深档＝历史硬编码黑）。 */
-private const val CARD_BG_DARK = 0xF2181818.toInt()
-private const val CARD_BG_LIGHT = 0xF2C7C7CC.toInt()
-private val CARD_BG_LABELS = listOf("深色", "浅色")
+/**
+ * 播放器卡片底色档位（M3 风格 tonal 配色）。值的顺序与标签一一对应。
+ * 与覆盖层 `isLightColor` 的亮度联动判定相配：浅档必须足够亮（自动配深字），
+ * 深档足够暗（自动配白字）。「深色」＝历史硬编码黑，老配置外观不变。
+ */
+private val CARD_BG_VALUES = intArrayOf(
+    0xF2181818.toInt(), // 深色：原硬编码近黑
+    0xF21E2A3C.toInt(), // 墨蓝：M3 深色容器调
+    0xF2C7C7CC.toInt(), // 浅色：中性浅灰
+    0xF2B6C1D6.toInt(), // 蓝灰：系统浅色磨砂同款（半透明淡蓝紫灰）
+    0xF2D8CEF4.toInt(), // 淡紫：M3 secondaryContainer 系
+    0xF2F4CEDA.toInt(), // 淡粉：M3 tertiaryContainer 系
+)
+private val CARD_BG_LABELS = listOf("深色", "墨蓝", "浅色", "蓝灰", "淡紫", "淡粉")
 
 /** 时间字体的圆润档位；0 用系统字体，1 / 2 用内置的开源圆体数字字体。 */
 private val ROUNDNESS_LABELS = listOf("直角", "中等圆", "很圆")
