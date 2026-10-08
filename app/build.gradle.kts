@@ -17,7 +17,11 @@ android {
         minSdk = 36
         targetSdk = 37
         versionCode = 11
-        versionName = "0.3.1"
+        // 临时把版本名降成 0.3.0：GitHub 源按 versionName 比较，这样本地 debug 会判定
+        // 线上 v0.3.1 是新版并弹更新框（用于验证「下载」按钮）。versionCode 不能降，
+        // 否则覆盖安装会报 INSTALL_FAILED_VERSION_DOWNGRADE（卸载重装会丢已勾选的音乐应用）。
+        // 验证完必须改回 "0.3.1"。
+        versionName = "0.3.0"
         testInstrumentationRunner = "io.github.melolock.ToggleInstrumentation"
     }
 

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 更新包下载到 app 私有 files/update 下，安装器通过 FileProvider 的 content:// 读取
+         （Android 7+ 起跨应用传 file:// 会直接抛 FileUriExposedException）。 -->
+    <files-path name="update" path="update/" />
+</paths>

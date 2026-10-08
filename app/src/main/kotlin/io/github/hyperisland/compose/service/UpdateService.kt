@@ -35,7 +35,7 @@ internal object UpdateService {
             // 失败原因要落到日志（DNS 污染 / 连接超时 / TLS 重置 是三种不同的病，药方不同）
             Log.w(TAG, "GitHub update check failed: ${error::class.simpleName}: ${error.message}; trying blog fallback")
             try {
-                fetchFromBlog(currentVersionCode)
+                fetchFromBlog(currentVersionCode, currentVersion)
             } catch (blogError: Exception) {
                 Log.w(TAG, "Blog fallback failed too: ${blogError::class.simpleName}: ${blogError.message}")
                 throw error   // 抛原始 GitHub 错误，失败弹窗语义不变
@@ -98,8 +98,13 @@ internal object UpdateService {
         return false
     }
 
-    /** blog 回退源：Hexo 静态 JSON（versionName/versionCode/changelog/apkUrl），versionCode 整数比较。 */
-    private suspend fun fetchFromBlog(currentVersionCode: Int): AppUpdate? = withContext(Dispatchers.IO) {
+    /**
+     * blog 回退源：Hexo 静态 JSON（versionName/versionCode/changelog/apkUrl）。
+     * **两个维度都要判**：versionCode 整数比较 + versionName 三段比较，任一更新即算新版——
+     * GitHub 源只比较 versionName，若这里只比 code，两条源会给出相反结论
+     * （真机实测：GitHub 403 回退 blog，本地 code 已等于线上但 name 更低，直接被判「已是最新」）。
+     */
+    private suspend fun fetchFromBlog(currentVersionCode: Int, currentVersion: String): AppUpdate? = withContext(Dispatchers.IO) {
         val connection = (URL(BLOG_LATEST_JSON).openConnection() as HttpURLConnection).apply {
             connectTimeout = NETWORK_TIMEOUT_MILLIS
             readTimeout = NETWORK_TIMEOUT_MILLIS
@@ -118,7 +123,10 @@ internal object UpdateService {
             if (remoteCode <= 0 || remoteName.isBlank() || apkUrl.isBlank()) {
                 throw IOException("Blog latest.json is missing required fields")
             }
-            if (currentVersionCode > 0 && remoteCode <= currentVersionCode) {
+            val codeNewer = currentVersionCode > 0 && remoteCode > currentVersionCode
+            val nameNewer = isNewer(remoteName, currentVersion)
+            if (!codeNewer && !nameNewer) {
+                Log.i(TAG, "Blog latest is v$remoteName (code $remoteCode); already up to date")
                 return@withContext null   // 已是最新
             }
             Log.i(TAG, "Blog fallback hit: v$remoteName (code $remoteCode)")

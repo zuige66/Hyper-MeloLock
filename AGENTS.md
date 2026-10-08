@@ -3,6 +3,7 @@
 ## 项目约定
 
 - 完成代码改动后同步更新相关 Markdown 文档。**`README.md` 只做面向使用者的项目介绍**（简介、功能、截图、适配、安装、构建、许可），实现细节 / 排查手册 / 变更日志写进 `docs/DEVELOPMENT.md`，工程约定写进本文件。改到截图或图标时同步 `docs/images/`。
+- **对外文案（README、发布帖、更新说明）只写用户能感知的东西**：说效果、说怎么用、说限制，不写实现原理、类名、变量名、进程名、排查过程。作用域包名这类「用户必须照着操作」的内容才保留，且不给解释。开发文档反过来——技术细节留给 `docs/DEVELOPMENT.md`，那里越具体越好。（2026-10-09 zuige 反馈：酷安文案里出现 SharedPreferences / 纹理 / 字体轴这类内容，用户根本不需要知道。）
 - 本项目是 Java Android + Vector/LSPosed 模块，配置端已迁入 HyperIsland 的 Kotlin/Compose/Miuix `app` 源码；修改配置字段时必须同时检查 `Config.java`、`ConfigProvider.java`、Compose 页面和 SystemUI 侧读取逻辑。
 - 锁屏覆盖层默认失败关闭：找不到目标 SystemUI 视图或媒体数据无效时恢复原生界面。
 - 界面只做「复用 HyperIsland 原版组件 + 换数据源」，不新写样式；同名卡片直接提升 `OverviewPage.kt` 里的实现为 `internal` 共享，禁止复制第二份。**照搬上游组件时要把配套的 `graphicsLayer` 一起搬**：凡是内部用 `BlendMode`（尤其 `DstIn`/`SrcIn` 蒙版）的绘制，必须带 `compositingStrategy = CompositingStrategy.Offscreen`，否则会拿整块 surface 当混合目标——表现为蒙版底边留硬边、颜色染到相邻页面（2026-10-07 开发者页/外观页已踩过）。

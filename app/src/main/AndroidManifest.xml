@@ -10,6 +10,11 @@
     <!-- 「检查更新 → 下载」后拉起系统安装界面（Android 8+ 安装未知应用需要此权限声明）；
          首次安装时系统会引导用户开启「允许来自此来源的应用」。 -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- 更新包下载走前台服务（保证下载期间进程存活）；Android 14+ 必须声明具体类型。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- 前台服务的下载进度通知（Android 13+ 需要；未授予只是看不到通知，下载照旧） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <queries>
         <intent>
             <action android:name="android.media.browse.MediaBrowserService" />
@@ -29,6 +34,17 @@
         <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
         <provider android:name="io.github.melolock.ConfigProvider" android:authorities="io.github.melolock.config"
             android:exported="true" />
+        <!-- 更新包下载：前台服务（DownloadManager 的完成广播依赖本进程存活，大文件下载期间
+             进程常被回收导致「下完不弹安装」）；FileProvider 给安装器读 APK 的 content://。 -->
+        <service android:name="io.github.hyperisland.compose.service.UpdateDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <provider android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/file_paths" />
+        </provider>
         <activity android:name="io.github.hyperisland.MainActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
