@@ -29,8 +29,12 @@ public final class WallpaperCoverPush {
     private static final int MAX_EDGE = 1080;
 
     private static boolean installed = false;
-    private static final Object lastArtLock = new Object();
-    private static Bitmap lastSentArt;
+    /**
+     * 上次推送的「内容 key」。**不能按 Bitmap 引用去重**：MediaSource 每次回调都重新解码出
+     * 新的 Bitmap 实例（2026-10-08 实测同一封面每 1~2 秒被重发一次，壁纸侧跟着每秒重合成 +
+     * GL 重传全屏纹理，重传间隙原生壁纸一闪）。同曲目 + 同尺寸才视为同一封面。
+     */
+    private static volatile String lastSentKey;
     /** 最近一次 MediaSource 回调的快照，亮屏补发用（volatile：回调线程不定）。 */
     private static volatile MediaSource.Snapshot lastSnapshot;
     private static MediaSource media;
@@ -62,7 +66,7 @@ public final class WallpaperCoverPush {
             media = new MediaSource(appContext, snapshot -> {
                 lastSnapshot = snapshot;
                 worker.execute(() -> {
-                    try { push(snapshot == null ? null : snapshot.art); }
+                    try { push(snapshot); }
                     catch (Throwable error) { Log.w(TAG, "WCV push failed", error); }
                 });
             });
@@ -72,25 +76,30 @@ public final class WallpaperCoverPush {
         }
     }
 
-    /** 亮屏补发：拿最近一次快照重发（无有效会话发清除，壁纸侧回退原生）。 */
+    /** 亮屏补发：清 key 后无条件重发（壁纸进程可能已重启丢缓存，key 相同也不能跳过）。 */
     private static void resendCurrent() {
         try {
             MediaSource.Snapshot snapshot = lastSnapshot;
-            push(snapshot == null ? null : snapshot.art);
+            lastSentKey = null;
+            push(snapshot);
         } catch (Throwable error) {
             Log.w(TAG, "WCV resend failed", error);
         }
     }
 
-    /** 封面引用没变就不发；null＝通知壁纸侧清除（模块关闭/无会话）。 */
-    private static void push(Bitmap art) {
+    /** 封面内容 key（曲目 + 尺寸）没变就不发；快照为空＝通知壁纸侧清除。 */
+    private static void push(MediaSource.Snapshot snapshot) {
+        Bitmap art = snapshot == null ? null : snapshot.art;
         if (art == null || art.isRecycled()) {
-            if (consumeLastSent(null)) send(null);
+            if (lastSentKey != null) {
+                lastSentKey = null;
+                send(null);
+            }
             return;
         }
-        synchronized (lastArtLock) {
-            if (lastSentArt == art) return;
-        }
+        String key = snapshot.title + "|" + snapshot.artist
+                + "|" + art.getWidth() + "x" + art.getHeight();
+        if (key.equals(lastSentKey)) return;
         Bitmap scaled = scaleDown(art);
         ByteArrayOutputStream buffer = new ByteArrayOutputStream();
         if (!scaled.compress(Bitmap.CompressFormat.JPEG, 85, buffer)) {
@@ -98,18 +107,10 @@ public final class WallpaperCoverPush {
             return;
         }
         byte[] jpeg = buffer.toByteArray();
-        synchronized (lastArtLock) { lastSentArt = art; }
+        lastSentKey = key;
         send(jpeg);
         if (scaled != art) scaled.recycle();
-        Log.i(TAG, "WCV cover pushed " + jpeg.length + " bytes");
-    }
-
-    private static boolean consumeLastSent(Bitmap expected) {
-        synchronized (lastArtLock) {
-            boolean had = lastSentArt != null;
-            lastSentArt = expected;
-            return had;
-        }
+        Log.i(TAG, "WCV cover pushed " + jpeg.length + " bytes key=" + key);
     }
 
     private static Bitmap scaleDown(Bitmap art) {
