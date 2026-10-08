@@ -257,8 +257,8 @@ final class LockScreenOverlay {
     /** 「跟随封面」缓存（主线程读写）：按曲目 key（title|artist|尺寸）缓存取色结果——
      * 该设备的媒体源每 2 秒交一个新 Bitmap 实例，按引用缓存会每帧重跑 Palette。 */
     private String autoMediaKey;
-    /** 取色结果：磨砂容器色（卡片底）/ 主文字色（时间、入口）/ 辅助文字色（日期、签名）。 */
-    private int autoCardBg, autoTextMain, autoTextSub;
+    /** 取色结果：专辑主色原始 RGB（0＝未取到/取色失败）。各「跟随封面」档按各自取色风格从这里推导。 */
+    private int autoSwatch;
     /** 取色专用单线程（Palette 数百 ms，绝不占主线程）；daemon 防泄漏。 */
     private final java.util.concurrent.ExecutorService paletteExecutor =
             java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
@@ -268,6 +268,8 @@ final class LockScreenOverlay {
     private GradientDrawable entryBackgroundDrawable;
     /** 各文字/入口颜色是否处于「跟随封面」档（create 时读定；配置变化走整场重建）。 */
     private boolean clockColorFollow, dateColorFollow, signColorFollow, entryColorFollow, entryBgFollow;
+    /** 各「跟随封面」档的取色风格（create 时读定）：false＝低饱和磨砂（M3E），true＝鲜艳原色直出。 */
+    private boolean cardBgPick, clockPick, datePick, signPick, entryColorPick, entryBgPick;
     /** 签名正文（create 时读一次）；进 elementSignature，改签名会触发整场重建。 */
     private String signatureText = "";
     /** 日期行文本对应的天（epoch day）；跨天时重算。 */
@@ -575,6 +577,12 @@ final class LockScreenOverlay {
         signColorFollow = elem(elements, Config.SIGN_COLOR) == 0;
         entryColorFollow = elem(elements, Config.ENTRY_COLOR) == 0;
         entryBgFollow = elem(elements, Config.ENTRY_BG) == 0;
+        cardBgPick = elem(elements, Config.CARD_BG_PICK) != 0;
+        clockPick = elem(elements, Config.CLOCK_PICK) != 0;
+        datePick = elem(elements, Config.DATE_PICK) != 0;
+        signPick = elem(elements, Config.SIGN_PICK) != 0;
+        entryColorPick = elem(elements, Config.ENTRY_COLOR_PICK) != 0;
+        entryBgPick = elem(elements, Config.ENTRY_BG_PICK) != 0;
         signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
         boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
         boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
@@ -586,7 +594,7 @@ final class LockScreenOverlay {
         if (dateOn) {
             dateLine = new TextView(context); dateLine.setGravity(Gravity.CENTER);
             dateLine.setTextSize(elem(elements, Config.DATE_SIZE));
-            dateLine.setTextColor(elemOrFollow(elements, Config.DATE_COLOR, false));
+            dateLine.setTextColor(elemOrFollow(elements, Config.DATE_COLOR, false, datePick));
             applyTextWeight(dateLine, elem(elements, Config.DATE_WEIGHT));
             content.addView(dateLine, new LinearLayout.LayoutParams(-1, -2));
             refreshDateLine(true);
@@ -594,7 +602,7 @@ final class LockScreenOverlay {
         if (signOn) {
             signatureLine = new TextView(context); signatureLine.setGravity(Gravity.CENTER);
             signatureLine.setTextSize(elem(elements, Config.SIGN_SIZE));
-            signatureLine.setTextColor(elemOrFollow(elements, Config.SIGN_COLOR, false));
+            signatureLine.setTextColor(elemOrFollow(elements, Config.SIGN_COLOR, false, signPick));
             signatureLine.setText(signatureText);
             applyTextWeight(signatureLine, elem(elements, Config.SIGN_WEIGHT));
             LinearLayout.LayoutParams signParams = new LinearLayout.LayoutParams(-1, -2);
@@ -618,7 +626,7 @@ final class LockScreenOverlay {
         };
         immersiveClock.setFormat12Hour("h:mm"); immersiveClock.setFormat24Hour("HH:mm"); immersiveClock.setGravity(Gravity.CENTER);
         immersiveClock.setTextSize(elem(elements, Config.CLOCK_SIZE));
-        immersiveClock.setTextColor(elemOrFollow(elements, Config.CLOCK_COLOR, true));
+        immersiveClock.setTextColor(elemOrFollow(elements, Config.CLOCK_COLOR, true, clockPick));
         applyClockTypeface(immersiveClock, elem(elements, Config.CLOCK_ROUNDNESS), elem(elements, Config.CLOCK_WEIGHT));
         LinearLayout.LayoutParams clockParams = new LinearLayout.LayoutParams(geometry.clockWidth, geometry.clockHeight);
         if (signOn || dateOn) clockParams.topMargin = dp(elem(elements, Config.CLOCK_SPACING));
@@ -633,11 +641,11 @@ final class LockScreenOverlay {
         cardParams.topMargin = dp(elem(elements, Config.CARD_SPACING));
         content.addView(playerCard, cardParams);
         notificationButton = new Button(context); notificationButton.setText("展开通知");
-        notificationButton.setTextColor(elemOrFollow(elements, Config.ENTRY_COLOR, true));
+        notificationButton.setTextColor(elemOrFollow(elements, Config.ENTRY_COLOR, true, entryColorPick));
         // 自绘胶囊替换系统默认背景：配色可配（含跟随封面）。默认半透明黑近似系统观感。
         entryBackgroundDrawable = new GradientDrawable();
         int entryBg = elem(elements, Config.ENTRY_BG);
-        entryBackgroundDrawable.setColor(entryBg == 0 ? (autoCardBg != 0 ? autoCardBg : 0x66101010) : entryBg);
+        entryBackgroundDrawable.setColor(entryBg == 0 ? followEntryBg() : entryBg);
         entryBackgroundDrawable.setCornerRadius(dp(24));
         notificationButton.setBackground(entryBackgroundDrawable);
         notificationButton.setAllCaps(false);
@@ -656,7 +664,9 @@ final class LockScreenOverlay {
                 + " | spacing=" + elem(elements, Config.CLOCK_SPACING) + "/"
                 + elem(elements, Config.COVER_SPACING) + "/" + elem(elements, Config.CARD_SPACING)
                 + " | date=" + (elem(elements, Config.DATE_ENABLED) != 0) + "/" + elem(elements, Config.DATE_SIZE)
-                + "sp | sign=" + (elem(elements, Config.SIGN_ENABLED) != 0) + " len=" + signatureText.length());
+                + "sp | sign=" + (elem(elements, Config.SIGN_ENABLED) != 0) + " len=" + signatureText.length()
+                + " | pick vivid: card" + cardBgPick + " clock" + clockPick + " date" + datePick
+                + " sign" + signPick + " entry" + entryColorPick + "/" + entryBgPick);
         Log.i(TAG, "Custom media card overlay created in " + createAttempts + " attempt(s)");
         createAttempts = 0;
         unlockRestoreLogged = false;
@@ -879,7 +889,7 @@ final class LockScreenOverlay {
         progress.setProgressTintList(ColorStateList.valueOf(0xFFD7D7DA)); progress.setProgressBackgroundTintList(ColorStateList.valueOf(0xFF444449));
         timeline.addView(progress, new LinearLayout.LayoutParams(0, dp(6), 1f));
         duration = label(0xFF9E9EA3, 14, false); duration.setGravity(Gravity.CENTER); timeline.addView(duration, new LinearLayout.LayoutParams(dp(48), -1));
-        applyCardColors(cardBgConfig);
+        applyCardColors(cardBgConfig == 0 ? followCardBg() : cardBgConfig);
         return card;
     }
 
@@ -902,22 +912,42 @@ final class LockScreenOverlay {
         progress.setProgressBackgroundTintList(ColorStateList.valueOf(lightCard ? 0xFF9E9EA3 : 0xFF444449));
     }
 
-    /** 「跟随封面」文字色的当前值：按曲目缓存的主/辅文字色；未取到色时先用白兜底（回填时更新）。 */
-    private int elemOrFollow(Map<String, Integer> elements, String key, boolean asMain) {
+    /** 「跟随封面」文字色的当前值：按该项取色风格从主色推导；未取到色时先用白/灰兜底（回填时更新）。 */
+    private int elemOrFollow(Map<String, Integer> elements, String key, boolean asMain, boolean vivid) {
         int value = elem(elements, key);
         if (value != 0) return value;
-        if (autoCardBg == 0) return Color.WHITE;
-        return asMain ? autoTextMain : autoTextSub;
+        return followText(vivid, asMain);
     }
 
-    /** 取色回填时统一刷新所有「跟随封面」档的文字/入口配色（主线程调用）。 */
+    /** 「跟随封面」文字色：vivid＝鲜艳档（保留饱和度抬亮度），否则磨砂档（现行压饱和规则）。 */
+    private int followText(boolean vivid, boolean asMain) {
+        if (autoSwatch == 0) return asMain ? Color.WHITE : 0xFF9E9EA3;
+        if (vivid) return vividText(autoSwatch, asMain);
+        int[] texts = textColorsFromSwatch(autoSwatch);
+        return asMain ? texts[0] : texts[1];
+    }
+
+    /** 「跟随封面」播放器底色：鲜艳档主色直出，磨砂档低饱和容器。 */
+    private int followCardBg() {
+        if (autoSwatch == 0) return 0xF2181818;
+        return cardBgPick ? vividContainer(autoSwatch) : containerFromSwatch(autoSwatch);
+    }
+
+    /** 「跟随封面」入口胶囊背景：与播放器底色同规则但独立取色风格。 */
+    private int followEntryBg() {
+        if (autoSwatch == 0) return 0x66101010;
+        return entryBgPick ? vividContainer(autoSwatch) : containerFromSwatch(autoSwatch);
+    }
+
+    /** 取色回填时统一刷新所有「跟随封面」档（卡片底 + 文字 + 入口）的配色（主线程调用）。 */
     private void applyFollowColors() {
-        if (autoCardBg == 0) return;
-        if (clockColorFollow && immersiveClock != null) immersiveClock.setTextColor(autoTextMain);
-        if (dateColorFollow && dateLine != null) dateLine.setTextColor(autoTextSub);
-        if (signColorFollow && signatureLine != null) signatureLine.setTextColor(autoTextSub);
-        if (entryColorFollow && notificationButton != null) notificationButton.setTextColor(autoTextMain);
-        if (entryBgFollow && entryBackgroundDrawable != null) entryBackgroundDrawable.setColor(autoCardBg);
+        if (autoSwatch == 0) return;
+        if (cardBgConfig == 0 && cardBackgroundDrawable != null) applyCardColors(followCardBg());
+        if (clockColorFollow && immersiveClock != null) immersiveClock.setTextColor(followText(clockPick, true));
+        if (dateColorFollow && dateLine != null) dateLine.setTextColor(followText(datePick, false));
+        if (signColorFollow && signatureLine != null) signatureLine.setTextColor(followText(signPick, false));
+        if (entryColorFollow && notificationButton != null) notificationButton.setTextColor(followText(entryColorPick, true));
+        if (entryBgFollow && entryBackgroundDrawable != null) entryBackgroundDrawable.setColor(followEntryBg());
     }
 
     /** 是否任一处处于「跟随封面」档：全部手选时取色管线完全不跑。 */
@@ -930,32 +960,25 @@ final class LockScreenOverlay {
     private void maybeExtractCardPalette(final Bitmap art, final String mediaKey) {
         if (!anyFollow() || art == null || art.isRecycled()) return;
         if (mediaKey != null && mediaKey.equals(autoMediaKey)) {
-            if (autoCardBg != 0) {   // 缓存命中（场景重建后同曲）直接同步回填
-                if (cardBgConfig == 0) applyCardColors(autoCardBg);
+            if (autoSwatch != 0) {   // 缓存命中（场景重建后同曲）直接同步回填
                 applyFollowColors();
             }
             return;
         }
         paletteExecutor.execute(() -> {
-            int container, textMain, textSub;
+            int swatchRgb = 0;
             try {
                 Palette palette = Palette.from(art).maximumColorCount(24).resizeBitmapSize(112).generate();
                 Palette.Swatch swatch = pickSwatch(palette);
-                container = containerFromSwatch(swatch);
-                int[] texts = textColorsFromSwatch(swatch);
-                textMain = texts[0]; textSub = texts[1];
+                if (swatch != null) swatchRgb = swatch.getRgb();
             } catch (Throwable error) {
-                Log.w(TAG, "Card palette extract failed", error);
-                container = 0xF2181818; textMain = Color.WHITE; textSub = 0xFF9E9EA3;   // 失败关闭
+                Log.w(TAG, "Card palette extract failed", error);   // swatchRgb=0 → 各档回兜底色（失败关闭）
             }
-            final int bg = container, mainColor = textMain, subColor = textSub;
+            final int rgb = swatchRgb;
             main.post(() -> {
-                autoMediaKey = mediaKey; autoCardBg = bg; autoTextMain = mainColor; autoTextSub = subColor;
-                if (cardBgConfig == 0) {
-                    applyCardColors(bg);
-                    Log.i(TAG, "Card palette applied key=" + mediaKey + " bg=" + Integer.toHexString(bg));
-                }
-                applyFollowColors();   // 时间/日期/签名/入口的「跟随封面」档一并刷新
+                autoMediaKey = mediaKey; autoSwatch = rgb;
+                applyFollowColors();   // 卡片底色 + 时间/日期/签名/入口的「跟随封面」档一并刷新
+                Log.i(TAG, "Card palette applied key=" + mediaKey + " swatch=" + Integer.toHexString(rgb));
             });
         });
     }
@@ -973,14 +996,14 @@ final class LockScreenOverlay {
     }
 
     /**
-     * 专辑主色 → 文字色对 [主, 辅]：**真·跟随专辑色**（保留色相），不是黑白灰切换。
+     * 专辑主色 → 文字色对 [主, 辅]（磨砂档）：**真·跟随专辑色**（保留色相），不是黑白灰切换。
      * 主文字（时间/入口）= 主色提亮到可读区间（V 0.80~0.92）；辅助（日期/签名）= 降饱和弱化版。
      * 近乎无彩的封面回白/灰（此时没有任何彩可跟）。
      */
-    private static int[] textColorsFromSwatch(Palette.Swatch swatch) {
-        if (swatch == null) return new int[] { Color.WHITE, 0xFF9E9EA3 };
+    private static int[] textColorsFromSwatch(int swatchRgb) {
+        if (swatchRgb == 0) return new int[] { Color.WHITE, 0xFF9E9EA3 };
         float[] hsv = new float[3];
-        Color.colorToHSV(swatch.getRgb(), hsv);
+        Color.colorToHSV(swatchRgb, hsv);
         if (hsv[1] < 0.10f) return new int[] { Color.WHITE, 0xFF9E9EA3 };
         float v = hsv[2] < 0.55f ? 0.80f : Math.min(hsv[2] + 0.10f, 0.92f);
         float[] mainHsv = { hsv[0], Math.min(hsv[1] + 0.05f, 0.85f), v };
@@ -989,17 +1012,35 @@ final class LockScreenOverlay {
     }
 
     /**
-     * 主色 → 低饱和磨砂容器色（保留色相）：主色偏亮做浅容器（V 0.82 / S≤0.25，配深字），
+     * 主色 → 低饱和磨砂容器色（磨砂档，保留色相）：主色偏亮做浅容器（V 0.82 / S≤0.25，配深字），
      * 偏暗做深容器（V 0.24 / S≤0.42，配白字）；近乎无彩的封面回历史黑。alpha 与手选档一致 0xF2。
      */
-    private static int containerFromSwatch(Palette.Swatch swatch) {
-        if (swatch == null) return 0xF2181818;
+    private static int containerFromSwatch(int swatchRgb) {
+        if (swatchRgb == 0) return 0xF2181818;
         float[] hsv = new float[3];
-        Color.colorToHSV(swatch.getRgb(), hsv);
+        Color.colorToHSV(swatchRgb, hsv);
         if (hsv[1] < 0.12f) return 0xF2181818;
         if (hsv[2] > 0.6f) { hsv[1] = Math.min(hsv[1] * 0.45f, 0.25f); hsv[2] = 0.82f; }
         else { hsv[1] = Math.min(hsv[1] * 0.8f, 0.42f); hsv[2] = 0.24f; }
         return Color.HSVToColor(0xF2, hsv);
+    }
+
+    /** 「鲜艳」档容器：专辑主色原色直出，仅统一 0xF2 不透明（与手选档一致）。 */
+    private static int vividContainer(int swatchRgb) {
+        return (swatchRgb & 0x00FFFFFF) | 0xF2000000;
+    }
+
+    /**
+     * 「鲜艳」档文字：保留主色饱和度（略增强），只把亮度抬进可读区间 0.72~0.92，
+     * 深色封面上的暗主色也看得清；辅助文字 alpha 0xE6 弱化。无彩封面回白/灰。
+     */
+    private static int vividText(int swatchRgb, boolean asMain) {
+        float[] hsv = new float[3];
+        Color.colorToHSV(swatchRgb, hsv);
+        if (hsv[1] < 0.10f) return asMain ? Color.WHITE : 0xFF9E9EA3;
+        float v = Math.max(Math.min(hsv[2] + 0.08f, 0.92f), 0.72f);
+        return Color.HSVToColor(asMain ? 0xFF : 0xE6,
+                new float[] { hsv[0], Math.min(hsv[1] * 1.05f, 1f), v });
     }
 
     /** sRGB 亮度 + alpha 折算：底色叠在壁纸上之后是否偏亮（决定卡片内文字用深还是浅）。 */

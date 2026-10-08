@@ -480,6 +480,7 @@ internal fun LockAppearancePage() {
                         selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.DATE_COLOR)).coerceAtLeast(0),
                         onSelectedIndexChange = { update(Config.DATE_COLOR, TEXT_COLOR_VALUES[it]) },
                     )
+                    PickStyleDropdown(Config.DATE_COLOR, Config.DATE_PICK, ::value, ::update)
                     DpSlider("距顶部", value(Config.DATE_SPACING), 0..160, onCommit = { update(Config.DATE_SPACING, it) })
                 }
             }
@@ -506,6 +507,7 @@ internal fun LockAppearancePage() {
                         selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.SIGN_COLOR)).coerceAtLeast(0),
                         onSelectedIndexChange = { update(Config.SIGN_COLOR, TEXT_COLOR_VALUES[it]) },
                     )
+                    PickStyleDropdown(Config.SIGN_COLOR, Config.SIGN_PICK, ::value, ::update)
                     DpSlider("距顶部", value(Config.SIGN_SPACING), 0..160, onCommit = { update(Config.SIGN_SPACING, it) })
                 }
             }
@@ -532,6 +534,7 @@ internal fun LockAppearancePage() {
                     selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.CLOCK_COLOR)).coerceAtLeast(0),
                     onSelectedIndexChange = { update(Config.CLOCK_COLOR, TEXT_COLOR_VALUES[it]) },
                 )
+                PickStyleDropdown(Config.CLOCK_COLOR, Config.CLOCK_PICK, ::value, ::update)
                 DpSlider("距顶部", value(Config.CLOCK_SPACING), 0..160, onCommit = { update(Config.CLOCK_SPACING, it) })
             }
         }
@@ -598,6 +601,7 @@ internal fun LockAppearancePage() {
                     selectedIndex = CARD_BG_VALUES.indexOf(value(Config.CARD_BG)).coerceAtLeast(0),
                     onSelectedIndexChange = { update(Config.CARD_BG, CARD_BG_VALUES[it]) },
                 )
+                PickStyleDropdown(Config.CARD_BG, Config.CARD_BG_PICK, ::value, ::update)
                 PreferenceSwitch(
                     title = "锁屏禁止左下拉",
                     summary = "沉浸场景显示时吃掉左侧下拉手势，不再和通知栏抢层级。注意：左半屏起始的上滑解锁也会失效（右半屏、指纹、电源键正常）",
@@ -618,6 +622,7 @@ internal fun LockAppearancePage() {
                     selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.ENTRY_COLOR)).coerceAtLeast(0),
                     onSelectedIndexChange = { update(Config.ENTRY_COLOR, TEXT_COLOR_VALUES[it]) },
                 )
+                PickStyleDropdown(Config.ENTRY_COLOR, Config.ENTRY_COLOR_PICK, ::value, ::update)
                 PreferenceDropdown(
                     title = "胶囊背景",
                     summary = "按钮胶囊的背景色，可选跟随封面",
@@ -626,6 +631,7 @@ internal fun LockAppearancePage() {
                     selectedIndex = CARD_BG_VALUES.indexOf(value(Config.ENTRY_BG)).coerceAtLeast(0),
                     onSelectedIndexChange = { update(Config.ENTRY_BG, CARD_BG_VALUES[it]) },
                 )
+                PickStyleDropdown(Config.ENTRY_BG, Config.ENTRY_BG_PICK, ::value, ::update)
             }
         }
         item {
@@ -1183,6 +1189,31 @@ private val TEXT_COLOR_VALUES = intArrayOf(
     0xFFFF9EAD.toInt(), // 粉
 )
 private val TEXT_COLOR_LABELS = listOf("跟随封面", "白", "黑", "浅灰", "暖黄", "天蓝", "粉")
+
+/**
+ * 「取色风格」子选项（每个可调颜色的项各一份，键 *_pick）：仅当对应颜色处于「跟随封面」档时显示。
+ * 0＝低饱和磨砂（M3E，主色压饱和做容器/弱化做文字，默认）；1＝鲜艳原色（主色直出，只调亮度保证可读）。
+ * 值直接当selectedIndex用（与 PICK_STYLE_LABELS 顺序一致）。
+ */
+private val PICK_STYLE_LABELS = listOf("低饱和磨砂 (M3E)", "鲜艳原色")
+
+@Composable
+private fun PickStyleDropdown(
+    colorKey: String,
+    pickKey: String,
+    value: (String) -> Int,
+    update: (String, Int) -> Unit,
+) {
+    if (value(colorKey) != 0) return   // 手选固定色时取色管线不跑，子选项无意义
+    PreferenceDropdown(
+        title = "取色风格",
+        summary = "「跟随封面」从专辑主色提取颜色的方式",
+        icon = null,
+        items = PICK_STYLE_LABELS,
+        selectedIndex = value(pickKey).coerceIn(0, PICK_STYLE_LABELS.lastIndex),
+        onSelectedIndexChange = { update(pickKey, it) },
+    )
+}
 
 /**
  * 签名内容输入框。**三重保存**：① 输入停顿 800ms 自动写盘（LaunchedEffect 防抖，text

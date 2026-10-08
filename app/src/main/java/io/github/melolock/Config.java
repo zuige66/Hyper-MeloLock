@@ -117,6 +117,18 @@ public final class Config {
     public static final String ENTRY_COLOR = "entry_color";
     public static final String ENTRY_BG = "entry_bg";
 
+    /**
+     * 各「跟随封面」档的取色风格：0＝低饱和磨砂（M3E，主色压饱和做容器/弱化做文字），
+     * 1＝鲜艳（主色原色直出，只调亮度保证可读）。每个可调颜色的项独立一份。
+     * 仅在对应颜色选「跟随封面」时生效；进 elementSignature，改动触发整场重建。
+     */
+    public static final String CARD_BG_PICK = "card_bg_pick";
+    public static final String CLOCK_PICK = "clock_pick";
+    public static final String DATE_PICK = "date_pick";
+    public static final String SIGN_PICK = "sign_pick";
+    public static final String ENTRY_COLOR_PICK = "entry_color_pick";
+    public static final String ENTRY_BG_PICK = "entry_bg_pick";
+
     /** 字符串值元素：签名正文。走同一条 /elements 通道（value 列本来就是字符串形式），但不进整数解析。 */
     public static final String DATE_SIGNATURE = "date_signature";
 
@@ -159,6 +171,12 @@ public final class Config {
         ELEMENT_DEFAULTS.put(SIGN_SPACING, 8);
         ELEMENT_DEFAULTS.put(ENTRY_COLOR, 0xFFFFFFFF);
         ELEMENT_DEFAULTS.put(ENTRY_BG, 0);
+        ELEMENT_DEFAULTS.put(CARD_BG_PICK, 0);
+        ELEMENT_DEFAULTS.put(CLOCK_PICK, 0);
+        ELEMENT_DEFAULTS.put(DATE_PICK, 0);
+        ELEMENT_DEFAULTS.put(SIGN_PICK, 0);
+        ELEMENT_DEFAULTS.put(ENTRY_COLOR_PICK, 0);
+        ELEMENT_DEFAULTS.put(ENTRY_BG_PICK, 0);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */

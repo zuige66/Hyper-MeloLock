@@ -106,7 +106,17 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 - **blog 回退源**：GitHub Releases API 失败（国内网络常态）→ 回退 Hexo blog 的静态 `latest.json`（`https://blog.zuiges.com/downloads/melolock/latest.json`，字段 versionName/versionCode/changelog/apkUrl，versionCode 整数比较）。两源都失败才抛原始 GitHub 错误弹失败框。`fetchIfNewer` 新增 `currentVersionCode` 参数（blog 侧没有 tag 可解析，只能整数比较）。**注意 Manifest 的 INTERNET 上游曾是 `tools:node="remove"`，必须恢复**。
 - **blog 端部署**：`D:\Workplace\hexo\source\downloads\melolock\` 放 `latest.json` + APK，`hexo generate && hexo deploy`（**本机跑法：用 managed node 直接跑 `node_modules/hexo/bin/hexo`，pnpm exec 会失败**；部署目标是 gh-pages 分支）。
 - **验证 404 的教训**：deploy 推送成功后立即 curl 仍 404，**别急着排查代码**——是 GitHub Pages 构建延迟（约几分钟）+ CDN 缓存旧 404 响应。正确排查顺序：① api.github.com 查 gh-pages 分支 `downloads/melolock` 目录（文件在）→ ② raw.githubusercontent.com 直链（200）→ ③ 等 CDN 过期后 blog 域名恢复 200。链路：Cloudflare → GitHub Pages（Fastly）。
-- **发版红线**：必须打 tag，否则 GitHub API 的 `releases/latest` 检不到该版本；blog 仓库旧 APK 会随版本堆积，可删。
+- **发版红线**：必须打 tag，否则 GitHub API 的 `releases/latest` 检不到该版本；blog 仓库旧 APK 会随着版本堆积，可删。
+
+**补充（2026-10-08 晚）：取色风格子选项（磨砂 / 鲜艳，每项独立）**
+
+- 需求：跟随专辑取色目前只有一套「低饱和磨砂」（M3E）推导，用户要能选「鲜艳」。**每个可调颜色的项各加一个「取色风格」子选项**，仅当该颜色处于「跟随封面」档时显示。
+- **新增 6 个 element 键**（`ELEMENT_DEFAULTS` 默认 0＝磨砂，1＝鲜艳；进 elementSignature，改动整场重建）：`card_bg_pick` / `clock_pick` / `date_pick` / `sign_pick` / `entry_color_pick` / `entry_bg_pick`。
+- **取色管线重构**：后台 Palette 只算一次**主色原始 RGB**（字段 `autoSwatch`，0＝未取到/失败），不再预推导三种颜色；主线程按各项 pick 标志从同一主色推导：
+  - 磨砂档（现行规则不变）：`containerFromSwatch`（浅容器 V0.82/S≤0.25 / 深容器 V0.24/S≤0.42 / 无彩回黑，alpha 0xF2）、`textColorsFromSwatch`（主文字提亮 V0.80~0.92 保留色相、辅助降饱和 alpha 0xE6）。
+  - 鲜艳档（新，用户确认「原色直出」）：`vividContainer`＝主色原样仅统一 alpha 0xF2；`vividText`＝保留饱和度（×1.05）只把亮度抬进可读区间 0.72~0.92，辅助文字 alpha 0xE6。浅容器仍由 `isLightColor` 亮度联动自动配深字。
+- 派生函数 `followText(vivid, asMain)` / `followCardBg()` / `followEntryBg()` 统一兜底：`autoSwatch==0` 时黑卡/白主字/灰辅字/`0x66101010` 入口底（失败关闭）。`applyFollowColors()` 现在连卡片底色一起刷（原来在 maybeExtractCardPalette 里单刷）；`textColorsFromSwatch`/`containerFromSwatch` 参数从 `Palette.Swatch` 改为 `int` 主色。
+- 配置端：`PickStyleDropdown(colorKey, pickKey, ::value, ::update)` 复用组件（`PICK_STYLE_LABELS` 两档），插在 6 个颜色下拉下方；手选固定色时组件直接 return 不显示。Elements 诊断日志追加各档 pick 状态。
 
 **补充（2026-10-08 晚）：时钟「描边加粗」滑杆（4ad0ea9）**
 
