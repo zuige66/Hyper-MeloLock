@@ -550,7 +550,7 @@
     <string name="check_update">启动时检查更新</string>
     <string name="check_update_summary">启动应用时自动检查是否有新版本</string>
     <string name="misc">杂项</string>
-    <string name="about">开发者</string>
+    <string name="about">关于</string>
     <string name="about_discussion">讨论</string>
     <string name="about_developer">开发者</string>
     <string name="about_module">模块</string>

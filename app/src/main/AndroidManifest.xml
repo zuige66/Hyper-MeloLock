@@ -4,7 +4,9 @@
     <!-- HyperOS 上枚举全部已安装应用需要 MIUI 自己这个运行时权限；
          不声明的话 requestPermissions 会直接被拒、连授权框都不弹。 -->
     <uses-permission android:name="com.android.permission.GET_INSTALLED_APPS" />
-    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+    <!-- INTERNET：上游 HyperIsland 曾显式移除（App 无网络需求）。
+         本模块「检查更新」要请求 GitHub Releases API，因此恢复该权限。 -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <queries>
         <intent>
             <action android:name="android.media.browse.MediaBrowserService" />

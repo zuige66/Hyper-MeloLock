@@ -70,6 +70,8 @@ import io.github.hyperisland.compose.component.RestartScopeDialog
 import io.github.hyperisland.compose.component.SectionTitle
 import io.github.hyperisland.compose.component.SettingsAction
 import io.github.hyperisland.compose.component.SettingsActionWithArrow
+import io.github.hyperisland.compose.component.UpdateDialogHost
+import io.github.hyperisland.compose.component.UpdateDialogState
 import io.github.hyperisland.compose.data.InstalledAppsRepository
 import io.github.hyperisland.compose.page.home.OverviewAlertCard
 import io.github.hyperisland.compose.page.home.OverviewInfoCard
@@ -77,13 +79,16 @@ import io.github.hyperisland.compose.page.home.OverviewStatusGrid
 import io.github.hyperisland.compose.service.HomeSystemInfo
 import io.github.hyperisland.compose.service.RestartScopeService
 import io.github.hyperisland.compose.service.SystemInfoProvider
+import io.github.hyperisland.compose.service.UpdateService
 import io.github.melolock.Config
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
+import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.InputField
 import top.yukonga.miuix.kmp.basic.SearchBar
@@ -710,6 +715,36 @@ internal fun LockAboutPage(isActive: Boolean) {
     val animationTime = rememberAboutAnimationTime(isActive)
     val gradientColors = animatedGradientColors(animationTime, isSystemInDarkTheme())
 
+    // 检查更新：请求本仓库 GitHub Releases；有新版弹更新对话框，无新版 Toast，失败弹失败对话框。
+    var isCheckingUpdate by remember { mutableStateOf(false) }
+    var updateDialogState by remember { mutableStateOf<UpdateDialogState?>(null) }
+    val scope = rememberCoroutineScope()
+    fun requestUpdateCheck() {
+        if (isCheckingUpdate) return
+        isCheckingUpdate = true
+        scope.launch {
+            try {
+                val update = UpdateService.fetchIfNewer(
+                    BuildConfig.VERSION_NAME,
+                    api = UPDATE_CHECK_API,
+                    downloadUrl = RELEASES_URL,
+                )
+                isCheckingUpdate = false
+                updateDialogState = if (update != null) {
+                    UpdateDialogState.Available(BuildConfig.VERSION_NAME, update)
+                } else {
+                    Toast.makeText(context, R.string.already_latest, Toast.LENGTH_SHORT).show()
+                    null
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                isCheckingUpdate = false
+                updateDialogState = UpdateDialogState.Failure
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         AnimatedAboutBackground(
             animationTime = animationTime,
@@ -764,17 +799,10 @@ internal fun LockAboutPage(isActive: Boolean) {
             item {
                 SectionTitle(stringResource(R.string.about_module))
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    // 备份恢复与检查更新都还没做（且已移除 INTERNET 权限）：灰度。
+                    // 备份恢复还没做：灰度。
                     SettingsActionWithArrow(
                         title = stringResource(R.string.backup_restore),
                         icon = MiuixIcons.Backup,
-                        enabled = false,
-                        onClick = {},
-                    )
-                    SettingsAction(
-                        title = stringResource(R.string.check_update_action),
-                        icon = MiuixIcons.Update,
-                        summary = PLACEHOLDER_TEXT,
                         enabled = false,
                         onClick = {},
                     )
@@ -792,6 +820,25 @@ internal fun LockAboutPage(isActive: Boolean) {
                     ) {
                         context.openUrl(REPO_URL)
                     }
+                    // 检查更新：请求本仓库 GitHub Releases（位置＝GitHub 之下、更新日志之上）。
+                    SettingsAction(
+                        title = stringResource(R.string.check_update_action),
+                        icon = MiuixIcons.Update,
+                        endContent = if (isCheckingUpdate) {
+                            {
+                                Box(
+                                    modifier = Modifier.padding(end = 8.dp).size(26.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    CircularProgressIndicator(size = 20.dp)
+                                }
+                            }
+                        } else {
+                            null
+                        },
+                        enabled = !isCheckingUpdate,
+                        onClick = { requestUpdateCheck() },
+                    )
                     SettingsAction(
                         title = stringResource(R.string.changelog),
                         icon = MiuixIcons.Info,
@@ -830,6 +877,14 @@ internal fun LockAboutPage(isActive: Boolean) {
                 }
             }
         }
+        UpdateDialogHost(
+            state = updateDialogState,
+            onDismiss = { updateDialogState = null },
+            onViewUpdate = { url ->
+                updateDialogState = null
+                context.openUrl(url)
+            },
+        )
         // hero 画在列表之后（更上层），淡出过程中列表内容是「从下面盖上来」的观感。
         Column(
             modifier = Modifier
@@ -1077,6 +1132,8 @@ private const val DEVELOPER_HANDLE = "zuige66"
 private const val GITHUB_URL = "https://github.com/zuige66"
 private const val REPO_URL = "https://github.com/zuige66/Hyper-MeloLock"
 private const val RELEASES_URL = "$REPO_URL/releases"
+/** 「检查更新」请求的 GitHub Releases API（本仓库）。 */
+private const val UPDATE_CHECK_API = "https://api.github.com/repos/zuige66/Hyper-MeloLock/releases/latest"
 private const val DONATION_URL = ""
 private const val DOCUMENTATION_URL = ""
 private const val RESOURCES_URL = ""

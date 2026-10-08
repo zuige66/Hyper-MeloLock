@@ -122,38 +122,43 @@ public final class Config {
 
     /** 宽/高为 0 表示“跟随默认”，由覆盖层按屏幕计算。 */
     private static final Map<String, Integer> ELEMENT_DEFAULTS = new LinkedHashMap<>();
+    /**
+     * 元素默认值＝2026-10-08 真机（gauguinpro）调定的一套抄回：时钟 80/900/跟随封面、
+     * 日期 22/520/跟随封面/距顶 50、卡片解锁 369x180/底色跟随封面、入口背景跟随封面。
+     * 签名例外：默认**关闭且内容空白**（用户指定），不随真机。
+     */
     static {
-        ELEMENT_DEFAULTS.put(CLOCK_SIZE, 75);
-        ELEMENT_DEFAULTS.put(CLOCK_SPACING, 52);
-        ELEMENT_DEFAULTS.put(CLOCK_WEIGHT, 770);
-        ELEMENT_DEFAULTS.put(CLOCK_COLOR, 0xFFFFFFFF);
+        ELEMENT_DEFAULTS.put(CLOCK_SIZE, 80);
+        ELEMENT_DEFAULTS.put(CLOCK_SPACING, 0);
+        ELEMENT_DEFAULTS.put(CLOCK_WEIGHT, 900);
+        ELEMENT_DEFAULTS.put(CLOCK_COLOR, 0);
         ELEMENT_DEFAULTS.put(CLOCK_ROUNDNESS, 0);
         ELEMENT_DEFAULTS.put(CLOCK_STROKE, 0);
         ELEMENT_DEFAULTS.put(COVER_SCALE, 118);
         ELEMENT_DEFAULTS.put(COVER_WIDTH, 0);
         ELEMENT_DEFAULTS.put(COVER_HEIGHT, 0);
         ELEMENT_DEFAULTS.put(COVER_LOCKED, 1);
-        ELEMENT_DEFAULTS.put(COVER_SPACING, 24);
+        ELEMENT_DEFAULTS.put(COVER_SPACING, 10);
         ELEMENT_DEFAULTS.put(CARD_SCALE, 100);
-        ELEMENT_DEFAULTS.put(CARD_WIDTH, 0);
-        ELEMENT_DEFAULTS.put(CARD_HEIGHT, 178);
-        ELEMENT_DEFAULTS.put(CARD_LOCKED, 1);
+        ELEMENT_DEFAULTS.put(CARD_WIDTH, 369);
+        ELEMENT_DEFAULTS.put(CARD_HEIGHT, 180);
+        ELEMENT_DEFAULTS.put(CARD_LOCKED, 0);
         ELEMENT_DEFAULTS.put(CARD_RADIUS, 28);
         ELEMENT_DEFAULTS.put(CARD_SPACING, 20);
-        ELEMENT_DEFAULTS.put(CARD_BG, 0xF2181818);
+        ELEMENT_DEFAULTS.put(CARD_BG, 0);
         ELEMENT_DEFAULTS.put(BLOCK_LEFT_SHADE, 1);
         ELEMENT_DEFAULTS.put(DATE_ENABLED, 1);
-        ELEMENT_DEFAULTS.put(DATE_SIZE, 20);
-        ELEMENT_DEFAULTS.put(DATE_WEIGHT, 500);
-        ELEMENT_DEFAULTS.put(DATE_COLOR, 0xFFFFFFFF);
-        ELEMENT_DEFAULTS.put(DATE_SPACING, 6);
+        ELEMENT_DEFAULTS.put(DATE_SIZE, 22);
+        ELEMENT_DEFAULTS.put(DATE_WEIGHT, 520);
+        ELEMENT_DEFAULTS.put(DATE_COLOR, 0);
+        ELEMENT_DEFAULTS.put(DATE_SPACING, 50);
         ELEMENT_DEFAULTS.put(SIGN_ENABLED, 0);
         ELEMENT_DEFAULTS.put(SIGN_SIZE, 16);
         ELEMENT_DEFAULTS.put(SIGN_WEIGHT, 500);
-        ELEMENT_DEFAULTS.put(SIGN_COLOR, 0xFFFFFFFF);
-        ELEMENT_DEFAULTS.put(SIGN_SPACING, 6);
+        ELEMENT_DEFAULTS.put(SIGN_COLOR, 0);
+        ELEMENT_DEFAULTS.put(SIGN_SPACING, 8);
         ELEMENT_DEFAULTS.put(ENTRY_COLOR, 0xFFFFFFFF);
-        ELEMENT_DEFAULTS.put(ENTRY_BG, 0x66101010);
+        ELEMENT_DEFAULTS.put(ENTRY_BG, 0);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */

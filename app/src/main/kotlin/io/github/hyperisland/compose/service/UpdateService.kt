@@ -14,8 +14,12 @@ internal data class AppUpdate(
 )
 
 internal object UpdateService {
-    suspend fun fetchIfNewer(currentVersion: String): AppUpdate? = withContext(Dispatchers.IO) {
-        val connection = (URL(LATEST_RELEASE_API).openConnection() as HttpURLConnection).apply {
+    suspend fun fetchIfNewer(
+        currentVersion: String,
+        api: String = LATEST_RELEASE_API,
+        downloadUrl: String = MODULE_DOWNLOAD_URL,
+    ): AppUpdate? = withContext(Dispatchers.IO) {
+        val connection = (URL(api).openConnection() as HttpURLConnection).apply {
             connectTimeout = NETWORK_TIMEOUT_MILLIS
             readTimeout = NETWORK_TIMEOUT_MILLIS
             requestMethod = "GET"
@@ -35,7 +39,7 @@ internal object UpdateService {
             }
             AppUpdate(
                 version = remoteVersion,
-                releaseUrl = MODULE_DOWNLOAD_URL,
+                releaseUrl = downloadUrl,
                 changelog = release.optString("body"),
             )
         } finally {

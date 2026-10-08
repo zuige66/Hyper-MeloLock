@@ -544,7 +544,7 @@
     <string name="check_update">Check for updates on launch</string>
     <string name="check_update_summary">Automatically check for new versions when the app starts</string>
     <string name="misc">Misc</string>
-    <string name="about">Developer</string>
+    <string name="about">About</string>
     <string name="about_discussion">discuss</string>
     <string name="about_developer">Developer</string>
     <string name="about_module">module</string>
