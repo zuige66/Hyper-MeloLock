@@ -10,6 +10,7 @@ import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.database.ContentObserver;
 import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.RenderEffect;
 import android.graphics.Shader;
@@ -600,7 +601,21 @@ final class LockScreenOverlay {
             if (dateOn) signParams.topMargin = dp(elem(elements, Config.SIGN_SPACING));
             content.addView(signatureLine, signParams);
         }
-        immersiveClock = new TextClock(context);
+        // 描边加粗：圆体字体 wght 轴有上限（700/800），更粗只能 FILL_AND_STROKE 外圈补粗。
+        // 值在 create 时读定（配置变化走整场重建），每次绘制前重设 paint，防止被系统重置。
+        final float clockStrokePx = dp(clamp(elem(elements, Config.CLOCK_STROKE), 0, 16));
+        immersiveClock = new TextClock(context) {
+            @Override protected void onDraw(Canvas canvas) {
+                android.graphics.Paint paint = getPaint();
+                if (clockStrokePx > 0) {
+                    paint.setStyle(android.graphics.Paint.Style.FILL_AND_STROKE);
+                    paint.setStrokeWidth(clockStrokePx);
+                } else {
+                    paint.setStyle(android.graphics.Paint.Style.FILL);
+                }
+                super.onDraw(canvas);
+            }
+        };
         immersiveClock.setFormat12Hour("h:mm"); immersiveClock.setFormat24Hour("HH:mm"); immersiveClock.setGravity(Gravity.CENTER);
         immersiveClock.setTextSize(elem(elements, Config.CLOCK_SIZE));
         immersiveClock.setTextColor(elemOrFollow(elements, Config.CLOCK_COLOR, true));

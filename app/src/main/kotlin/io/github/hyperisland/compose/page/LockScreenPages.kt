@@ -510,6 +510,7 @@ internal fun LockAppearancePage() {
             Card {
                 DpSlider("字号", value(Config.CLOCK_SIZE), 20..120, onCommit = { update(Config.CLOCK_SIZE, it) })
                 DpSlider("粗细", value(Config.CLOCK_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.CLOCK_WEIGHT, it) })
+                DpSlider("描边加粗", value(Config.CLOCK_STROKE), 0..8, onCommit = { update(Config.CLOCK_STROKE, it) })
                 PreferenceDropdown(
                     title = "字体圆润",
                     summary = "内置开源圆体数字字体，只影响 0-9 与冒号",

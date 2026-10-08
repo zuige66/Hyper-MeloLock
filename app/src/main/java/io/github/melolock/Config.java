@@ -70,6 +70,12 @@ public final class Config {
     public static final String CLOCK_WEIGHT = "clock_weight";
     public static final String CLOCK_COLOR = "clock_color";
     public static final String CLOCK_ROUNDNESS = "clock_roundness";
+    /**
+     * 时钟描边加粗（dp，0＝关）。圆体可变字体的 wght 轴有上限（中等圆 300~700、很圆 400~800，
+     * 滑杆拉到 900 会被字体钳制），「更粗」只能靠 FILL_AND_STROKE 在字形外圈补一圈。
+     * 0 就是字体拉满的原样，往大持续变粗。
+     */
+    public static final String CLOCK_STROKE = "clock_stroke_dp";
     public static final String COVER_SCALE = "cover_scale_percent";
     public static final String COVER_WIDTH = "cover_width_dp";
     public static final String COVER_HEIGHT = "cover_height_dp";
@@ -122,6 +128,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(CLOCK_WEIGHT, 770);
         ELEMENT_DEFAULTS.put(CLOCK_COLOR, 0xFFFFFFFF);
         ELEMENT_DEFAULTS.put(CLOCK_ROUNDNESS, 0);
+        ELEMENT_DEFAULTS.put(CLOCK_STROKE, 0);
         ELEMENT_DEFAULTS.put(COVER_SCALE, 118);
         ELEMENT_DEFAULTS.put(COVER_WIDTH, 0);
         ELEMENT_DEFAULTS.put(COVER_HEIGHT, 0);
