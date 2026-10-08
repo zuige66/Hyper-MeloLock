@@ -90,6 +90,7 @@ dependencies {
     implementation("top.yukonga.miuix.kmp:miuix-icons-android:0.9.4")
     implementation("top.yukonga.miuix.kmp:miuix-blur-android:0.9.4")
     implementation("androidx.graphics:graphics-shapes:1.1.0")
+    implementation("androidx.palette:palette-ktx:1.0.0")
     implementation("io.github.d4viddf:hyperisland_kit:0.4.4")
     implementation("com.github.aptabase:aptabase-kotlin:0.0.8")
     implementation("org.luckypray:dexkit:2.2.0")

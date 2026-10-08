@@ -9,10 +9,12 @@ import android.content.pm.ApplicationInfo;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.database.ContentObserver;
+import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.graphics.RenderEffect;
 import android.graphics.Shader;
 import android.graphics.Typeface;
+import androidx.palette.graphics.Palette;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
@@ -246,6 +248,19 @@ final class LockScreenOverlay {
     private ImageView baseBlur, cover, cardArt;
     /** 顶部日期行（公历+周几+农历）与自定义签名行；两行共存、各自独立开关，均在时钟上方。 */
     private TextView dateLine, signatureLine;
+    /** 播放器卡片可回填的配色件：底色/小封面底 + 卡内三枚非控制图标。 */
+    private GradientDrawable cardBackgroundDrawable, artBackgroundDrawable;
+    private TextView iconWave, iconHeart, iconQueue;
+    /** 卡片底色配置（create 时读一次）：0＝跟随封面，其余为手选 ARGB。 */
+    private int cardBgConfig;
+    /** 「跟随封面」缓存：取色时的封面引用 → 磨砂容器色（0＝还没取过）。主线程读写。 */
+    private Bitmap autoArtwork;
+    private int autoCardBg;
+    /** 取色专用单线程（Palette 数百 ms，绝不占主线程）；daemon 防泄漏。 */
+    private final java.util.concurrent.ExecutorService paletteExecutor =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "MeloLockPalette"); t.setDaemon(true); return t;
+            });
     /** 签名正文（create 时读一次）；进 elementSignature，改签名会触发整场重建。 */
     private String signatureText = "";
     /** 日期行文本对应的天（epoch day）；跨天时重算。 */
@@ -462,6 +477,7 @@ final class LockScreenOverlay {
         if (snapshot.art != shownArtwork) {
             shownArtwork = snapshot.art;
             baseBlur.setImageBitmap(snapshot.art); cover.setImageBitmap(snapshot.art); cardArt.setImageBitmap(snapshot.art);
+            maybeExtractCardPalette(snapshot.art);   // 「跟随封面」档：换歌时后台取色回填卡片配色
         }
         title.setText(emptyAs(snapshot.title, "未知曲目")); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
         playPause.setText(snapshot.playing ? "Ⅱ" : "▶");
@@ -544,6 +560,7 @@ final class LockScreenOverlay {
         // 顶部三段（签名行/日期行/时钟）沿「距上一个元素」语义链：第一行距内容区顶，
         // 后面的行距上一行。两行都关时保持老布局（时钟距顶 = CLOCK_SPACING）。
         // 顺序＝日期行在上、签名行在日期下方（用户指定）。
+        cardBgConfig = elem(elements, Config.CARD_BG);
         signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
         boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
         boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
@@ -799,40 +816,108 @@ final class LockScreenOverlay {
 
     private LinearLayout buildPlayerCard(final Map<String, Integer> elements) {
         LinearLayout card = new LinearLayout(context); card.setOrientation(LinearLayout.VERTICAL); card.setPadding(dp(16), dp(14), dp(16), dp(10));
-        // 底色可配（默认＝历史硬编码的近黑）。浅底上白字 / 旧灰字都看不清，
-        // 所以整套文字 / 进度条配色按底色亮度联动，而不只是换背景。
-        int cardBg = elem(elements, Config.CARD_BG);
-        boolean lightCard = isLightColor(cardBg);
-        int titleColor = lightCard ? 0xFF1C1C1E : Color.WHITE;
-        int subColor = lightCard ? 0xFF6C6C70 : 0xFF9E9EA3;
-        GradientDrawable cardBackground = new GradientDrawable(); cardBackground.setColor(cardBg); cardBackground.setCornerRadius(dp(elem(elements, Config.CARD_RADIUS))); card.setBackground(cardBackground);
+        // 底色可配（默认＝历史硬编码的近黑；0＝跟随封面，先按黑建、取色回来回填）。
+        cardBackgroundDrawable = new GradientDrawable(); cardBackgroundDrawable.setColor(0xF2181818); cardBackgroundDrawable.setCornerRadius(dp(elem(elements, Config.CARD_RADIUS))); card.setBackground(cardBackgroundDrawable);
         LinearLayout header = new LinearLayout(context); header.setGravity(Gravity.CENTER_VERTICAL); card.addView(header, new LinearLayout.LayoutParams(-1, dp(64)));
         cardArt = new ImageView(context); cardArt.setScaleType(ImageView.ScaleType.CENTER_CROP); cardArt.setClipToOutline(true);
-        GradientDrawable artShape = new GradientDrawable(); artShape.setCornerRadius(dp(12)); artShape.setColor(lightCard ? 0xFF9E9EA3 : 0xFF404040); cardArt.setBackground(artShape);
+        artBackgroundDrawable = new GradientDrawable(); artBackgroundDrawable.setCornerRadius(dp(12)); artBackgroundDrawable.setColor(0xFF404040); cardArt.setBackground(artBackgroundDrawable);
         // 点击小封面 → 跳当前音乐 App（锁屏上由系统先弹解锁验证，行为同点通知）。
         cardArt.setOnClickListener(v -> launchMusicApp());
         cardArt.setContentDescription("打开音乐应用");
         header.addView(cardArt, new LinearLayout.LayoutParams(dp(64), dp(64)));
         LinearLayout labels = new LinearLayout(context); labels.setOrientation(LinearLayout.VERTICAL); labels.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, -1, 1f); labelParams.leftMargin = dp(14); header.addView(labels, labelParams);
-        title = label(titleColor, 22, true); artist = label(subColor, 15, false);
+        title = label(Color.WHITE, 22, true); artist = label(0xFF9E9EA3, 15, false);
         labels.addView(title, new LinearLayout.LayoutParams(-1, dp(34))); labels.addView(artist, new LinearLayout.LayoutParams(-1, dp(24)));
-        header.addView(icon("⌁", 30, titleColor), new LinearLayout.LayoutParams(dp(38), -1));
+        iconWave = icon("⌁", 30, Color.WHITE); header.addView(iconWave, new LinearLayout.LayoutParams(dp(38), -1));
         LinearLayout controls = new LinearLayout(context); controls.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-1, dp(54)); controlsParams.topMargin = dp(4); card.addView(controls, controlsParams);
-        controls.addView(icon("♡", 28, titleColor), controlParams());
-        previous = icon("◀", 29, titleColor); previous.setOnClickListener(v -> transport(1)); controls.addView(previous, controlParams());
-        playPause = icon("Ⅱ", 34, titleColor); playPause.setOnClickListener(v -> transport(2)); controls.addView(playPause, controlParams());
-        next = icon("▶", 29, titleColor); next.setOnClickListener(v -> transport(3)); controls.addView(next, controlParams());
-        controls.addView(icon("▣", 27, titleColor), controlParams());
+        iconHeart = icon("♡", 28, Color.WHITE); controls.addView(iconHeart, controlParams());
+        previous = icon("◀", 29, Color.WHITE); previous.setOnClickListener(v -> transport(1)); controls.addView(previous, controlParams());
+        playPause = icon("Ⅱ", 34, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); controls.addView(playPause, controlParams());
+        next = icon("▶", 29, Color.WHITE); next.setOnClickListener(v -> transport(3)); controls.addView(next, controlParams());
+        iconQueue = icon("▣", 27, Color.WHITE); controls.addView(iconQueue, controlParams());
         LinearLayout timeline = new LinearLayout(context); timeline.setGravity(Gravity.CENTER_VERTICAL); card.addView(timeline, new LinearLayout.LayoutParams(-1, dp(28)));
-        elapsed = label(subColor, 14, false); elapsed.setGravity(Gravity.CENTER); timeline.addView(elapsed, new LinearLayout.LayoutParams(dp(48), -1));
+        elapsed = label(0xFF9E9EA3, 14, false); elapsed.setGravity(Gravity.CENTER); timeline.addView(elapsed, new LinearLayout.LayoutParams(dp(48), -1));
         progress = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal); progress.setMax(1000);
+        progress.setProgressTintList(ColorStateList.valueOf(0xFFD7D7DA)); progress.setProgressBackgroundTintList(ColorStateList.valueOf(0xFF444449));
+        timeline.addView(progress, new LinearLayout.LayoutParams(0, dp(6), 1f));
+        duration = label(0xFF9E9EA3, 14, false); duration.setGravity(Gravity.CENTER); timeline.addView(duration, new LinearLayout.LayoutParams(dp(48), -1));
+        applyCardColors(cardBgConfig);
+        return card;
+    }
+
+    /**
+     * 把整套卡片配色（底色 + 文字 + 图标 + 进度条）按底色亮度联动铺上去。
+     * 手选档位在 build 时调一次；「跟随封面」档在取色完成后由主线程再调（换歌时动态更新）。
+     */
+    private void applyCardColors(int cardBg) {
+        if (cardBackgroundDrawable == null || title == null) return;
+        boolean lightCard = isLightColor(cardBg);
+        int titleColor = lightCard ? 0xFF1C1C1E : Color.WHITE;
+        int subColor = lightCard ? 0xFF6C6C70 : 0xFF9E9EA3;
+        cardBackgroundDrawable.setColor(cardBg);
+        artBackgroundDrawable.setColor(lightCard ? 0xFF9E9EA3 : 0xFF404040);
+        title.setTextColor(titleColor); artist.setTextColor(subColor);
+        elapsed.setTextColor(subColor); duration.setTextColor(subColor);
+        iconWave.setTextColor(titleColor); iconHeart.setTextColor(titleColor); iconQueue.setTextColor(titleColor);
+        previous.setTextColor(titleColor); playPause.setTextColor(titleColor); next.setTextColor(titleColor);
         progress.setProgressTintList(ColorStateList.valueOf(lightCard ? 0xFF3C3C40 : 0xFFD7D7DA));
         progress.setProgressBackgroundTintList(ColorStateList.valueOf(lightCard ? 0xFF9E9EA3 : 0xFF444449));
-        timeline.addView(progress, new LinearLayout.LayoutParams(0, dp(6), 1f));
-        duration = label(subColor, 14, false); duration.setGravity(Gravity.CENTER); timeline.addView(duration, new LinearLayout.LayoutParams(dp(48), -1));
-        return card;
+    }
+
+    /** 「跟随封面」模式：封面真的换了才在后台取色（Palette 要几百 ms，绝不占主线程）；结果按封面引用缓存。 */
+    private void maybeExtractCardPalette(final Bitmap art) {
+        if (cardBgConfig != 0 || art == null || art.isRecycled()) return;
+        if (art == autoArtwork) {
+            if (autoCardBg != 0) applyCardColors(autoCardBg);   // 缓存命中（场景重建后同曲）直接同步回填
+            return;
+        }
+        paletteExecutor.execute(() -> {
+            int container;
+            try {
+                Palette palette = Palette.from(art).maximumColorCount(24).resizeBitmapSize(112).generate();
+                Palette.Swatch swatch = pickSwatch(palette);
+                container = containerFromSwatch(swatch);
+            } catch (Throwable error) {
+                Log.w(TAG, "Card palette extract failed", error);
+                container = 0xF2181818;   // 失败关闭：退回历史黑
+            }
+            final int bg = container;
+            main.post(() -> {
+                autoArtwork = art; autoCardBg = bg;
+                if (cardBgConfig == 0) {
+                    applyCardColors(bg);
+                    Log.i(TAG, "Card palette applied bg=" + Integer.toHexString(bg));
+                }
+            });
+        });
+    }
+
+    /** 取色优先级：鲜艳 → 深鲜艳 → 浅鲜艳 → 柔和 → 深柔和 → 占比最高，尽量拿到「像专辑」的那个色。 */
+    private static Palette.Swatch pickSwatch(Palette palette) {
+        if (palette == null) return null;
+        Palette.Swatch s = palette.getVibrantSwatch();
+        if (s == null) s = palette.getDarkVibrantSwatch();
+        if (s == null) s = palette.getLightVibrantSwatch();
+        if (s == null) s = palette.getMutedSwatch();
+        if (s == null) s = palette.getDarkMutedSwatch();
+        if (s == null) s = palette.getDominantSwatch();
+        return s;
+    }
+
+    /**
+     * 主色 → 低饱和磨砂容器色（保留色相）：主色偏亮做浅容器（V 0.82 / S≤0.25，配深字），
+     * 偏暗做深容器（V 0.24 / S≤0.42，配白字）；近乎无彩的封面回历史黑。alpha 与手选档一致 0xF2。
+     */
+    private static int containerFromSwatch(Palette.Swatch swatch) {
+        if (swatch == null) return 0xF2181818;
+        float[] hsv = new float[3];
+        Color.colorToHSV(swatch.getRgb(), hsv);
+        if (hsv[1] < 0.12f) return 0xF2181818;
+        if (hsv[2] > 0.6f) { hsv[1] = Math.min(hsv[1] * 0.45f, 0.25f); hsv[2] = 0.82f; }
+        else { hsv[1] = Math.min(hsv[1] * 0.8f, 0.42f); hsv[2] = 0.24f; }
+        return Color.HSVToColor(0xF2, hsv);
     }
 
     /** sRGB 亮度 + alpha 折算：底色叠在壁纸上之后是否偏亮（决定卡片内文字用深还是浅）。 */

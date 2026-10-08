@@ -1076,8 +1076,10 @@ private val PALETTE = intArrayOf(0xFF111827.toInt(), 0xFF253B80.toInt(), 0xFF5B2
  * 播放器卡片底色档位（M3 风格 tonal 配色）。值的顺序与标签一一对应。
  * 与覆盖层 `isLightColor` 的亮度联动判定相配：浅档必须足够亮（自动配深字），
  * 深档足够暗（自动配白字）。「深色」＝历史硬编码黑，老配置外观不变。
+ * 「跟随封面」值 0＝覆盖层从专辑封面取主色调成低饱和容器色（异步，换歌时自动更新）。
  */
 private val CARD_BG_VALUES = intArrayOf(
+    0, //                跟随封面：动态取色
     0xF2181818.toInt(), // 深色：原硬编码近黑
     0xF21E2A3C.toInt(), // 墨蓝：M3 深色容器调
     0xF2C7C7CC.toInt(), // 浅色：中性浅灰
@@ -1085,7 +1087,7 @@ private val CARD_BG_VALUES = intArrayOf(
     0xF2D8CEF4.toInt(), // 淡紫：M3 secondaryContainer 系
     0xF2F4CEDA.toInt(), // 淡粉：M3 tertiaryContainer 系
 )
-private val CARD_BG_LABELS = listOf("深色", "墨蓝", "浅色", "蓝灰", "淡紫", "淡粉")
+private val CARD_BG_LABELS = listOf("跟随封面", "深色", "墨蓝", "浅色", "蓝灰", "淡紫", "淡粉")
 
 /**
  * 签名内容输入框。**三重保存**：① 输入停顿 800ms 自动写盘（LaunchedEffect 防抖，text
