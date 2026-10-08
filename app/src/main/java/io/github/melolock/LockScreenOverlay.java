@@ -707,30 +707,64 @@ final class LockScreenOverlay {
 
     private LinearLayout buildPlayerCard(final Map<String, Integer> elements) {
         LinearLayout card = new LinearLayout(context); card.setOrientation(LinearLayout.VERTICAL); card.setPadding(dp(16), dp(14), dp(16), dp(10));
-        GradientDrawable cardBackground = new GradientDrawable(); cardBackground.setColor(0xF2181818); cardBackground.setCornerRadius(dp(elem(elements, Config.CARD_RADIUS))); card.setBackground(cardBackground);
+        // 底色可配（默认＝历史硬编码的近黑）。浅底上白字 / 旧灰字都看不清，
+        // 所以整套文字 / 进度条配色按底色亮度联动，而不只是换背景。
+        int cardBg = elem(elements, Config.CARD_BG);
+        boolean lightCard = isLightColor(cardBg);
+        int titleColor = lightCard ? 0xFF1C1C1E : Color.WHITE;
+        int subColor = lightCard ? 0xFF6C6C70 : 0xFF9E9EA3;
+        GradientDrawable cardBackground = new GradientDrawable(); cardBackground.setColor(cardBg); cardBackground.setCornerRadius(dp(elem(elements, Config.CARD_RADIUS))); card.setBackground(cardBackground);
         LinearLayout header = new LinearLayout(context); header.setGravity(Gravity.CENTER_VERTICAL); card.addView(header, new LinearLayout.LayoutParams(-1, dp(64)));
         cardArt = new ImageView(context); cardArt.setScaleType(ImageView.ScaleType.CENTER_CROP); cardArt.setClipToOutline(true);
-        GradientDrawable artShape = new GradientDrawable(); artShape.setCornerRadius(dp(12)); artShape.setColor(0xFF404040); cardArt.setBackground(artShape);
+        GradientDrawable artShape = new GradientDrawable(); artShape.setCornerRadius(dp(12)); artShape.setColor(lightCard ? 0xFF9E9EA3 : 0xFF404040); cardArt.setBackground(artShape);
+        // 点击小封面 → 跳当前音乐 App（锁屏上由系统先弹解锁验证，行为同点通知）。
+        cardArt.setOnClickListener(v -> launchMusicApp());
+        cardArt.setContentDescription("打开音乐应用");
         header.addView(cardArt, new LinearLayout.LayoutParams(dp(64), dp(64)));
         LinearLayout labels = new LinearLayout(context); labels.setOrientation(LinearLayout.VERTICAL); labels.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, -1, 1f); labelParams.leftMargin = dp(14); header.addView(labels, labelParams);
-        title = label(Color.WHITE, 22, true); artist = label(0xFF9E9EA3, 15, false);
+        title = label(titleColor, 22, true); artist = label(subColor, 15, false);
         labels.addView(title, new LinearLayout.LayoutParams(-1, dp(34))); labels.addView(artist, new LinearLayout.LayoutParams(-1, dp(24)));
-        header.addView(icon("⌁", 30), new LinearLayout.LayoutParams(dp(38), -1));
+        header.addView(icon("⌁", 30, titleColor), new LinearLayout.LayoutParams(dp(38), -1));
         LinearLayout controls = new LinearLayout(context); controls.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-1, dp(54)); controlsParams.topMargin = dp(4); card.addView(controls, controlsParams);
-        controls.addView(icon("♡", 28), controlParams());
-        previous = icon("◀", 29); previous.setOnClickListener(v -> transport(1)); controls.addView(previous, controlParams());
-        playPause = icon("Ⅱ", 34); playPause.setOnClickListener(v -> transport(2)); controls.addView(playPause, controlParams());
-        next = icon("▶", 29); next.setOnClickListener(v -> transport(3)); controls.addView(next, controlParams());
-        controls.addView(icon("▣", 27), controlParams());
+        controls.addView(icon("♡", 28, titleColor), controlParams());
+        previous = icon("◀", 29, titleColor); previous.setOnClickListener(v -> transport(1)); controls.addView(previous, controlParams());
+        playPause = icon("Ⅱ", 34, titleColor); playPause.setOnClickListener(v -> transport(2)); controls.addView(playPause, controlParams());
+        next = icon("▶", 29, titleColor); next.setOnClickListener(v -> transport(3)); controls.addView(next, controlParams());
+        controls.addView(icon("▣", 27, titleColor), controlParams());
         LinearLayout timeline = new LinearLayout(context); timeline.setGravity(Gravity.CENTER_VERTICAL); card.addView(timeline, new LinearLayout.LayoutParams(-1, dp(28)));
-        elapsed = label(0xFF9E9EA3, 14, false); elapsed.setGravity(Gravity.CENTER); timeline.addView(elapsed, new LinearLayout.LayoutParams(dp(48), -1));
+        elapsed = label(subColor, 14, false); elapsed.setGravity(Gravity.CENTER); timeline.addView(elapsed, new LinearLayout.LayoutParams(dp(48), -1));
         progress = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal); progress.setMax(1000);
-        progress.setProgressTintList(ColorStateList.valueOf(0xFFD7D7DA)); progress.setProgressBackgroundTintList(ColorStateList.valueOf(0xFF444449));
+        progress.setProgressTintList(ColorStateList.valueOf(lightCard ? 0xFF3C3C40 : 0xFFD7D7DA));
+        progress.setProgressBackgroundTintList(ColorStateList.valueOf(lightCard ? 0xFF9E9EA3 : 0xFF444449));
         timeline.addView(progress, new LinearLayout.LayoutParams(0, dp(6), 1f));
-        duration = label(0xFF9E9EA3, 14, false); duration.setGravity(Gravity.CENTER); timeline.addView(duration, new LinearLayout.LayoutParams(dp(48), -1));
+        duration = label(subColor, 14, false); duration.setGravity(Gravity.CENTER); timeline.addView(duration, new LinearLayout.LayoutParams(dp(48), -1));
         return card;
+    }
+
+    /** sRGB 亮度 + alpha 折算：底色叠在壁纸上之后是否偏亮（决定卡片内文字用深还是浅）。 */
+    private static boolean isLightColor(int color) {
+        float alpha = Color.alpha(color) / 255f;
+        if (alpha < 0.5f) return false;
+        float lum = (0.299f * Color.red(color) + 0.587f * Color.green(color) + 0.114f * Color.blue(color)) / 255f;
+        return lum * alpha > 0.5f;
+    }
+
+    /** 点击卡片小封面：跳当前媒体会话所属的音乐 App；没有会话或包名不可启动就静默忽略。 */
+    private void launchMusicApp() {
+        try {
+            MediaSource.Snapshot snapshot = shown;
+            String pkg = snapshot == null || snapshot.controller == null ? null : snapshot.controller.getPackageName();
+            if (pkg == null) { Log.i(TAG, "Card tap: no media session, skip launch"); return; }
+            Intent intent = context.getPackageManager().getLaunchIntentForPackage(pkg);
+            if (intent == null) { Log.i(TAG, "Card tap: no launch intent for " + pkg); return; }
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            context.startActivity(intent);
+            Log.i(TAG, "Card tap: launching " + pkg);
+        } catch (Throwable error) {
+            Log.w(TAG, "Card tap launch failed", error);
+        }
     }
 
     private void showMusic() {
@@ -1756,7 +1790,7 @@ final class LockScreenOverlay {
         TextView text = new TextView(context); text.setTextColor(color); text.setTextSize(sizeSp); text.setSingleLine(true); text.setEllipsize(TextUtils.TruncateAt.END);
         if (bold) text.setTypeface(android.graphics.Typeface.DEFAULT_BOLD); return text;
     }
-    private TextView icon(String value, int sizeSp) { TextView icon = new TextView(context); icon.setText(value); icon.setTextColor(Color.WHITE); icon.setTextSize(sizeSp); icon.setGravity(Gravity.CENTER); icon.setClickable(true); return icon; }
+    private TextView icon(String value, int sizeSp, int color) { TextView icon = new TextView(context); icon.setText(value); icon.setTextColor(color); icon.setTextSize(sizeSp); icon.setGravity(Gravity.CENTER); icon.setClickable(true); return icon; }
     private LinearLayout.LayoutParams controlParams() { return new LinearLayout.LayoutParams(0, -1, 1f); }
     private static String emptyAs(String value, String fallback) { return value == null || value.isEmpty() ? fallback : value; }
     private static String time(long value) { long seconds = Math.max(0, value / 1000); return String.format(java.util.Locale.US, "%d:%02d", seconds / 60, seconds % 60); }

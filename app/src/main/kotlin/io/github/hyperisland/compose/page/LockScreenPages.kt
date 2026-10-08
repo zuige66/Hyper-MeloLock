@@ -528,6 +528,14 @@ internal fun LockAppearancePage() {
                 }
                 DpSlider("圆角", value(Config.CARD_RADIUS), 0..48, onCommit = { update(Config.CARD_RADIUS, it) })
                 DpSlider("间距", value(Config.CARD_SPACING), 0..160, onCommit = { update(Config.CARD_SPACING, it) })
+                PreferenceDropdown(
+                    title = "底色",
+                    summary = "播放器卡片的背景色；浅色档卡片内文字自动换深色",
+                    icon = null,
+                    items = CARD_BG_LABELS,
+                    selectedIndex = if (value(Config.CARD_BG) == CARD_BG_LIGHT) 1 else 0,
+                    onSelectedIndexChange = { update(Config.CARD_BG, if (it == 1) CARD_BG_LIGHT else CARD_BG_DARK) },
+                )
                 PreferenceSwitch(
                     title = "锁屏禁止左下拉",
                     summary = "沉浸场景显示时吃掉左侧下拉手势，不再和通知栏抢层级。注意：左半屏起始的上滑解锁也会失效（右半屏、指纹、电源键正常）",
@@ -1007,6 +1015,11 @@ private const val APP_LIST_PERMISSION = "com.android.permission.GET_INSTALLED_AP
 private const val APP_LOG_TAG = "MeloLock[App]"
 
 private val PALETTE = intArrayOf(0xFF111827.toInt(), 0xFF253B80.toInt(), 0xFF5B2C83.toInt(), 0xFF14532D.toInt(), 0xFF000000.toInt())
+
+/** 播放器卡片底色两档；与覆盖层 isLightColor 的亮度联动判定相配（浅档必须足够亮，深档＝历史硬编码黑）。 */
+private const val CARD_BG_DARK = 0xF2181818.toInt()
+private const val CARD_BG_LIGHT = 0xF2C7C7CC.toInt()
+private val CARD_BG_LABELS = listOf("深色", "浅色")
 
 /** 时间字体的圆润档位；0 用系统字体，1 / 2 用内置的开源圆体数字字体。 */
 private val ROUNDNESS_LABELS = listOf("直角", "中等圆", "很圆")

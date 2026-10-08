@@ -81,6 +81,11 @@ public final class Config {
     public static final String CARD_RADIUS = "card_radius_dp";
     public static final String CARD_SPACING = "card_spacing_dp";
     /**
+     * 播放器卡片底色（ARGB int）。默认＝历史硬编码的近黑 0xF2181818，保持老配置外观不变。
+     * 覆盖层按底色亮度自动联动卡片内文字 / 进度条配色（浅底配深字）。
+     */
+    public static final String CARD_BG = "card_bg";
+    /**
      * 沉浸场景显示期间是否吃掉左侧下拉手势（左边通知栏）。
      *
      * 不是几何参数，借用 /elements 的 key/value 通道（SystemUI 侧一次查询就能读到）。
@@ -107,6 +112,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(CARD_LOCKED, 1);
         ELEMENT_DEFAULTS.put(CARD_RADIUS, 28);
         ELEMENT_DEFAULTS.put(CARD_SPACING, 20);
+        ELEMENT_DEFAULTS.put(CARD_BG, 0xF2181818);
         ELEMENT_DEFAULTS.put(BLOCK_LEFT_SHADE, 1);
     }
 
