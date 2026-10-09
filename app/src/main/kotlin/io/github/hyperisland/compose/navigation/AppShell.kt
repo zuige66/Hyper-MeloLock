@@ -375,7 +375,10 @@ internal fun HyperIslandApp(prefs: FlutterPrefsRepository) {
                                 else -> LockAboutPage(
                                     isActive = pagerState.currentPage == 3,
                                     onOpenDeveloper = {
+                                        // 一级 detail 层由 detailShown 控制可见性（visibleDetail 只决定
+                                        // 内容）；这套层迁入后没有别的入口，第一次由「开发者」启用。
                                         visibleDetail = SettingsDetail.Developer
+                                        detailShown = true
                                     },
                                 )
                             }

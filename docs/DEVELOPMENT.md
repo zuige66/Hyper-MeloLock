@@ -70,6 +70,7 @@
     - **外链统一确认弹窗**：首页三条 `LinkAction`、开发者页 GitHub / 更新日志 / 开发者卡片，点击都先弹 Miuix `WindowDialog`（`rememberBrowserLauncher`，每个调用点各自持有一个实例）确认后才 `ACTION_VIEW` 交给默认浏览器。「使用教程」已填博客文章 `blog.zuiges.com/2026/10/09/hyper-melolock-lockscreen-cover`。
     - **音乐应用勾选置顶**：列表排序加 `compareByDescending { it in selection }`（组内按名称），`remember` key 加 `selection`，勾选变化即时重排。
   - 2026-10-09 第三轮：**开发者卡片改为进 detail 页**（与「外观」等同一套 `SettingsDetail` 二级页机制）：新增 `SettingsDetail.Developer` + `page/settings/DeveloperPage.kt`（`DetailPage` 壳，GitHub（`github.com/zuige66`）与 Blog（`blog.zuiges.com`）两项），`LockAboutPage` 增加 `onOpenDeveloper` 参数，开发者卡片整卡点击不再直达 GitHub。外链确认弹窗从 `LockScreenPages.kt` 提升为共享组件 `component/BrowserLinkDialog.kt` 的 `rememberBrowserLauncher()`（`internal`），首页与开发者页共用，没有第二份实现；`LockScreenPages.kt` 里原来的 private 版本与随之无用的 `openUrl` 扩展、`GITHUB_URL` 常量一并删除。
+    - 第一版翻车记录：只设 `visibleDetail` 没设 `detailShown = true`，卡片点了没反应。根因是这套一级 detail 层（`PredictiveNavigationLayer visible = detailShown` + `when(visibleDetail)`）从 HyperIsland 迁入后**没有任何打开入口**（上游靠已删的原版设置页），`detailShown` 在 AppShell 里从未被置 true——「开发者」是它的第一个使用者。首页两张数据卡的「展开」其实是 `pagerState.animateScrollToPage` 切根页，不是 detail 层。
 
 四页共用的卡片来自 HyperIsland 原版实现：`OverviewPage.kt` 里原先私有的 `StatusGrid` / `StatusCard` / `StatCard` / `InfoCard` / 告警卡已提升为 `internal` 的 `OverviewStatusGrid` / `OverviewStatusCard` / `OverviewStatCard` / `OverviewInfoCard` / `OverviewAlertCard`，只把标题与数值参数化，视觉与交互代码未改动。HyperIsland 自己的首页（`OverviewPage`）改为调用同一批组件，因此不存在第二份样式实现。音乐应用页的行样式沿用 HyperIsland `AppsPage` 的 `Card` + `BasicComponent` 组合，图标复用 `InstalledAppsRepository` 的缓存与解码逻辑。
 
