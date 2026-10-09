@@ -8,7 +8,6 @@ import android.graphics.Rect;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
-import android.os.Build;
 import android.util.Log;
 import android.view.View;
 import android.view.ViewGroup;
@@ -69,7 +68,7 @@ public final class ShortcutAnimBackdrop implements IXposedHookLoadPackage {
 
     @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
         if (!"com.android.systemui".equals(param.packageName)) return;
-        if (!Config.isSupportedFingerprint(Build.FINGERPRINT)) return;
+        // 机型门禁已撤（2026-10-09 多机型测试）：失败关闭兜底。
         if (armed) return;
         armed = true;
         Log.i(TAG, PRE + "rev=" + REV);

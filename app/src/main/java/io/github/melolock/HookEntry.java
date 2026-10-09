@@ -1,6 +1,5 @@
 package io.github.melolock;
 
-import android.os.Build;
 import android.util.Log;
 import android.view.View;
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -27,9 +26,10 @@ public final class HookEntry implements IXposedHookLoadPackage {
      */
     public static volatile Object keyguardMediator;
     @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
-        if (!"com.android.systemui".equals(param.packageName) ||
-                !Config.isSupportedFingerprint(Build.FINGERPRINT)) return;
-        Log.i(TAG, "HookEntry rev=HE3 (multi-device OS3 gate)");
+        // 机型门禁已撤（2026-10-09，zuige 正在多机型测试）：任何 SystemUI 都尝试 hook，
+        // 目标类找不到自然失败关闭、恢复原生锁屏。非澎湃 3 上的表现靠测试反馈收集。
+        if (!"com.android.systemui".equals(param.packageName)) return;
+        Log.i(TAG, "HookEntry rev=HE4 (gate removed for multi-device testing)");
         try {
             Class<?> root = XposedHelpers.findClass(
                     "com.android.keyguard.widget.HyperOSKeyguardRootView", param.classLoader);

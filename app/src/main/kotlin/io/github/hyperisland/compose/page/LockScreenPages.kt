@@ -136,7 +136,6 @@ internal fun LockHomePage(
     var enabled by remember { mutableStateOf(Config.enabled(context)) }
     var enabledAppCount by remember { mutableIntStateOf(Config.enabledAppCount(context)) }
     var cornerRadiusDp by remember { mutableIntStateOf(Config.cornerRadiusDp(context)) }
-    var supported by remember { mutableStateOf(Config.deviceSupported()) }
     var verified by remember { mutableStateOf(Config.deviceVerified()) }
     val scope = rememberCoroutineScope()
     var showRestartDialog by remember { mutableStateOf(false) }
@@ -162,7 +161,6 @@ internal fun LockHomePage(
         enabled = Config.enabled(context)
         enabledAppCount = Config.enabledAppCount(context)
         cornerRadiusDp = Config.cornerRadiusDp(context)
-        supported = Config.deviceSupported()
         verified = Config.deviceVerified()
         val loaded = withContext(Dispatchers.IO) {
             val version = SystemPropertyReader.get("ro.build.version.incremental")
@@ -240,15 +238,8 @@ internal fun LockHomePage(
                 statusClickableWhenInactive = true,
             )
         }
-        if (!supported) {
-            item {
-                OverviewAlertCard(
-                    title = "当前系统未适配",
-                    message = "锁屏覆盖层只在澎湃 OS 3 上启用；当前系统不是澎湃 3，模块不会生效。",
-                )
-            }
-        } else if (!verified) {
-            // 澎湃 3 全系放行（2026-10-09 多机型适配），但只有验证过的机型给全绿体验。
+        if (!verified) {
+            // 机型门禁已撤（多机型测试中）：任何设备都尝试启用，只有验证过的基准机型不提示。
             item {
                 OverviewAlertCard(
                     title = "当前机型未验证",

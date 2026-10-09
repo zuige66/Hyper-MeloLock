@@ -51,10 +51,6 @@ public final class WallpaperCover implements IXposedHookLoadPackage {
         if (!Config.WALLPAPER_PACKAGE.equals(param.packageName)) return;
         Log.i(TAG, "WallpaperCover rev=" + REV + " loaded in " + param.packageName
                 + " fingerprint=" + Build.FINGERPRINT);
-        if (!Config.isSupportedFingerprint(Build.FINGERPRINT)) {
-            Log.i(TAG, "WCV fingerprint mismatch; disabled");
-            return;
-        }
         try { armRestartChannel(param.classLoader); }
         catch (Throwable error) { Log.w(TAG, "WCV restart channel unavailable (仅该功能放弃)", error); }
         try { hookRenderer(param.classLoader); }

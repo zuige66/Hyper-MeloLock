@@ -5,7 +5,6 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Bitmap;
-import android.os.Build;
 import android.util.Log;
 import java.io.ByteArrayOutputStream;
 import java.util.concurrent.ExecutorService;
@@ -48,10 +47,6 @@ public final class WallpaperCoverPush {
         appContext = context.getApplicationContext() != null
                 ? context.getApplicationContext() : context;
         Log.i(TAG, "WallpaperCoverPush rev=" + REV + " installed");
-        if (!Config.isSupportedFingerprint(Build.FINGERPRINT)) {
-            Log.i(TAG, "WCV push fingerprint mismatch; disabled");
-            return;
-        }
         try {
             appContext.registerReceiver(new BroadcastReceiver() {
                 @Override public void onReceive(Context c, Intent intent) {

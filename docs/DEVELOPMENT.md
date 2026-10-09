@@ -733,11 +733,12 @@ adb -s 1b3a7d8 reboot
 
 **第三方字体许可**：`app/src/main/assets/fonts/` 下的 `clock_round_1.ttf`（Quicksand）与 `clock_round_2.ttf`（Baloo 2）来自 Google Fonts，按 SIL Open Font License 1.1 授权，可随应用一起分发。OFL 要求分发时附带许可证全文并保留字体名称，**对外发布前需要把 OFL-1.1 全文一并放进仓库并在应用内可查看**（当前尚未加入，只在文档里记录）。
 
-### 多机型适配：澎湃 3 全系放行（2026-10-09）
+### 多机型测试：机型门禁全撤（2026-10-09，两轮演进）
 
-- **门禁从精确指纹放宽为 `指纹含 OS3.0.`**（`Config.isSupportedFingerprint`），四个入口统一：`HookEntry`（rev=HE3）、`ShortcutAnimBackdrop`、`WallpaperCover`、`WallpaperCoverPush`。动机：K60 Pro（corot，OS3.0.315.0.WPCCNXM）等机型用户想用，zuige 判断澎湃 3 各机型 SystemUI 大同小异。
-- **保底仍是失败关闭**：目标类（`HyperOSKeyguardRootView` 等）找不到就不 hook、恢复原生锁屏。但「类在、结构不同」的机型可能显示异常——App 端首页新增三态告警：非澎湃 3 →「当前系统未适配」；澎湃 3 但非已验证指纹（`Config.deviceVerified()`，仍是 gauguinpro 精确匹配）→「当前机型未验证…请在 GitHub 反馈」。**新机型问题要靠用户反馈定位**，`Config.FINGERPRINT` 常量保留作为已验证基准。
-- 接到未验证机型反馈时：先看 logcat 里 `rev=` / `root attached` / hook 异常栈，确认是「没注入」「类名变了」还是「结构差异」，再决定加指纹特例还是修 hook。
+- **第一轮**：精确指纹 → 放行含 `OS3.0.`（`Config.isSupportedFingerprint`，rev=HE3）。
+- **第二轮（当前）**：zuige 主动找不同机型测试，**机型门禁全撤**（rev=HE4）——四个入口（`HookEntry` / `ShortcutAnimBackdrop` / `WallpaperCover` / `WallpaperCoverPush`）的指纹判断全部删除，任何设备的 SystemUI/壁纸进程都尝试 hook；`Config.deviceSupported()` 删除，首页「当前系统未适配」卡随之删除。
+- **仍保留的**：① 失败关闭——目标类找不到就不 hook、恢复原生锁屏；② `Config.FINGERPRINT` 常量与 `deviceVerified()`——唯一用途是首页区分「完整验证过 / 未验证」，未验证设备显示「当前机型未验证…请在 GitHub 反馈」告警；③ `HookEntry` 的 SystemUI 包名过滤（那是进程路由，不是机型门禁）。
+- 测试反馈定位顺序：logcat 找 `rev=HE4`（没注入 → 查管理器勾选）→ `root attached`（没有 → 类名变了）→ 异常栈（结构差异）。
 
 ### 更新下载双源回退（2026-10-09）
 
