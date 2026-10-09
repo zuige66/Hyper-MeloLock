@@ -80,6 +80,7 @@ import io.github.hyperisland.compose.component.SettingsAction
 import io.github.hyperisland.compose.component.SettingsActionWithArrow
 import io.github.hyperisland.compose.component.UpdateDialogHost
 import io.github.hyperisland.compose.component.UpdateDialogState
+import io.github.hyperisland.compose.component.rememberBrowserLauncher
 import io.github.hyperisland.compose.data.InstalledApp
 import io.github.hyperisland.compose.data.InstalledAppsRepository
 import io.github.hyperisland.compose.page.home.OverviewAlertCard
@@ -96,8 +97,6 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Icon
@@ -106,7 +105,6 @@ import top.yukonga.miuix.kmp.basic.SearchBar
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
 import top.yukonga.miuix.kmp.icon.extended.Community
@@ -116,7 +114,6 @@ import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.icon.extended.Update
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * 本模块的四个根页面。
@@ -691,7 +688,7 @@ internal fun LockAppearancePage() {
  * 本模块还没有的东西（讨论 / 引用 / 隐私政策）一律**灰度不可点**；检查更新位于「关于模块」区块。
  */
 @Composable
-internal fun LockAboutPage(isActive: Boolean) {
+internal fun LockAboutPage(isActive: Boolean, onOpenDeveloper: () -> Unit) {
     val context = LocalContext.current
     // 开发者页外链（GitHub / 更新日志）统一走确认弹窗，与首页 LinkAction 行为一致。
     val openBrowserLink = rememberBrowserLauncher()
@@ -804,7 +801,7 @@ internal fun LockAboutPage(isActive: Boolean) {
                     // hero 是叠在上层的（不是列表项），这里留出等高的空位让它可见。
                     Spacer(Modifier.height(heroHeight + ABOUT_DEVELOPER_TOP_GAP))
                     SectionTitle(stringResource(R.string.about_developer))
-                    DeveloperCard()
+                    DeveloperCard(onClick = onOpenDeveloper)
                 }
             }
             item {
@@ -969,13 +966,12 @@ internal fun LockAboutPage(isActive: Boolean) {
     }
 }
 
-/** 开发者卡片：头像、名称、GitHub 号，整卡可点直达 GitHub（经确认弹窗）。 */
+/** 开发者卡片：头像、名称、GitHub 号；整卡点击进「开发者」detail 页（GitHub / Blog 两项）。 */
 @Composable
-private fun DeveloperCard() {
-    val openLink = rememberBrowserLauncher()
+private fun DeveloperCard(onClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = { openLink(GITHUB_URL) },
+        onClick = onClick,
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
@@ -1030,53 +1026,6 @@ private fun LinkAction(title: String, summary: String, url: String) {
         enabled = filled,
         onClick = { if (filled) openLink(url) },
     )
-}
-
-/**
- * 外链统一确认：返回「请求打开 URL」的回调，点击先弹确认框，用户确认才交给默认浏览器。
- * 每个调用点各自持有一个 launcher（内部就是一段待打开 URL + 一个 Miuix 对话框），互不干扰。
- */
-@Composable
-private fun rememberBrowserLauncher(): (String) -> Unit {
-    val context = LocalContext.current
-    var pendingUrl by remember { mutableStateOf<String?>(null) }
-    pendingUrl?.let { url ->
-        WindowDialog(
-            show = true,
-            title = "跳转浏览器",
-            onDismissRequest = { pendingUrl = null },
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text("即将在默认浏览器中打开以下链接：")
-                Text(
-                    text = url,
-                    fontSize = MiuixTheme.textStyles.footnote1.fontSize,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    TextButton(
-                        text = "取消",
-                        onClick = { pendingUrl = null },
-                        modifier = Modifier.weight(1f),
-                    )
-                    Button(
-                        onClick = {
-                            pendingUrl = null
-                            context.openUrl(url)
-                        },
-                        modifier = Modifier.weight(1f),
-                        colors = ButtonDefaults.buttonColorsPrimary(),
-                    ) {
-                        Text("打开")
-                    }
-                }
-            }
-        }
-    }
-    return { url: String -> pendingUrl = url }
 }
 
 @Composable
@@ -1249,15 +1198,9 @@ private fun loadReportedFramework(context: Context): FrameworkDetails? {
     )
 }
 
-private fun Context.openUrl(url: String) {
-    runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) }
-}
-
 // 留空的链接（捐赠 / 使用教程 / 相关资源）在页面上显示「待填写」并置灰。
 private const val DEVELOPER_NAME = "zuige"
 private const val DEVELOPER_HANDLE = "zuige66"
-/** 开发者主页：开发者卡片整卡点击的去处。 */
-private const val GITHUB_URL = "https://github.com/zuige66"
 private const val REPO_URL = "https://github.com/zuige66/Hyper-MeloLock"
 private const val RELEASES_URL = "$REPO_URL/releases"
 /** 「检查更新」请求的 GitHub Releases API（本仓库）。 */

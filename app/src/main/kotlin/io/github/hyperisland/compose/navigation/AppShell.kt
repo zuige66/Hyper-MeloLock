@@ -61,6 +61,7 @@ import io.github.hyperisland.compose.page.LockAboutPage
 import io.github.hyperisland.compose.page.LockAppearancePage
 import io.github.hyperisland.compose.page.LockHomePage
 import io.github.hyperisland.compose.page.LockMusicAppsPage
+import io.github.hyperisland.compose.page.settings.DeveloperPage
 import io.github.hyperisland.compose.page.apps.NotificationChannelsPage
 import io.github.hyperisland.compose.page.apps.channel.ChannelEditorPage
 import io.github.hyperisland.compose.page.apps.channel.BatchChannelSettingsPage
@@ -371,7 +372,12 @@ internal fun HyperIslandApp(prefs: FlutterPrefsRepository) {
                                 1 -> LockMusicAppsPage()
                                 2 -> LockAppearancePage()
                                 // hero 的渐变背景是逐帧动画，只在停留此页时跑，否则白白耗电。
-                                else -> LockAboutPage(isActive = pagerState.currentPage == 3)
+                                else -> LockAboutPage(
+                                    isActive = pagerState.currentPage == 3,
+                                    onOpenDeveloper = {
+                                        visibleDetail = SettingsDetail.Developer
+                                    },
+                                )
                             }
                             }
                         }
@@ -442,6 +448,7 @@ internal fun HyperIslandApp(prefs: FlutterPrefsRepository) {
                             )
                         } else {
                             when (visibleDetail) {
+                                SettingsDetail.Developer -> DeveloperPage(::closeDetail)
                                 SettingsDetail.Appearance -> AppearancePage(
                                     prefs = prefs,
                                     materialVisible = materialShown,

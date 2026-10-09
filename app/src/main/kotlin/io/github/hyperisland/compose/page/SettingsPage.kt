@@ -29,6 +29,7 @@ import top.yukonga.miuix.kmp.icon.extended.Tune
 
 internal enum class SettingsDetail {
     Appearance,
+    Developer,
     Theme,
     HideBehavior,
     DefaultConfig,
