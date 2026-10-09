@@ -835,15 +835,21 @@ internal fun LockAboutPage(isActive: Boolean) {
             item {
                 SectionTitle(stringResource(R.string.about_discussion))
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    // 还没有讨论群：先灰度占位。
+                    // QQ 交流群（2026-10-09）：优先拉起 QQ 群资料卡（mqqapi，装了 QQ 直达），
+                    // 没装 QQ 再回退官方加群短链（浏览器打开）；确认弹窗与全应用外链一致。
                     SettingsAction(
-                        title = stringResource(R.string.telegram),
+                        title = "QQ 交流群",
                         icon = MiuixIcons.Community,
-                        summary = PLACEHOLDER_TEXT,
+                        summary = "群号 $QQ_GROUP_NUMBER",
                         endIcon = MiuixIcons.Link,
                         endIconSize = 26.dp,
-                        enabled = false,
-                        onClick = {},
+                        onClick = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(QQ_GROUP_JUMP_URI)),
+                                )
+                            }.onFailure { openBrowserLink(QQ_GROUP_JOIN_URL) }
+                        },
                     )
                 }
             }
@@ -1278,6 +1284,11 @@ private const val DEVELOPER_HANDLE = "zuige66"
 /** 开发者卡片展开区的外链（2026-10-09 zuige 指定）。 */
 private const val DEVELOPER_GITHUB_URL = "https://github.com/zuige66"
 private const val DEVELOPER_BLOG_URL = "https://blog.zuiges.com"
+/** QQ 交流群（2026-10-09 zuige 指定）：jump 直拉群资料卡，短链兜底（浏览器加群页）。 */
+private const val QQ_GROUP_NUMBER = "1129363923"
+private const val QQ_GROUP_JUMP_URI =
+    "mqqapi://card/show_pslcard?src_type=internal&version=1&uin=$QQ_GROUP_NUMBER&card_type=group&source=qrcode"
+private const val QQ_GROUP_JOIN_URL = "https://qm.qq.com/q/mEJT74MJa0"
 private const val REPO_URL = "https://github.com/zuige66/Hyper-MeloLock"
 private const val RELEASES_URL = "$REPO_URL/releases"
 /** 「检查更新」请求的 GitHub Releases API（本仓库）。 */
