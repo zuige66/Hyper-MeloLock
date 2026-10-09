@@ -766,8 +766,12 @@ adb -s 1b3a7d8 reboot
 
 | 版本 | versionCode | 说明 |
 | --- | --- | --- |
+| v0.3.2 | 12 | 机型门禁全撤（多机型测试）、更新下载双源回退、首页信息缓存直出、QQ 交流群、开发者卡折叠展开 |
 | v0.3.1 | 11 | 元素指纹取错数据源的根因级修复（改外观即时生效）、取色风格与主色来源、外观页折叠卡与分组恢复默认、移除锁定比例 |
 | v0.3.0 | 10 | 默认值真机化、导航「开发者」→「关于」、关于页检查更新（含 blog 国内回退源） |
+
+v0.3.2（tag 指向 `fa97425`）APK 39,175,093 字节（`app-release.apk`，SHA-1 与 v0.3.1 同一把 release key），
+GitHub Release 与 blog 侧（`Hyper-MeloLock-v0.3.2.apk` + `latest.json` 改 0.3.2/12）由 zuige 手动上传。
 
 v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
 `https://blog.zuiges.com/downloads/melolock/Hyper-MeloLock-v0.3.1.apk`（blog 侧 `latest.json` 供检查更新回退）。
