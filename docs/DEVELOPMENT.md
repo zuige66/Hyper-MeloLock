@@ -62,7 +62,13 @@
   - 滚动映射与上游同一套：`backgroundAlpha = 1 - offset/389dp`、`logoProgress = (offset - 0.25·hero) / 0.35·hero`、缩放 `1 - 0.1·progress`。
   - 顶部的渐变背景动画是逐帧的，`isActive`（由 `AppShell` 传 `pagerState.currentPage == 3`）为假时**不跑**，避免在别的页面白耗电。
   - 开发者卡片：圆形头像（`res/drawable-nodpi/dev_avatar.jpg`，`Crop` + `CircleShape` 裁切）、名称 `zuige`、GitHub 号 `@zuige66`，整卡点击直达 `github.com/zuige66`。
-  - **没有的功能一律灰度**：讨论（Telegram）、备份与恢复、检查更新、引用、隐私政策都是 `enabled = false` 占位。为此给 `SettingsActionWithArrow` 补了 `enabled` 参数（与 `SettingsAction` 对齐）。项目区里 GitHub（`zuige66/Hyper-MeloLock`）与更新日志（GitHub Releases）是真实链接。
+  - **没有的功能一律灰度**：讨论（Telegram）、引用、隐私政策是 `enabled = false` 占位。项目区里 GitHub（`zuige66/Hyper-MeloLock`）与更新日志（GitHub Releases）是真实链接。
+  - 2026-10-09：「检查更新」从「关于项目」移入「关于模块」，成为该区块唯一条目（GitHub 项之上不再有它）；原「关于模块」里灰度的「恢复与备份」占位删除。一并删除了**没有任何 UI 入口**的备份恢复死代码：`page/settings/BackupRestorePage.kt`、`service/ConfigBackupService.kt`、`SettingsDetail.BackupRestore` 枚举项及 AppShell 的对应分支。`backup_restore` 等字符串资源因上游 `AboutPage.kt` 仍引用而保留。
+  - 2026-10-09 第二轮（首页信息卡 + 外链 + 应用列表）：
+    - **设备型号首帧直出**：原先型号/系统版本与框架探测在同一个 `LaunchedEffect` IO 块里，框架的 libxposed 服务绑定要等 1.5s 超时，期间整卡为空、型号退回 `Build.MODEL`——真机表现为「先显示编号（M2007J17C），1 秒后才变成 Redmi Note 9 Pro」。现在两者拆开：型号走 `ro.product.marketname`、版本走 `ro.build.version.incremental`，在组合里同步读（`SystemPropertyReader` 反射 `android.os.SystemProperties`，微秒级）；只有框架信息仍异步。
+    - **「Xposed 框架」行不再固定「未知」**：App 进程拿不到框架信息（Vector 不实现 libxposed 服务绑定，`XposedServiceHelper` 必超时），改为 **SystemUI 侧回报**：`HookEntry.reportFrameworkInfo()` 在 keyguard root attach 后（独立线程 + 独立 try）把 `XposedBridge.getXposedVersion()` 与框架特征类探测值经 `ConfigProvider` 新增的 `/runtime` 通道 insert 回来（Provider 在 App 进程执行、落 `runtime_state` prefs 持久化，query 返回 key/value 两列）。App 端 `loadFrameworkDetails` 两段式：先服务绑定、失败 fallback 读 `/runtime`。真机回报 `xposed_version=102`，LSPosed/SukiSU 特征类均未命中（混淆），名字按设备指纹门禁直接定「Vector」——显示「Vector（模块运行中，API v102）」。设备门禁放宽时必须重核名字映射。
+    - **外链统一确认弹窗**：首页三条 `LinkAction`、开发者页 GitHub / 更新日志 / 开发者卡片，点击都先弹 Miuix `WindowDialog`（`rememberBrowserLauncher`，每个调用点各自持有一个实例）确认后才 `ACTION_VIEW` 交给默认浏览器。「使用教程」已填博客文章 `blog.zuiges.com/2026/10/09/hyper-melolock-lockscreen-cover`。
+    - **音乐应用勾选置顶**：列表排序加 `compareByDescending { it in selection }`（组内按名称），`remember` key 加 `selection`，勾选变化即时重排。
 
 四页共用的卡片来自 HyperIsland 原版实现：`OverviewPage.kt` 里原先私有的 `StatusGrid` / `StatusCard` / `StatCard` / `InfoCard` / 告警卡已提升为 `internal` 的 `OverviewStatusGrid` / `OverviewStatusCard` / `OverviewStatCard` / `OverviewInfoCard` / `OverviewAlertCard`，只把标题与数值参数化，视觉与交互代码未改动。HyperIsland 自己的首页（`OverviewPage`）改为调用同一批组件，因此不存在第二份样式实现。音乐应用页的行样式沿用 HyperIsland `AppsPage` 的 `Card` + `BasicComponent` 组合，图标复用 `InstalledAppsRepository` 的缓存与解码逻辑。
 

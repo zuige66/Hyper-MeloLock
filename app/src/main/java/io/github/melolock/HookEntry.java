@@ -43,6 +43,13 @@ public final class HookEntry implements IXposedHookLoadPackage {
                             Log.i(TAG, "Keyguard root attached; visibility=" + attached.getVisibility()
                                     + " shown=" + attached.isShown() + " window=" + attached.getWindowToken());
                             attached.post(() -> attach(attached));
+                            // 框架信息回报（2026-10-09）：App 进程拿不到框架版本——Vector 不实现
+                            // libxposed 的服务绑定，XposedServiceHelper 永远超时。SystemUI 进程里
+                            // legacy API 的 XposedBridge 可用，经 ConfigProvider /runtime 写回，
+                            // App 端首页「Xposed 框架」行 fallback 读它。独立线程：insert 会拉起
+                            // App 进程，不能阻塞 SystemUI；独立 try：失败只损失首页显示。
+                            try { reportFrameworkInfo(attached.getContext()); }
+                            catch (Throwable error) { Log.w(TAG, "Framework report spawn failed", error); }
                             // 封面壁纸化（2026-10-08）：SystemUI 侧把媒体封面下发给壁纸进程。
                             // 独立 try：它失败只损失「封面成为壁纸」，覆盖层不受影响。
                             try { WallpaperCoverPush.install(attached.getContext()); }
@@ -72,6 +79,37 @@ public final class HookEntry implements IXposedHookLoadPackage {
             Log.e(TAG, "SystemUI hook unavailable; loader=" + param.classLoader, error);
         }
     }
+
+    /**
+     * 框架信息回报：经 /runtime 把 legacy Xposed 的版本号与探测到的框架特征写回 App。
+     *
+     * 每个候选特征类单独 try——某个类的存在与否都只是首页显示的线索，探不到不报错。
+     * 探测类名按真机 logcat 里实际命中的为准；全不命中时名字由 App 端显示兜底文案。
+     */
+    private static void reportFrameworkInfo(android.content.Context context) {
+        try {
+            int version = XposedBridge.getXposedVersion();
+            android.content.ContentValues values = new android.content.ContentValues();
+            values.put("xposed_version", version);
+            values.put("lsposed_native_api", classPresent("org.lsposed.lspd.nativebridge.NativeAPI"));
+            values.put("lsposed_main", classPresent("org.lsposed.lspd.core.Main"));
+            values.put("sukisu_ultra", classPresent("com.sukisu.ultra.core.Main"));
+            values.put("reported_at", System.currentTimeMillis());
+            context.getContentResolver().insert(Config.RUNTIME_URI, values);
+            Log.i(TAG, "Framework reported: version=" + version
+                    + " lsposedNative=" + values.get("lsposed_native_api")
+                    + " lsposedMain=" + values.get("lsposed_main")
+                    + " sukiSu=" + values.get("sukisu_ultra"));
+        } catch (Throwable error) {
+            Log.w(TAG, "Framework report failed", error);
+        }
+    }
+
+    private static boolean classPresent(String className) {
+        try { Class.forName(className); return true; }
+        catch (Throwable ignored) { return false; }
+    }
+
     /**
      * 解锁信号的候选宿主类：HyperOS 各版本包名/职责划分不同，逐个试；都不中就失败关闭。
      *

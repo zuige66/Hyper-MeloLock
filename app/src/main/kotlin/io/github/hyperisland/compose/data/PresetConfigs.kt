@@ -112,8 +112,8 @@ internal const val PRESET_AUTHOR_MAX = 20
  * 本地预设存储与快照 / 还原。
  *
  * 预设数据单独存放在 `HyperIslandPresets`，不写入 `FlutterSharedPreferences`，
- * 避免被同步到 Hook 进程，也避免混入配置备份。快照 / 还原直接读写
- * `FlutterSharedPreferences`，与 [ConfigBackupService] 保持一致的类型处理。
+ * 避免被同步到 Hook 进程。快照 / 还原直接读写 `FlutterSharedPreferences`，
+ * 用与配置导出一致的类型处理（String/Int/Long/Float/Boolean/Set）。
  */
 internal object PresetStore {
     private const val PRESETS_PREFS = "HyperIslandPresets"

@@ -17,6 +17,13 @@ public final class Config {
     static final String AUTHORITY = PACKAGE + ".config";
     static final Uri URI = Uri.parse("content://" + AUTHORITY + "/state");
     static final Uri ELEMENTS_URI = Uri.parse("content://" + AUTHORITY + "/elements");
+    /**
+     * 运行时状态（SystemUI → App 单向回报）。App 进程拿不到框架信息：Vector 不实现
+     * libxposed 的服务绑定，`XposedServiceHelper` 永远超时。HookEntry 在 SystemUI 进程里
+     * 读 `XposedBridge.getXposedVersion()` 后 insert 到这里（Provider 在 App 进程执行，
+     * 落 SharedPreferences 持久化），App 端「Xposed 框架」行在服务绑定失败时 fallback 读它。
+     */
+    public static final Uri RUNTIME_URI = Uri.parse("content://" + AUTHORITY + "/runtime");
     private static final String PREFS = "module_state";
     private static final String KEY = "enabled";
     private static final String CORNER_RADIUS = "corner_radius_dp";

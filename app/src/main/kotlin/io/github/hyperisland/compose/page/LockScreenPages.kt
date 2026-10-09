@@ -80,13 +80,13 @@ import io.github.hyperisland.compose.component.SettingsAction
 import io.github.hyperisland.compose.component.SettingsActionWithArrow
 import io.github.hyperisland.compose.component.UpdateDialogHost
 import io.github.hyperisland.compose.component.UpdateDialogState
+import io.github.hyperisland.compose.data.InstalledApp
 import io.github.hyperisland.compose.data.InstalledAppsRepository
 import io.github.hyperisland.compose.page.home.OverviewAlertCard
 import io.github.hyperisland.compose.page.home.OverviewInfoCard
 import io.github.hyperisland.compose.page.home.OverviewStatusGrid
 import io.github.hyperisland.compose.service.ApkInstaller
-import io.github.hyperisland.compose.service.HomeSystemInfo
-import io.github.hyperisland.compose.service.SystemInfoProvider
+import io.github.hyperisland.utils.SystemPropertyReader
 import io.github.hyperisland.compose.service.UpdateDownloadService
 import io.github.hyperisland.compose.service.UpdateService
 import io.github.melolock.Config
@@ -96,6 +96,8 @@ import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.BasicComponent
+import top.yukonga.miuix.kmp.basic.Button
+import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CircularProgressIndicator
 import top.yukonga.miuix.kmp.basic.Icon
@@ -104,9 +106,9 @@ import top.yukonga.miuix.kmp.basic.SearchBar
 import top.yukonga.miuix.kmp.basic.Switch
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
+import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
-import top.yukonga.miuix.kmp.icon.extended.Backup
 import top.yukonga.miuix.kmp.icon.extended.Community
 import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.Link
@@ -114,6 +116,7 @@ import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.icon.extended.Update
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
+import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
  * 本模块的四个根页面。
@@ -137,10 +140,22 @@ internal fun LockHomePage(
     var enabledAppCount by remember { mutableIntStateOf(Config.enabledAppCount(context)) }
     var cornerRadiusDp by remember { mutableIntStateOf(Config.cornerRadiusDp(context)) }
     var supported by remember { mutableStateOf(Config.deviceSupported()) }
-    var systemInfo by remember { mutableStateOf<HomeSystemInfo?>(null) }
     var framework by remember { mutableStateOf<FrameworkDetails?>(null) }
     val scope = rememberCoroutineScope()
     var showRestartDialog by remember { mutableStateOf(false) }
+
+    // 型号与系统版本走反射读系统属性（`SystemPropertyReader` 走 `android.os.SystemProperties`，
+    // 微秒级），直接在首帧组合里算好。此前它们和框架探测在同一个 IO 块里，框架绑定要等
+    // 1.5s 超时，期间整卡为空、型号退回 `Build.MODEL`——真机表现为「先显示编号，
+    // 1 秒后才变成设备型号」。
+    val systemVersion = remember {
+        SystemPropertyReader.get("ro.build.version.incremental")
+            .ifBlank { Build.VERSION.INCREMENTAL.orEmpty() }
+    }
+    val deviceModel = remember {
+        SystemPropertyReader.get("ro.product.marketname")
+            .ifBlank { Build.MODEL.orEmpty() }
+    }
 
     LaunchedEffect(isActive) {
         if (!isActive) return@LaunchedEffect
@@ -148,26 +163,17 @@ internal fun LockHomePage(
         enabledAppCount = Config.enabledAppCount(context)
         cornerRadiusDp = Config.cornerRadiusDp(context)
         supported = Config.deviceSupported()
-        val loaded = withContext(Dispatchers.IO) {
-            val info = runCatching { SystemInfoProvider.load(context) }
-                .onFailure { Log.w(APP_LOG_TAG, "System info unavailable", it) }
+        // 只有框架信息需要异步（libxposed 服务绑定可能超时）；失败就留在 null，显示由
+        // loadFrameworkDetails 之外的 fallback 决定。
+        framework = withContext(Dispatchers.IO) {
+            runCatching { loadFrameworkDetails(context) }
+                .onFailure { Log.w(APP_LOG_TAG, "Framework details unavailable", it) }
                 .getOrNull()
-            info to runCatching { loadFrameworkDetails(context) }.getOrNull()
         }
-        systemInfo = loaded.first
-        framework = loaded.second
     }
 
     val unknown = stringResource(R.string.unknown)
-    val info = systemInfo
-    // 系统属性读取可能被 ROM 拦掉，这里再兜一层 Build.*，避免整行退化成“未知”。
-    val systemVersion = info?.systemVersion.orEmpty()
-        .ifBlank { Build.VERSION.INCREMENTAL.orEmpty() }
-        .ifBlank { unknown }
-    val deviceModel = info?.deviceModel.orEmpty()
-        .ifBlank { Build.MODEL.orEmpty() }
-        .ifBlank { unknown }
-    val frameworkText = framework?.let {
+    val frameworkText = framework?.summary ?: framework?.let {
         stringResource(
             R.string.framework_details,
             it.name.ifBlank { unknown },
@@ -319,7 +325,7 @@ internal fun LockMusicAppsPage() {
         }
     }
 
-    val filtered = remember(apps, query, showSystemApps) {
+    val filtered = remember(apps, query, showSystemApps, selection) {
         val normalized = query.trim().lowercase()
         apps.filter { app ->
             (showSystemApps || !app.isSystem) &&
@@ -327,6 +333,12 @@ internal fun LockMusicAppsPage() {
                     app.appName.lowercase().contains(normalized) ||
                     app.packageName.lowercase().contains(normalized))
         }
+            // 已勾选的排前面（组内按名称），勾完不用在长列表里翻。
+            .sortedWith(
+                compareByDescending<InstalledApp> {
+                    selection.isSelected(it.packageName)
+                }.thenBy { it.appName.lowercase() },
+            )
     }
 
     /** 全选开关的作用范围＝当前列表（含搜索/系统应用过滤），避免把看不见的应用一起勾上。 */
@@ -676,11 +688,13 @@ internal fun LockAppearancePage() {
  * 「盖上来」的。背景动画直接复用同包的 [AnimatedAboutBackground] / [rememberAboutAnimationTime]
  * / [animatedGradientColors]，hero 的滚动映射与上游同一套公式，不另写一份样式。
  *
- * 本模块还没有的东西（讨论 / 备份恢复 / 检查更新 / 引用 / 隐私政策）一律**灰度不可点**。
+ * 本模块还没有的东西（讨论 / 引用 / 隐私政策）一律**灰度不可点**；检查更新位于「关于模块」区块。
  */
 @Composable
 internal fun LockAboutPage(isActive: Boolean) {
     val context = LocalContext.current
+    // 开发者页外链（GitHub / 更新日志）统一走确认弹窗，与首页 LinkAction 行为一致。
+    val openBrowserLink = rememberBrowserLauncher()
     val listState = rememberLazyListState()
     val density = LocalDensity.current
     val screenHeight = LocalConfiguration.current.screenHeightDp.dp
@@ -811,28 +825,8 @@ internal fun LockAboutPage(isActive: Boolean) {
             item {
                 SectionTitle(stringResource(R.string.about_module))
                 Card(modifier = Modifier.fillMaxWidth()) {
-                    // 备份恢复还没做：灰度。
-                    SettingsActionWithArrow(
-                        title = stringResource(R.string.backup_restore),
-                        icon = MiuixIcons.Backup,
-                        enabled = false,
-                        onClick = {},
-                    )
-                }
-            }
-            item {
-                SectionTitle(stringResource(R.string.about_project))
-                Card(modifier = Modifier.fillMaxWidth()) {
-                    SettingsAction(
-                        title = stringResource(R.string.github),
-                        icon = MiuixIcons.Info,
-                        summary = "$DEVELOPER_HANDLE/Hyper-MeloLock",
-                        endIcon = MiuixIcons.Link,
-                        endIconSize = 26.dp,
-                    ) {
-                        context.openUrl(REPO_URL)
-                    }
-                    // 检查更新：请求本仓库 GitHub Releases（位置＝GitHub 之下、更新日志之上）。
+                    // 检查更新：请求本仓库 GitHub Releases；有新版弹更新对话框，无新版 Toast，
+                    // 失败弹失败对话框。位置＝「关于模块」（2026-10-09 从「关于项目」移入）。
                     SettingsAction(
                         title = stringResource(R.string.check_update_action),
                         icon = MiuixIcons.Update,
@@ -868,6 +862,20 @@ internal fun LockAboutPage(isActive: Boolean) {
                         enabled = !isCheckingUpdate && downloadPercent < 0,
                         onClick = { requestUpdateCheck() },
                     )
+                }
+            }
+            item {
+                SectionTitle(stringResource(R.string.about_project))
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    SettingsAction(
+                        title = stringResource(R.string.github),
+                        icon = MiuixIcons.Info,
+                        summary = "$DEVELOPER_HANDLE/Hyper-MeloLock",
+                        endIcon = MiuixIcons.Link,
+                        endIconSize = 26.dp,
+                    ) {
+                        openBrowserLink(REPO_URL)
+                    }
                     SettingsAction(
                         title = stringResource(R.string.changelog),
                         icon = MiuixIcons.Info,
@@ -875,7 +883,7 @@ internal fun LockAboutPage(isActive: Boolean) {
                         endIcon = MiuixIcons.Link,
                         endIconSize = 26.dp,
                     ) {
-                        context.openUrl(RELEASES_URL)
+                        openBrowserLink(RELEASES_URL)
                     }
                     // 引用清单与隐私政策还没有页面：灰度。
                     SettingsActionWithArrow(
@@ -961,13 +969,13 @@ internal fun LockAboutPage(isActive: Boolean) {
     }
 }
 
-/** 开发者卡片：头像、名称、GitHub 号，整卡可点直达 GitHub。 */
+/** 开发者卡片：头像、名称、GitHub 号，整卡可点直达 GitHub（经确认弹窗）。 */
 @Composable
 private fun DeveloperCard() {
-    val context = LocalContext.current
+    val openLink = rememberBrowserLauncher()
     Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = { context.openUrl(GITHUB_URL) },
+        onClick = { openLink(GITHUB_URL) },
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
@@ -1012,6 +1020,7 @@ private fun DeveloperCard() {
 @Composable
 private fun LinkAction(title: String, summary: String, url: String) {
     val context = LocalContext.current
+    val openLink = rememberBrowserLauncher()
     val filled = url.isNotBlank()
     SettingsAction(
         title = title,
@@ -1019,8 +1028,55 @@ private fun LinkAction(title: String, summary: String, url: String) {
         endIcon = MiuixIcons.Link,
         endIconSize = 26.dp,
         enabled = filled,
-        onClick = { if (filled) context.openUrl(url) },
+        onClick = { if (filled) openLink(url) },
     )
+}
+
+/**
+ * 外链统一确认：返回「请求打开 URL」的回调，点击先弹确认框，用户确认才交给默认浏览器。
+ * 每个调用点各自持有一个 launcher（内部就是一段待打开 URL + 一个 Miuix 对话框），互不干扰。
+ */
+@Composable
+private fun rememberBrowserLauncher(): (String) -> Unit {
+    val context = LocalContext.current
+    var pendingUrl by remember { mutableStateOf<String?>(null) }
+    pendingUrl?.let { url ->
+        WindowDialog(
+            show = true,
+            title = "跳转浏览器",
+            onDismissRequest = { pendingUrl = null },
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text("即将在默认浏览器中打开以下链接：")
+                Text(
+                    text = url,
+                    fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    TextButton(
+                        text = "取消",
+                        onClick = { pendingUrl = null },
+                        modifier = Modifier.weight(1f),
+                    )
+                    Button(
+                        onClick = {
+                            pendingUrl = null
+                            context.openUrl(url)
+                        },
+                        modifier = Modifier.weight(1f),
+                        colors = ButtonDefaults.buttonColorsPrimary(),
+                    ) {
+                        Text("打开")
+                    }
+                }
+            }
+        }
+    }
+    return { url: String -> pendingUrl = url }
 }
 
 @Composable
@@ -1115,6 +1171,8 @@ private data class FrameworkDetails(
     val version: String,
     val versionCode: Int,
     val apiVersion: Int,
+    /** 直接给出的整行文案（SystemUI 回报链路用）；非空时首页跳过 framework_details 格式串。 */
+    val summary: String? = null,
 )
 
 /** 已勾选状态；[unrestricted] 为真表示尚未限制，允许全部播放器。 */
@@ -1137,8 +1195,17 @@ private fun loadMusicSelection(context: Context): MusicSelection {
     return MusicSelection(unrestricted = false, packages = packages)
 }
 
-/** 从 Vector/LSPosed 服务读取框架信息；legacy 模块拿不到服务时返回 null。 */
+/**
+ * 框架信息两段式：先走 libxposed 服务绑定（LSPosed 管理器支持，Vector 不实现、必超时），
+ * 绑不上就 fallback 读 SystemUI 回报（[loadReportedFramework]）。两路都空返回 null，
+ * 首页显示「未知」。
+ */
 private fun loadFrameworkDetails(context: Context): FrameworkDetails? {
+    loadXposedServiceFramework(context)?.let { return it }
+    return loadReportedFramework(context)
+}
+
+private fun loadXposedServiceFramework(context: Context): FrameworkDetails? {
     if (!XposedPrefsSyncApp.awaitReady()) return null
     val app = context.applicationContext as? XposedPrefsSyncApp ?: return null
     val info = runCatching { app.getFrameworkInfo() }.getOrNull() ?: return null
@@ -1151,6 +1218,34 @@ private fun loadFrameworkDetails(context: Context): FrameworkDetails? {
         version = version,
         versionCode = (info["frameworkVersionCode"] as? Number)?.toInt() ?: 0,
         apiVersion = apiVersion,
+    )
+}
+
+/**
+ * SystemUI 侧回报（`HookEntry.reportFrameworkInfo` 经 /runtime 写入）：读 xposed_version
+ * 与框架特征探测值。特征类名在 Vector（混淆后）上探不到，名字靠设备门禁定：模块按
+ * `Config.FINGERPRINT` 精确匹配唯一 ROM，该 ROM 的框架由 SukiSU Ultra 的 Vector 提供
+ * （2026-10-09 真机回报 `xposed_version=102`，LSPosed/SukiSU 特征类均未命中）。设备门禁
+ * 放宽时要重新核实这里的名字映射。
+ */
+private fun loadReportedFramework(context: Context): FrameworkDetails? {
+    val values = runCatching {
+        context.contentResolver.query(Config.RUNTIME_URI, null, null, null, null)?.use { cursor ->
+            val keyIndex = cursor.getColumnIndexOrThrow("key")
+            val valueIndex = cursor.getColumnIndexOrThrow("value")
+            buildMap {
+                while (cursor.moveToNext()) put(cursor.getString(keyIndex), cursor.getString(valueIndex))
+            }
+        }
+    }.getOrNull() ?: return null
+    val apiVersion = values["xposed_version"]?.toIntOrNull() ?: return null
+    if (apiVersion <= 0) return null
+    return FrameworkDetails(
+        name = "Vector",
+        version = "",
+        versionCode = 0,
+        apiVersion = apiVersion,
+        summary = "Vector（模块运行中，API v$apiVersion）",
     )
 }
 
@@ -1168,7 +1263,8 @@ private const val RELEASES_URL = "$REPO_URL/releases"
 /** 「检查更新」请求的 GitHub Releases API（本仓库）。 */
 private const val UPDATE_CHECK_API = "https://api.github.com/repos/zuige66/Hyper-MeloLock/releases/latest"
 private const val DONATION_URL = ""
-private const val DOCUMENTATION_URL = ""
+/** 使用教程：博客介绍文章（2026-10-09 由 zuige 指定）。 */
+private const val DOCUMENTATION_URL = "https://blog.zuiges.com/2026/10/09/hyper-melolock-lockscreen-cover/"
 private const val RESOURCES_URL = ""
 private const val PLACEHOLDER_TEXT = "待填写"
 

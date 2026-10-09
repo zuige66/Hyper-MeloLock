@@ -36,7 +36,6 @@ internal enum class SettingsDetail {
     Misc,
     Other,
     References,
-    BackupRestore,
     FilterRules,
     KeepIsland,
     HookExtension,
