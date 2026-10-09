@@ -137,6 +137,7 @@ internal fun LockHomePage(
     var enabledAppCount by remember { mutableIntStateOf(Config.enabledAppCount(context)) }
     var cornerRadiusDp by remember { mutableIntStateOf(Config.cornerRadiusDp(context)) }
     var supported by remember { mutableStateOf(Config.deviceSupported()) }
+    var verified by remember { mutableStateOf(Config.deviceVerified()) }
     val scope = rememberCoroutineScope()
     var showRestartDialog by remember { mutableStateOf(false) }
 
@@ -162,6 +163,7 @@ internal fun LockHomePage(
         enabledAppCount = Config.enabledAppCount(context)
         cornerRadiusDp = Config.cornerRadiusDp(context)
         supported = Config.deviceSupported()
+        verified = Config.deviceVerified()
         val loaded = withContext(Dispatchers.IO) {
             val version = SystemPropertyReader.get("ro.build.version.incremental")
                 .ifBlank { Build.VERSION.INCREMENTAL.orEmpty() }
@@ -242,7 +244,15 @@ internal fun LockHomePage(
             item {
                 OverviewAlertCard(
                     title = "当前系统未适配",
-                    message = "锁屏覆盖层只在已验证的 SystemUI 版本上启用；当前设备不在验证列表内，模块不会生效。",
+                    message = "锁屏覆盖层只在澎湃 OS 3 上启用；当前系统不是澎湃 3，模块不会生效。",
+                )
+            }
+        } else if (!verified) {
+            // 澎湃 3 全系放行（2026-10-09 多机型适配），但只有验证过的机型给全绿体验。
+            item {
+                OverviewAlertCard(
+                    title = "当前机型未验证",
+                    message = "模块已在这台设备上启用；该机型尚未完整验证，如遇锁屏显示异常请在 GitHub 反馈。",
                 )
             }
         }
@@ -939,13 +949,14 @@ internal fun LockAboutPage(isActive: Boolean) {
         UpdateDialogHost(
             state = updateDialogState,
             onDismiss = { updateDialogState = null },
-            onDownload = { url ->
+            onDownload = { url, fallbackUrl ->
                 val version = (updateDialogState as? UpdateDialogState.Available)?.update?.version
                 updateDialogState = null
-                // 下载交给系统 DownloadManager，下完自动拉起安装界面（见 ApkInstaller）
+                // 下载交给前台服务（主源失败自动换 blog 备用源），下完自动拉起安装界面
                 ApkInstaller.downloadAndInstall(
                     context,
                     url,
+                    fallbackUrl,
                     "Hyper-MeloLock-v${version ?: "update"}.apk",
                 )
             },

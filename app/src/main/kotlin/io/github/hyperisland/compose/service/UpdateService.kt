@@ -14,6 +14,11 @@ internal data class AppUpdate(
     val changelog: String,
     /** APK 直链（用于「下载并安装」）；GitHub 源取 assets 里的 .apk，blog 源直接用 apkUrl。 */
     val apkUrl: String = releaseUrl,
+    /**
+     * 备用下载直链（GitHub 检查成功时带上 blog 的 apkUrl）。GitHub 的 release 直链在
+     * 国内基本下不动（K60 Pro 用户实测「下载失败」），下载服务主源失败后自动换它重试。
+     */
+    val fallbackApkUrl: String? = null,
 )
 
 internal object UpdateService {
@@ -82,6 +87,8 @@ internal object UpdateService {
                 releaseUrl = downloadUrl,
                 changelog = release.optString("body"),
                 apkUrl = apkUrl.ifBlank { downloadUrl },
+                // blog 直链在国内可达，作为下载阶段的备用源；拉不到不阻塞检查更新本身。
+                fallbackApkUrl = runCatching { fetchBlogApkUrl() }.getOrNull(),
             )
         } finally {
             connection.disconnect()
@@ -105,9 +112,33 @@ internal object UpdateService {
      * （真机实测：GitHub 403 回退 blog，本地 code 已等于线上但 name 更低，直接被判「已是最新」）。
      */
     private suspend fun fetchFromBlog(currentVersionCode: Int, currentVersion: String): AppUpdate? = withContext(Dispatchers.IO) {
+        val manifest = fetchBlogManifest()
+        val remoteCode = manifest.optInt("versionCode", 0)
+        val remoteName = manifest.optString("versionName")
+        val apkUrl = manifest.optString("apkUrl")
+        if (remoteCode <= 0 || remoteName.isBlank() || apkUrl.isBlank()) {
+            throw IOException("Blog latest.json is missing required fields")
+        }
+        val codeNewer = currentVersionCode > 0 && remoteCode > currentVersionCode
+        val nameNewer = isNewer(remoteName, currentVersion)
+        if (!codeNewer && !nameNewer) {
+            Log.i(TAG, "Blog latest is v$remoteName (code $remoteCode); already up to date")
+            return@withContext null   // 已是最新
+        }
+        Log.i(TAG, "Blog fallback hit: v$remoteName (code $remoteCode)")
+        AppUpdate(
+            version = remoteName,
+            releaseUrl = apkUrl,
+            changelog = manifest.optString("changelog"),
+            apkUrl = apkUrl,
+        )
+    }
+
+    /** 拉 blog 的 latest.json；超时比主流程短（它是备用源，不值得久等）。 */
+    private fun fetchBlogManifest(): JSONObject {
         val connection = (URL(BLOG_LATEST_JSON).openConnection() as HttpURLConnection).apply {
-            connectTimeout = NETWORK_TIMEOUT_MILLIS
-            readTimeout = NETWORK_TIMEOUT_MILLIS
+            connectTimeout = BLOG_FALLBACK_TIMEOUT_MILLIS
+            readTimeout = BLOG_FALLBACK_TIMEOUT_MILLIS
             requestMethod = "GET"
         }
         try {
@@ -116,29 +147,16 @@ internal object UpdateService {
                 throw IOException("Blog latest.json request failed with HTTP $responseCode")
             }
             val body = connection.inputStream.bufferedReader().use { it.readText() }
-            val manifest = JSONObject(body)
-            val remoteCode = manifest.optInt("versionCode", 0)
-            val remoteName = manifest.optString("versionName")
-            val apkUrl = manifest.optString("apkUrl")
-            if (remoteCode <= 0 || remoteName.isBlank() || apkUrl.isBlank()) {
-                throw IOException("Blog latest.json is missing required fields")
-            }
-            val codeNewer = currentVersionCode > 0 && remoteCode > currentVersionCode
-            val nameNewer = isNewer(remoteName, currentVersion)
-            if (!codeNewer && !nameNewer) {
-                Log.i(TAG, "Blog latest is v$remoteName (code $remoteCode); already up to date")
-                return@withContext null   // 已是最新
-            }
-            Log.i(TAG, "Blog fallback hit: v$remoteName (code $remoteCode)")
-            AppUpdate(
-                version = remoteName,
-                releaseUrl = apkUrl,
-                changelog = manifest.optString("changelog"),
-                apkUrl = apkUrl,
-            )
+            return JSONObject(body)
         } finally {
             connection.disconnect()
         }
+    }
+
+    /** blog 源的 APK 直链（给 GitHub 源当下载备用；拉不到返回 null，由调用方忽略）。 */
+    private fun fetchBlogApkUrl(): String? {
+        val apkUrl = fetchBlogManifest().optString("apkUrl")
+        return apkUrl.ifBlank { null }
     }
 
     private fun versionParts(version: String): List<Int> = version
@@ -157,4 +175,5 @@ private const val MODULE_DOWNLOAD_URL =
 private const val BLOG_LATEST_JSON =
     "https://blog.zuiges.com/downloads/melolock/latest.json"
 private const val NETWORK_TIMEOUT_MILLIS = 10_000
+private const val BLOG_FALLBACK_TIMEOUT_MILLIS = 5_000
 private const val VERSION_PART_COUNT = 3

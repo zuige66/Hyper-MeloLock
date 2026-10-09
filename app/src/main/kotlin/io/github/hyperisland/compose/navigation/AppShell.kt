@@ -608,7 +608,7 @@ internal fun HyperIslandApp(prefs: FlutterPrefsRepository) {
         onDismiss = { updateDialogState = null },
         // 上游这条路径是「跳浏览器看 release 页」；本项目走下载安装（见 LockAboutPage），
         // 这里保持原语义即可（AppShell 的启动期检查已不再触发，实为死路径）。
-        onDownload = { releaseUrl ->
+        onDownload = { releaseUrl, _ ->
             updateDialogState = null
             runCatching {
                 context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(releaseUrl)))

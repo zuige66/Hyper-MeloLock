@@ -12,7 +12,7 @@ import android.widget.Toast
  * 期间进程常被 HyperOS 回收 → 「下载完了却不弹安装」（真机实测），已改为前台服务方案。
  */
 internal object ApkInstaller {
-    fun downloadAndInstall(context: Context, apkUrl: String, fileName: String) {
+    fun downloadAndInstall(context: Context, apkUrl: String, fallbackUrl: String?, fileName: String) {
         if (apkUrl.isBlank()) {
             Toast.makeText(context, "没有可用的下载链接", Toast.LENGTH_SHORT).show()
             return
@@ -20,6 +20,7 @@ internal object ApkInstaller {
         val safeName = if (fileName.endsWith(".apk", ignoreCase = true)) fileName else "$fileName.apk"
         val intent = Intent(context, UpdateDownloadService::class.java).apply {
             putExtra(UpdateDownloadService.EXTRA_URL, apkUrl)
+            putExtra(UpdateDownloadService.EXTRA_FALLBACK_URL, fallbackUrl.orEmpty())
             putExtra(UpdateDownloadService.EXTRA_NAME, safeName)
         }
         try {

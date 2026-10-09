@@ -69,7 +69,7 @@ public final class ShortcutAnimBackdrop implements IXposedHookLoadPackage {
 
     @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
         if (!"com.android.systemui".equals(param.packageName)) return;
-        if (!Config.FINGERPRINT.equals(Build.FINGERPRINT)) return;
+        if (!Config.isSupportedFingerprint(Build.FINGERPRINT)) return;
         if (armed) return;
         armed = true;
         Log.i(TAG, PRE + "rev=" + REV);

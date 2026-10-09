@@ -48,7 +48,7 @@ public final class WallpaperCoverPush {
         appContext = context.getApplicationContext() != null
                 ? context.getApplicationContext() : context;
         Log.i(TAG, "WallpaperCoverPush rev=" + REV + " installed");
-        if (!Config.FINGERPRINT.equals(Build.FINGERPRINT)) {
+        if (!Config.isSupportedFingerprint(Build.FINGERPRINT)) {
             Log.i(TAG, "WCV push fingerprint mismatch; disabled");
             return;
         }

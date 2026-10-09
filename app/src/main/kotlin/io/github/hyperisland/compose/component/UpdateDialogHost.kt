@@ -40,7 +40,8 @@ internal sealed interface UpdateDialogState {
 internal fun UpdateDialogHost(
     state: UpdateDialogState?,
     onDismiss: () -> Unit,
-    onDownload: (String) -> Unit,
+    /** (主下载直链, 备用直链)；备用可空（GitHub 源附带 blog 直链，下载失败自动回退用）。 */
+    onDownload: (String, String?) -> Unit,
 ) {
     val available = state as? UpdateDialogState.Available
     WindowDialog(
@@ -64,7 +65,7 @@ internal fun UpdateDialogHost(
                 }
                 DialogActions(
                     onCancel = onDismiss,
-                    onConfirm = { onDownload(available.update.apkUrl) },
+                    onConfirm = { onDownload(available.update.apkUrl, available.update.fallbackApkUrl) },
                 )
             }
         }

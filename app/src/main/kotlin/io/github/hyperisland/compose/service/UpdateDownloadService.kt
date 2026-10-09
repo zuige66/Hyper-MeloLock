@@ -34,6 +34,7 @@ internal class UpdateDownloadService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val url = intent?.getStringExtra(EXTRA_URL)
+        val fallbackUrl = intent?.getStringExtra(EXTRA_FALLBACK_URL).orEmpty()
         val fileName = intent?.getStringExtra(EXTRA_NAME) ?: "Hyper-MeloLock-update.apk"
         if (url.isNullOrBlank()) {
             stopSelf()
@@ -44,7 +45,16 @@ internal class UpdateDownloadService : Service() {
         Thread {
             val target = File(File(filesDir, "update").apply { mkdirs() }, fileName)
             try {
-                download(url, target)
+                try {
+                    download(url, target)
+                } catch (primaryError: Throwable) {
+                    // 主源失败自动换备用源重试一次（GitHub 直链在国内基本下不动，
+                    // K60 Pro 用户实测；blog 直链可达）。
+                    if (cancelled || fallbackUrl.isBlank() || fallbackUrl == url) throw primaryError
+                    Log.w(TAG, "Primary download failed (${primaryError::class.simpleName}: ${primaryError.message}); trying fallback")
+                    if (target.exists()) target.delete()
+                    download(fallbackUrl, target)
+                }
                 if (cancelled) return@Thread
                 notifyDone(target, launchInstall(target))
             } catch (error: Throwable) {
@@ -186,6 +196,8 @@ internal class UpdateDownloadService : Service() {
         private const val NETWORK_TIMEOUT_MILLIS = 30_000
         private const val PROGRESS_INTERVAL_MILLIS = 300L
         const val EXTRA_URL = "extra_apk_url"
+        /** 备用下载直链（blog 源）；主源失败自动换它重试一次。 */
+        const val EXTRA_FALLBACK_URL = "extra_apk_fallback_url"
         const val EXTRA_NAME = "extra_apk_name"
         /** 下载进度广播：ACTION + progress(0..100) + done(是否结束，结束即清除 UI 进度)。 */
         const val ACTION_UPDATE_PROGRESS = "io.github.melolock.action.UPDATE_PROGRESS"

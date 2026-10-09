@@ -28,8 +28,8 @@ public final class HookEntry implements IXposedHookLoadPackage {
     public static volatile Object keyguardMediator;
     @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
         if (!"com.android.systemui".equals(param.packageName) ||
-                !Config.FINGERPRINT.equals(Build.FINGERPRINT)) return;
-        Log.i(TAG, "HookEntry rev=HE2 (mediator capture + card-tap launch)");
+                !Config.isSupportedFingerprint(Build.FINGERPRINT)) return;
+        Log.i(TAG, "HookEntry rev=HE3 (multi-device OS3 gate)");
         try {
             Class<?> root = XposedHelpers.findClass(
                     "com.android.keyguard.widget.HyperOSKeyguardRootView", param.classLoader);

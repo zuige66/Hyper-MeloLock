@@ -35,6 +35,20 @@ public final class Config {
     static final String FINGERPRINT = "Redmi/gauguinpro/gauguinpro:16/BP2A.250605.031.A3/OS3.0.303.0.WNKCNXM:user/release-keys";
 
     /**
+     * 澎湃 3 多机型放行（2026-10-09，zuige：澎湃 3 各机型 SystemUI 大同小异）：指纹含
+     * `OS3.0.` 即启用 hook。保底是失败关闭——目标类找不到就恢复原生锁屏；但「类在、结构
+     * 不同」的机型可能显示异常，由首页「未验证机型」告警提示用户反馈。
+     */
+    public static boolean isSupportedFingerprint(String fingerprint) {
+        return fingerprint != null && fingerprint.contains("OS3.0.");
+    }
+
+    /** 完整验证过的机型（锁屏覆盖层与全部行为在这台设备上真机验证过）。 */
+    public static boolean deviceVerified() {
+        return FINGERPRINT.equals(android.os.Build.FINGERPRINT);
+    }
+
+    /**
      * 无 root 时重启 SystemUI 的通道：配置端发这条广播，注入在 SystemUI 里的模块自己
      * kill 自己（等价一次 SystemUI 重启，和 `am crash` 效果一样）。
      *
@@ -364,7 +378,7 @@ public final class Config {
 
     /** 当前设备是否落在已验证的 SystemUI 构建指纹内，与 HookEntry 的加载门禁一致。 */
     public static boolean deviceSupported() {
-        return FINGERPRINT.equals(android.os.Build.FINGERPRINT);
+        return isSupportedFingerprint(android.os.Build.FINGERPRINT);
     }
 
     /**

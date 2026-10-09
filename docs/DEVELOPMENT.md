@@ -733,6 +733,17 @@ adb -s 1b3a7d8 reboot
 
 **第三方字体许可**：`app/src/main/assets/fonts/` 下的 `clock_round_1.ttf`（Quicksand）与 `clock_round_2.ttf`（Baloo 2）来自 Google Fonts，按 SIL Open Font License 1.1 授权，可随应用一起分发。OFL 要求分发时附带许可证全文并保留字体名称，**对外发布前需要把 OFL-1.1 全文一并放进仓库并在应用内可查看**（当前尚未加入，只在文档里记录）。
 
+### 多机型适配：澎湃 3 全系放行（2026-10-09）
+
+- **门禁从精确指纹放宽为 `指纹含 OS3.0.`**（`Config.isSupportedFingerprint`），四个入口统一：`HookEntry`（rev=HE3）、`ShortcutAnimBackdrop`、`WallpaperCover`、`WallpaperCoverPush`。动机：K60 Pro（corot，OS3.0.315.0.WPCCNXM）等机型用户想用，zuige 判断澎湃 3 各机型 SystemUI 大同小异。
+- **保底仍是失败关闭**：目标类（`HyperOSKeyguardRootView` 等）找不到就不 hook、恢复原生锁屏。但「类在、结构不同」的机型可能显示异常——App 端首页新增三态告警：非澎湃 3 →「当前系统未适配」；澎湃 3 但非已验证指纹（`Config.deviceVerified()`，仍是 gauguinpro 精确匹配）→「当前机型未验证…请在 GitHub 反馈」。**新机型问题要靠用户反馈定位**，`Config.FINGERPRINT` 常量保留作为已验证基准。
+- 接到未验证机型反馈时：先看 logcat 里 `rev=` / `root attached` / hook 异常栈，确认是「没注入」「类名变了」还是「结构差异」，再决定加指纹特例还是修 hook。
+
+### 更新下载双源回退（2026-10-09）
+
+- **问题**：K60 Pro 用户「下载报错」——检查更新若走 GitHub 源，APK 直链是 GitHub 的（实际落在 objects.githubusercontent.com），国内直连基本必挂；blog 回退只覆盖「检查更新」一步，下载没有回退。
+- **修复**：`AppUpdate` 增加 `fallbackApkUrl`——GitHub 检查成功后顺带拉一次 blog 的 `latest.json`（5s 短超时，失败忽略）取其 `apkUrl`；`UpdateDialogHost.onDownload` 签名改为 `(主链, 备用链)`；`UpdateDownloadService` 收 `EXTRA_FALLBACK_URL`，主源下载失败自动清掉半成品换备用重试一次。`ApkInstaller.downloadAndInstall` 相应加参数。
+
 ## Xposed 作用域：现在是两项（v0.3.1 起）
 
 `assets/xposed_init` 有三个入口，对应两个进程：
