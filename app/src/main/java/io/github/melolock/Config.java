@@ -145,9 +145,17 @@ public final class Config {
     /**
      * 主色来源（全局一项，所有跟随档共用同一主色保证色相统一）：
      * 0＝最鲜艳优先（Palette 鲜艳桶 vibrant→darkVibrant→lightVibrant→muted→…，现状），
-     * 1＝占比优先（population 前 5 的主色块里挑鲜艳度 S×V 最高者）。
+     * 1＝占比优先（直接取 population 最大的色块；2026-10-09 起不再在 top5 里挑鲜艳——
+     * 旧版两档挑出来的色大多相同，用户感知不到差别）。
      */
     public static final String SWATCH_PICK = "swatch_pick";
+
+    /**
+     * 切歌柔和过渡总开关（外观页「全局」分组，默认开）：
+     * 1＝换歌时封面交叉过渡、文字淡出淡入、跟随配色渐变；
+     * 0＝全部瞬时切换（旧版行为）。进 elementSignature，改开关触发整场重建。
+     */
+    public static final String SONG_FADE = "song_fade";
 
     /** 字符串值元素：签名正文。走同一条 /elements 通道（value 列本来就是字符串形式），但不进整数解析。 */
     public static final String DATE_SIGNATURE = "date_signature";
@@ -198,6 +206,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(ENTRY_COLOR_PICK, 1);
         ELEMENT_DEFAULTS.put(ENTRY_BG_PICK, 1);
         ELEMENT_DEFAULTS.put(SWATCH_PICK, 1);
+        ELEMENT_DEFAULTS.put(SONG_FADE, 1);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */

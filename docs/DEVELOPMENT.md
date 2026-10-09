@@ -1151,3 +1151,47 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     随之删掉首页的 `hasRoot()` 分支、两条 `ACTION_RESTART_*` 广播与 `refreshToken`（不再需要
     原地重启后刷新）。附带影响：**本机 app 侧拿不到 su，因此该按钮在本机只会给提示**。
 
+37. 2026-10-09 **切歌动效：四处硬切改为全套柔和过渡**（zuige 选定的方案①，真机待验）：
+
+    切歌时画面上有四处「啪」一下的硬切，全部补了短过渡（都在 `applySnapshot()` 链路上，
+    只在**封面/文字/主色真的变了**时各跑一次，不碰「每 2 秒快照引用去重」的性能红线）：
+
+    | 元素 | 旧 | 新 |
+    |---|---|---|
+    | 封面 ×3（baseBlur/cover/cardArt） | 瞬间 `setImageBitmap` | `TransitionDrawable` 新层淡入盖上 260ms |
+    | 歌名/歌手 | 瞬间 `setText` | 旧字淡出 130ms → 换字 → 新字淡入 190ms |
+    | 跟随封面配色（卡片底 + 各文字） | 取色完成一次性跳变 | 旧主色 → 新主色 `ArgbEvaluator` 渐变 320ms，每帧重推全套跟随色 |
+
+    实现要点与坑：
+    - **封面过渡**：`MediaSource` 从不 `recycle()` bitmap（已核实），TransitionDrawable 持旧图安全；
+      过渡结束后 `postDelayed(+320ms)` 换回单张 `setImageBitmap`——两层尺寸不同时 CENTER_CROP
+      矩阵按 TransitionDrawable 整体算，单层可能裁错；settle 以「当前 drawable 仍是自己那份」为判据，
+      新过渡接管后旧 settle 自动失效。
+      **真机第一版踩坑（zuige 反馈「切歌闪白、像一直在淡出」）**：初版开了
+      `setCrossFadeEnabled(true)`，两层**同时**半透明，中段约 25% 透到视图背后——baseBlur
+      背后是原生壁纸层，壁纸偏浅就是闪白。改成默认模式（旧层不透明、新层淡入盖上），
+      合成恒不透明，视觉同样是平滑换封面。**凡背后不保证不透明的层，绝不能开 crossFadeEnabled。**
+    - **文字换字**：`view.tag` 存当前期望字样，快速连续切歌时旧回调按 tag 失配自动作废；
+      endAction 不可独靠（红线经验），`postDelayed(500ms)` 兜底强制落终态防文字停在半透明。
+      首帧铺字（view 为空）直接落位不动画——场景入场有自己的节奏。
+    - **配色渐变**：新增 `displayedSwatch` 展示值，`followText/followCardBg/followEntryBg` 改读它
+      （静止时恒等于 `autoSwatch`）；新取色到达取消旧动画重起（paletteExecutor 单线程 + main.post
+      天然串行）；取色缓存命中路径与 `restore()` 走 `cancelSwatchAnimation()` 落位/停动画。
+      渐变目标是**主色**而不是各视图终色：HSV 推导非线性，插主色能保持色相一致，视觉更顺。
+    - 进度条切歌回零不做动画（不该动的没动）。
+
+38. 2026-10-09 **主色来源「占比优先」改为真·占比直取 + 切歌淡出动效开关（外观→全局）**：
+
+    - **占比优先失真的根因**：旧 `pickDominantVivid` 在 population 前 5 里按鲜艳度 S×V 挑——
+      大多数封面挑出来的色与「最鲜艳优先」是同一个，两档感知不到差别（zuige 反馈
+      「默认占比优先，实际是鲜艳」）。已核实映射链路本身无反向（设备存值 1 → swatchDominant
+      → Provider 动态键投影正常），是算法行为问题。现改为**直接取 population 最大的色块**
+      （`pickDominantSwatch`），与「最鲜艳优先」真正可区分；代价是占比最高色块可能是低饱和
+      底色，各跟随档对无彩主色的白/灰兜底已有，不会不可读。
+    - **切歌淡出动效开关** `song_fade`（默认 1=开）：关＝封面/文字/配色全部瞬时切换（旧版行为）。
+      SystemUI 侧 `songFadeEnabled`（create 时读定），`applySnapshot` 与 `animateSwatchTo` 按其分流，
+      关闭时走 `cancelSwatchAnimation()` 直接落位。新键进 `ELEMENT_DEFAULTS` 走 /elements，
+      elementSignature 覆盖全键 → 改开关自动触发整场重建，无需重启 SystemUI。
+    - **外观页结构调整**：原「取色」分组改为「**全局**」分组，内含「主色来源」「切歌淡出动效」
+      两项（zuige 指定与日期/签名同级）；「恢复默认」键集随分组改为 `[swatch_pick, song_fade]`。
+

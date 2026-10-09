@@ -479,7 +479,7 @@ internal fun LockAppearancePage() {
 
     // 各分组的「恢复默认」键集（↺ 按钮）；背景组例外：三态存 SharedPreferences 非 elements。
     val sectionDefaultKeys: Map<String, List<String>> = mapOf(
-        "pick" to listOf(Config.SWATCH_PICK),
+        "global" to listOf(Config.SWATCH_PICK, Config.SONG_FADE),
         "date" to listOf(Config.DATE_ENABLED, Config.DATE_SIZE, Config.DATE_WEIGHT, Config.DATE_COLOR, Config.DATE_SPACING),
         "sign" to listOf(Config.SIGN_ENABLED, Config.SIGN_SIZE, Config.SIGN_WEIGHT, Config.SIGN_COLOR, Config.SIGN_SPACING),
         "clock" to listOf(Config.CLOCK_SIZE, Config.CLOCK_SPACING, Config.CLOCK_WEIGHT, Config.CLOCK_COLOR, Config.CLOCK_ROUNDNESS, Config.CLOCK_STROKE),
@@ -506,7 +506,7 @@ internal fun LockAppearancePage() {
 
     CollapsingPage(title = "外观") {
         item {
-            CollapsibleSection("取色", "pick", expandedSections, ::toggleSection, { resetSection("pick") }) {
+            CollapsibleSection("全局", "global", expandedSections, ::toggleSection, { resetSection("global") }) {
                 PreferenceDropdown(
                     title = "主色来源",
                     summary = "跟随封面时挑选专辑主色的方式",
@@ -514,6 +514,13 @@ internal fun LockAppearancePage() {
                     items = listOf("最鲜艳优先", "占比优先"),
                     selectedIndex = value(Config.SWATCH_PICK).coerceIn(0, 1),
                     onSelectedIndexChange = { update(Config.SWATCH_PICK, it) },
+                )
+                PreferenceSwitch(
+                    title = "切歌淡出动效",
+                    summary = "换歌时封面、文字与配色平滑过渡；关闭后瞬时切换",
+                    icon = null,
+                    checked = value(Config.SONG_FADE) != 0,
+                    onCheckedChange = { update(Config.SONG_FADE, if (it) 1 else 0) },
                 )
             }
         }

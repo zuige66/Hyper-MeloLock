@@ -1,5 +1,7 @@
 package io.github.melolock;
 
+import android.animation.ArgbEvaluator;
+import android.animation.ValueAnimator;
 import android.app.KeyguardManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
@@ -16,8 +18,11 @@ import android.graphics.RenderEffect;
 import android.graphics.Shader;
 import android.graphics.Typeface;
 import androidx.palette.graphics.Palette;
+import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.TransitionDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
@@ -296,6 +301,20 @@ final class LockScreenOverlay {
     private String autoMediaKey;
     /** 取色结果：专辑主色原始 RGB（0＝未取到/取色失败）。各「跟随封面」档按各自取色风格从这里推导。 */
     private int autoSwatch;
+    // ── 切歌动效：封面交叉淡化 + 文字换字淡入淡出 + 跟随配色渐变 ──
+    // 三者都是「封面/文字真的变了」才跑一次的短过渡，不碰「每 2 秒快照引用去重」的性能红线。
+    /** 封面交叉淡化时长：一次性 TransitionDrawable，成本远低于周期性模糊层重绘。 */
+    private static final long ART_CROSSFADE_MS = 260;
+    /** 文字换字：旧字淡出 / 新字淡入时长。 */
+    private static final long TEXT_FADE_OUT_MS = 130, TEXT_FADE_IN_MS = 190;
+    /** 文字换字兜底：ViewPropertyAnimator 的回调不可独靠（红线经验），postDelayed 强制落终态。 */
+    private static final long TEXT_SWAP_FALLBACK_MS = 500;
+    /** 「跟随封面」配色主色渐变时长。 */
+    private static final long SWATCH_FADE_MS = 320;
+    /** 配色跟随的展示值：渐变期间从旧主色向 autoSwatch 过渡，各跟随档按它推导；静止时恒等于 autoSwatch。 */
+    private int displayedSwatch;
+    /** 正在跑的主色渐变；新渐变重起 / 整场销毁时取消。 */
+    private ValueAnimator swatchAnimator;
     /** 取色专用单线程（Palette 数百 ms，绝不占主线程）；daemon 防泄漏。 */
     private final java.util.concurrent.ExecutorService paletteExecutor =
             java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
@@ -307,8 +326,10 @@ final class LockScreenOverlay {
     private boolean clockColorFollow, dateColorFollow, signColorFollow, entryColorFollow, entryBgFollow;
     /** 各「跟随封面」档的取色风格（create 时读定）：false＝低饱和磨砂（M3E），true＝鲜艳原色直出。 */
     private boolean cardBgPick, clockPick, datePick, signPick, entryColorPick, entryBgPick;
-    /** 主色来源（全局，create 时读定）：false＝最鲜艳优先（现状），true＝占比前 5 里挑最鲜艳。 */
+    /** 主色来源（全局，create 时读定）：false＝最鲜艳优先（鲜艳桶优先），true＝占比最高直取。 */
     private boolean swatchDominant;
+    /** 切歌柔和过渡总开关（song_fade，默认开）：关＝封面/文字/配色全部瞬时切换（旧版行为）。 */
+    private boolean songFadeEnabled;
     /** 签名正文（create 时读一次）；进 elementSignature，改签名会触发整场重建。 */
     private String signatureText = "";
     /** 日期行文本对应的天（epoch day）；跨天时重算。 */
@@ -517,16 +538,117 @@ final class LockScreenOverlay {
         // 而给 ImageView 重设同一张 bitmap 也会触发重绘 —— 全屏模糊层每 2 秒被强制重渲染一次，
         // 这本身就是周期性卡顿。文本与进度照旧每次更新（很便宜）。
         if (snapshot.art != shownArtwork) {
+            Bitmap previousArtwork = shownArtwork;
             shownArtwork = snapshot.art;
-            baseBlur.setImageBitmap(snapshot.art); cover.setImageBitmap(snapshot.art); cardArt.setImageBitmap(snapshot.art);
+            if (songFadeEnabled) {
+                // 引用去重逻辑原样保留：只有封面真的换了才动这三个视图（性能红线）。
+                crossfadeArtwork(baseBlur, previousArtwork, snapshot.art);
+                crossfadeArtwork(cover, previousArtwork, snapshot.art);
+                crossfadeArtwork(cardArt, previousArtwork, snapshot.art);
+            } else {
+                baseBlur.setImageBitmap(snapshot.art); cover.setImageBitmap(snapshot.art); cardArt.setImageBitmap(snapshot.art);
+            }
             // 「跟随封面」档：换歌（曲目 key 变化）才后台取色回填卡片与各文字配色
             maybeExtractCardPalette(snapshot.art, emptyAs(snapshot.title, "") + "|" + emptyAs(snapshot.artist, "")
                     + "|" + snapshot.art.getWidth() + "x" + snapshot.art.getHeight());
         }
-        title.setText(emptyAs(snapshot.title, "未知曲目")); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
+        if (songFadeEnabled) {
+            applyTextWithFade(title, emptyAs(snapshot.title, "未知曲目"));
+            applyTextWithFade(artist, emptyAs(snapshot.artist, "未知艺术家"));
+        } else {
+            title.setText(emptyAs(snapshot.title, "未知曲目")); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
+        }
         playPause.setText(snapshot.playing ? "Ⅱ" : "▶");
         updateProgress();
         refreshDateLine(false);   // 跨天时日期行最多 2 秒后自动翻页；同天只是一次整数比较
+    }
+
+    /**
+     * 切歌封面过渡：旧封面保持不透明，新封面从 0 淡入盖上（TransitionDrawable 默认模式；
+     * 不新增视图层级、不破坏 clipToOutline 圆角，baseBlur 的 RenderEffect 模糊照常作用）。
+     * 首次铺图（无旧图）直接落位——场景初建/熄屏预建有自己的入场节奏，不叠加动画。
+     *
+     * 过渡结束后必须换回单张 setImageBitmap：两层尺寸不同时，CENTER_CROP 的矩阵按
+     * TransitionDrawable 整体计算，单层可能裁错；换回单张保证终态与旧版逐像素一致。
+     * settle 以「当前 drawable 仍是自己那份 TransitionDrawable」为判据（红线经验：
+     * 定时落点用 postDelayed 兜底），新过渡接管后旧 settle 自动失效。
+     */
+    private void crossfadeArtwork(ImageView view, Bitmap oldArt, Bitmap newArt) {
+        if (view == null) return;
+        if (oldArt == null || oldArt.isRecycled() || newArt == null) {
+            view.setImageBitmap(newArt);
+            return;
+        }
+        BitmapDrawable from = new BitmapDrawable(context.getResources(), oldArt);
+        BitmapDrawable to = new BitmapDrawable(context.getResources(), newArt);
+        TransitionDrawable transition = new TransitionDrawable(new Drawable[] { from, to });
+        // **绝不能开 crossFadeEnabled(true)**（2026-10-09 真机踩坑）：那会让两层同时半透明，
+        // 中段约 25% 透到视图背后——baseBlur 背后是原生壁纸层，壁纸偏浅就是用户看到的
+        // 「切歌闪一张白、像一直在淡出」。默认模式（false）旧层保持不透明、新层淡入盖上，
+        // 合成结果恒不透明，视觉上同样是平滑换封面。
+        view.setImageDrawable(transition);
+        transition.startTransition((int) ART_CROSSFADE_MS);
+        view.postDelayed(() -> {
+            if (view.getDrawable() == transition) view.setImageBitmap(newArt);
+        }, ART_CROSSFADE_MS + 60);
+    }
+
+    /**
+     * 切歌文字柔和换字：旧字淡出 → 换字 → 新字淡入；同字（每 2 秒的进度快照）直接跳过，
+     * 不产生任何重绘。首帧铺字直接落位（场景入场有自己的节奏）。
+     * view.tag 存「当前期望字样」：快速连续切歌时后一次调用接管，旧回调按 tag 失配自动作废。
+     * 红线经验：ViewPropertyAnimator 的回调不可独靠，postDelayed 兜底强制落到终态，
+     * 防文字停在半透明或被吞。
+     */
+    private void applyTextWithFade(TextView view, String newText) {
+        if (view == null) return;
+        if (newText.contentEquals(view.getText())) return;
+        view.setTag(newText);
+        if (view.length() == 0) { view.setText(newText); return; }
+        view.animate().cancel();
+        view.animate().alpha(0f).setDuration(TEXT_FADE_OUT_MS).withEndAction(() -> {
+            if (!newText.equals(view.getTag())) return;   // 已被更新的换字接管
+            view.setText(newText);
+            view.animate().alpha(1f).setDuration(TEXT_FADE_IN_MS).start();
+        }).start();
+        view.postDelayed(() -> {
+            if (newText.equals(view.getTag())) { view.setText(newText); view.setAlpha(1f); }
+        }, TEXT_SWAP_FALLBACK_MS);
+    }
+
+    /** 停掉配色渐变并把展示值落位到当前主色（整场销毁 / 缓存命中同步回填时用）。 */
+    private void cancelSwatchAnimation() {
+        if (swatchAnimator != null) { swatchAnimator.cancel(); swatchAnimator = null; }
+        displayedSwatch = autoSwatch;
+    }
+
+    /**
+     * 「跟随封面」配色渐变：切歌时旧主色 → 新主色（ArgbEvaluator，约 320ms），
+     * 每帧用展示值重推全套跟随色，卡片底色与各文字色不再「啪」一下跳变。
+     * 首次取到色 / 回落到无彩兜底（0）时直接落位不动画。
+     * 每帧成本只有约 10 次 setTextColor/setColor，与全屏模糊层重绘差两个量级；
+     * 新取色到达时旧动画被取消重起新的（paletteExecutor 单线程 + main.post 天然串行）。
+     */
+    private void animateSwatchTo(int target) {
+        autoSwatch = target;
+        if (!songFadeEnabled) { cancelSwatchAnimation(); applyFollowColors(); return; }
+        if (swatchAnimator != null) swatchAnimator.cancel();
+        if (target == 0 || displayedSwatch == 0 || displayedSwatch == target) {
+            displayedSwatch = target;
+            applyFollowColors();
+            return;
+        }
+        ValueAnimator animator = ValueAnimator.ofObject(new ArgbEvaluator(), displayedSwatch, target);
+        swatchAnimator = animator;
+        animator.setDuration(SWATCH_FADE_MS);
+        animator.addUpdateListener(animation -> {
+            Object value = animation.getAnimatedValue();
+            if (value instanceof Integer) {
+                displayedSwatch = (Integer) value;
+                applyFollowColors();
+            }
+        });
+        animator.start();
     }
 
     /**
@@ -617,6 +739,7 @@ final class LockScreenOverlay {
         entryColorPick = elem(elements, Config.ENTRY_COLOR_PICK) != 0;
         entryBgPick = elem(elements, Config.ENTRY_BG_PICK) != 0;
         swatchDominant = elem(elements, Config.SWATCH_PICK) != 0;
+        songFadeEnabled = elem(elements, Config.SONG_FADE) != 0;
         signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
         boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
         boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
@@ -952,24 +1075,24 @@ final class LockScreenOverlay {
         return followText(vivid, asMain);
     }
 
-    /** 「跟随封面」文字色：vivid＝鲜艳档（保留饱和度抬亮度），否则磨砂档（现行压饱和规则）。 */
+    /** 「跟随封面」文字色：vivid＝鲜艳档（保留饱和度抬亮度），否则磨砂档（现行压饱和规则）。读展示值（渐变期间随动画移动）。 */
     private int followText(boolean vivid, boolean asMain) {
-        if (autoSwatch == 0) return asMain ? Color.WHITE : 0xFF9E9EA3;
-        if (vivid) return vividText(autoSwatch, asMain);
-        int[] texts = textColorsFromSwatch(autoSwatch);
+        if (displayedSwatch == 0) return asMain ? Color.WHITE : 0xFF9E9EA3;
+        if (vivid) return vividText(displayedSwatch, asMain);
+        int[] texts = textColorsFromSwatch(displayedSwatch);
         return asMain ? texts[0] : texts[1];
     }
 
-    /** 「跟随封面」播放器底色：鲜艳档主色直出，磨砂档低饱和容器。 */
+    /** 「跟随封面」播放器底色：鲜艳档主色直出，磨砂档低饱和容器。读展示值。 */
     private int followCardBg() {
-        if (autoSwatch == 0) return 0xF2181818;
-        return cardBgPick ? vividContainer(autoSwatch) : containerFromSwatch(autoSwatch);
+        if (displayedSwatch == 0) return 0xF2181818;
+        return cardBgPick ? vividContainer(displayedSwatch) : containerFromSwatch(displayedSwatch);
     }
 
-    /** 「跟随封面」入口胶囊背景：与播放器底色同规则但独立取色风格。 */
+    /** 「跟随封面」入口胶囊背景：与播放器底色同规则但独立取色风格。读展示值。 */
     private int followEntryBg() {
-        if (autoSwatch == 0) return 0x66101010;
-        return entryBgPick ? vividContainer(autoSwatch) : containerFromSwatch(autoSwatch);
+        if (displayedSwatch == 0) return 0x66101010;
+        return entryBgPick ? vividContainer(displayedSwatch) : containerFromSwatch(displayedSwatch);
     }
 
     /** 取色回填时统一刷新所有「跟随封面」档（卡片底 + 文字 + 入口）的配色（主线程调用）。 */
@@ -993,7 +1116,8 @@ final class LockScreenOverlay {
     private void maybeExtractCardPalette(final Bitmap art, final String mediaKey) {
         if (!anyFollow() || art == null || art.isRecycled()) return;
         if (mediaKey != null && mediaKey.equals(autoMediaKey)) {
-            if (autoSwatch != 0) {   // 缓存命中（场景重建后同曲）直接同步回填
+            if (autoSwatch != 0) {   // 缓存命中（场景重建后同曲）直接同步回填，不渐变（展示值落位即可）
+                cancelSwatchAnimation();
                 applyFollowColors();
             }
             return;
@@ -1002,15 +1126,15 @@ final class LockScreenOverlay {
             int swatchRgb = 0;
             try {
                 Palette palette = Palette.from(art).maximumColorCount(24).resizeBitmapSize(112).generate();
-                Palette.Swatch swatch = swatchDominant ? pickDominantVivid(palette) : pickSwatch(palette);
+                Palette.Swatch swatch = swatchDominant ? pickDominantSwatch(palette) : pickSwatch(palette);
                 if (swatch != null) swatchRgb = swatch.getRgb();
             } catch (Throwable error) {
                 Log.w(TAG, "Card palette extract failed", error);   // swatchRgb=0 → 各档回兜底色（失败关闭）
             }
             final int rgb = swatchRgb;
             main.post(() -> {
-                autoMediaKey = mediaKey; autoSwatch = rgb;
-                applyFollowColors();   // 卡片底色 + 时间/日期/签名/入口的「跟随封面」档一并刷新
+                autoMediaKey = mediaKey;
+                animateSwatchTo(rgb);   // 渐变到新主色，动画每帧内刷新全套「跟随封面」档
                 Log.i(TAG, "Card palette applied key=" + mediaKey + " swatch=" + Integer.toHexString(rgb));
             });
         });
@@ -1029,25 +1153,19 @@ final class LockScreenOverlay {
     }
 
     /**
-     * 「占比优先」主色：候选池＝ population 前 5 的色块（覆盖封面主体色调，不取边角小色块），
-     * 其中取鲜艳度（饱和度 × 亮度）最高者。与 {@link #pickSwatch} 的鲜艳桶优先互补：
-     * 鲜艳桶可能选中封面上占比很小的点缀色，占比优先保证主色「像这张封面」。
+     * 「占比优先」主色：**直接取 population 最大的色块**（真·占比优先）。
+     * 旧版在 population 前 5 里按鲜艳度 S×V 挑——大多数封面挑出来的色与「最鲜艳优先」
+     * 相同，两档感知不到差别（2026-10-09 zuige 反馈「默认占比优先，实际是鲜艳」后改为直取）。
+     * 代价：占比最高的色块可能是封面底色的低饱和色，各「跟随封面」档对无彩主色已有兜底
+     * （回白/灰文字、深色容器），不会不可读。
      */
-    private static Palette.Swatch pickDominantVivid(Palette palette) {
+    private static Palette.Swatch pickDominantSwatch(Palette palette) {
         if (palette == null) return null;
         java.util.List<Palette.Swatch> swatches = palette.getSwatches();
         if (swatches == null || swatches.isEmpty()) return null;
-        java.util.List<Palette.Swatch> sorted = new java.util.ArrayList<>(swatches);
-        sorted.sort((a, b) -> Integer.compare(b.getPopulation(), a.getPopulation()));
         Palette.Swatch best = null;
-        float bestScore = -1f;
-        int limit = Math.min(5, sorted.size());
-        for (int i = 0; i < limit; i++) {
-            Palette.Swatch s = sorted.get(i);
-            float[] hsv = new float[3];
-            Color.colorToHSV(s.getRgb(), hsv);
-            float score = hsv[1] * hsv[2];
-            if (score > bestScore) { bestScore = score; best = s; }
+        for (Palette.Swatch s : swatches) {
+            if (best == null || s.getPopulation() > best.getPopulation()) best = s;
         }
         return best;
     }
@@ -1486,6 +1604,7 @@ final class LockScreenOverlay {
     private void restore(String reason) {
         if (foreground != null || background != null || shown != null) Log.i(TAG, "restore reason=" + reason + " " + state());
         main.removeCallbacks(progressTicker); main.removeCallbacks(finishSuspend);
+        cancelSwatchAnimation();   // 整场销毁：配色渐变停掉，别继续在孤儿视图上刷颜色
         // 页面切换动画可能只跑到一半就被撤层：复位通知栈的动画属性，
         // 否则下次 show() 出来的是一张全透明的通知列表。
         if (notifications != null) { notifications.animate().cancel(); endNotificationsLayer(); notifications.setAlpha(1f); notifications.setTranslationY(0f); }
