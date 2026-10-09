@@ -137,21 +137,23 @@ internal fun LockHomePage(
     var enabledAppCount by remember { mutableIntStateOf(Config.enabledAppCount(context)) }
     var cornerRadiusDp by remember { mutableIntStateOf(Config.cornerRadiusDp(context)) }
     var supported by remember { mutableStateOf(Config.deviceSupported()) }
-    var framework by remember { mutableStateOf<FrameworkDetails?>(null) }
     val scope = rememberCoroutineScope()
     var showRestartDialog by remember { mutableStateOf(false) }
 
-    // 型号与系统版本走反射读系统属性（`SystemPropertyReader` 走 `android.os.SystemProperties`，
-    // 微秒级），直接在首帧组合里算好。此前它们和框架探测在同一个 IO 块里，框架绑定要等
-    // 1.5s 超时，期间整卡为空、型号退回 `Build.MODEL`——真机表现为「先显示编号，
-    // 1 秒后才变成设备型号」。
-    val systemVersion = remember {
-        SystemPropertyReader.get("ro.build.version.incremental")
-            .ifBlank { Build.VERSION.INCREMENTAL.orEmpty() }
+    // 信息卡显示值**首帧直出**：全部从本地缓存（`INFO_CACHE_PREFS`）同步读。此前每次进 App
+    // 都要现读——`android.os.SystemProperties` 反射在新系统上会被 hidden API 限制拦掉、退回
+    // getprop 子进程（几百 ms～1s），框架信息的服务绑定更要等 1.5s 超时，表现为「Xposed 框架
+    // 与设备型号每次都要等一会才出现」。页面可见时后台刷新一次（zuige：下一次进 App 检查
+    // 有没有变化），值有变化才更新界面并回写缓存；首次安装无缓存时先显示「未知」。
+    val infoCache = remember { context.getSharedPreferences(INFO_CACHE_PREFS, Context.MODE_PRIVATE) }
+    var systemVersion by remember {
+        mutableStateOf(infoCache.getString("system_version", "").orEmpty())
     }
-    val deviceModel = remember {
-        SystemPropertyReader.get("ro.product.marketname")
-            .ifBlank { Build.MODEL.orEmpty() }
+    var deviceModel by remember {
+        mutableStateOf(infoCache.getString("device_model", "").orEmpty())
+    }
+    var frameworkText by remember {
+        mutableStateOf(infoCache.getString("framework_text", null))
     }
 
     LaunchedEffect(isActive) {
@@ -160,25 +162,50 @@ internal fun LockHomePage(
         enabledAppCount = Config.enabledAppCount(context)
         cornerRadiusDp = Config.cornerRadiusDp(context)
         supported = Config.deviceSupported()
-        // 只有框架信息需要异步（libxposed 服务绑定可能超时）；失败就留在 null，显示由
-        // loadFrameworkDetails 之外的 fallback 决定。
-        framework = withContext(Dispatchers.IO) {
-            runCatching { loadFrameworkDetails(context) }
+        val loaded = withContext(Dispatchers.IO) {
+            val version = SystemPropertyReader.get("ro.build.version.incremental")
+                .ifBlank { Build.VERSION.INCREMENTAL.orEmpty() }
+            val model = SystemPropertyReader.get("ro.product.marketname")
+                .ifBlank { Build.MODEL.orEmpty() }
+            val framework = runCatching { loadFrameworkDetails(context) }
                 .onFailure { Log.w(APP_LOG_TAG, "Framework details unavailable", it) }
                 .getOrNull()
+            Triple(version, model, framework)
         }
+        val unknownText = context.getString(R.string.unknown)
+        val loadedFrameworkText = loaded.third?.summary ?: loaded.third?.let {
+            context.getString(
+                R.string.framework_details,
+                it.name.ifBlank { unknownText },
+                it.version.ifBlank { unknownText },
+                it.versionCode,
+                it.apiVersion,
+            )
+        } ?: unknownText
+        var changed = false
+        val editor = infoCache.edit()
+        if (loaded.first != systemVersion) {
+            systemVersion = loaded.first
+            editor.putString("system_version", loaded.first)
+            changed = true
+        }
+        if (loaded.second != deviceModel) {
+            deviceModel = loaded.second
+            editor.putString("device_model", loaded.second)
+            changed = true
+        }
+        if (loadedFrameworkText != frameworkText) {
+            frameworkText = loadedFrameworkText
+            editor.putString("framework_text", loadedFrameworkText)
+            changed = true
+        }
+        if (changed) editor.apply()
     }
 
     val unknown = stringResource(R.string.unknown)
-    val frameworkText = framework?.summary ?: framework?.let {
-        stringResource(
-            R.string.framework_details,
-            it.name.ifBlank { unknown },
-            it.version.ifBlank { unknown },
-            it.versionCode,
-            it.apiVersion,
-        )
-    } ?: unknown
+    val systemVersionText = systemVersion.ifBlank { unknown }
+    val deviceModelText = deviceModel.ifBlank { unknown }
+    val frameworkTextShown = frameworkText.orEmpty().ifBlank { unknown }
 
     CollapsingPage(
         title = stringResource(R.string.app_name),
@@ -222,11 +249,11 @@ internal fun LockHomePage(
         item {
             OverviewInfoCard(
                 rows = listOf(
-                    stringResource(R.string.system_version) to systemVersion,
+                    stringResource(R.string.system_version) to systemVersionText,
                     stringResource(R.string.app_version) to
                         "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
-                    stringResource(R.string.xposed_framework) to frameworkText,
-                    stringResource(R.string.device_model) to deviceModel,
+                    stringResource(R.string.xposed_framework) to frameworkTextShown,
+                    stringResource(R.string.device_model) to deviceModelText,
                 ),
             )
         }
@@ -688,7 +715,7 @@ internal fun LockAppearancePage() {
  * 本模块还没有的东西（讨论 / 引用 / 隐私政策）一律**灰度不可点**；检查更新位于「关于模块」区块。
  */
 @Composable
-internal fun LockAboutPage(isActive: Boolean, onOpenDeveloper: () -> Unit) {
+internal fun LockAboutPage(isActive: Boolean) {
     val context = LocalContext.current
     // 开发者页外链（GitHub / 更新日志）统一走确认弹窗，与首页 LinkAction 行为一致。
     val openBrowserLink = rememberBrowserLauncher()
@@ -801,7 +828,7 @@ internal fun LockAboutPage(isActive: Boolean, onOpenDeveloper: () -> Unit) {
                     // hero 是叠在上层的（不是列表项），这里留出等高的空位让它可见。
                     Spacer(Modifier.height(heroHeight + ABOUT_DEVELOPER_TOP_GAP))
                     SectionTitle(stringResource(R.string.about_developer))
-                    DeveloperCard(onClick = onOpenDeveloper)
+                    DeveloperCard(openBrowserLink)
                 }
             }
             item {
@@ -966,15 +993,35 @@ internal fun LockAboutPage(isActive: Boolean, onOpenDeveloper: () -> Unit) {
     }
 }
 
-/** 开发者卡片：头像、名称、GitHub 号；整卡点击进「开发者」detail 页（GitHub / Blog 两项）。 */
+/**
+ * 开发者卡片（外观页同款折叠交互）：卡头＝头像 + 名称 + GitHub 号 + 箭头，整头可点、
+ * 点击就地弹性展开/收起（animateContentSize + 箭头随状态旋转 90°），展开区是
+ * GitHub / Blog 两项外链（走 [rememberBrowserLauncher] 确认弹窗）。
+ */
 @Composable
-private fun DeveloperCard(onClick: () -> Unit) {
+private fun DeveloperCard(openLink: (String) -> Unit) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMediumLow,
+        ),
+        label = "developerArrow",
+    )
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().animateContentSize(
+            animationSpec = spring(
+                dampingRatio = Spring.DampingRatioLowBouncy,
+                stiffness = Spring.StiffnessMediumLow,
+            ),
+        ),
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 18.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             // 作者头像：`res/drawable-nodpi/dev_avatar.jpg`（圆裁展示）。
@@ -1001,12 +1048,34 @@ private fun DeveloperCard(onClick: () -> Unit) {
                 )
             }
             Spacer(Modifier.weight(1f))
-            Icon(
-                imageVector = MiuixIcons.Basic.ArrowRight,
-                contentDescription = null,
-                modifier = Modifier.size(width = 10.dp, height = 16.dp),
-                tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+            Text(
+                text = "▸",
+                modifier = Modifier
+                    .padding(start = 12.dp)
+                    .graphicsLayer { rotationZ = arrowRotation },
+                fontSize = 15.sp,
+                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
+        }
+        if (expanded) {
+            Column(modifier = Modifier.padding(bottom = 8.dp)) {
+                SettingsAction(
+                    title = "GitHub",
+                    summary = "$DEVELOPER_HANDLE/Hyper-MeloLock",
+                    endIcon = MiuixIcons.Link,
+                    endIconSize = 26.dp,
+                ) {
+                    openLink(DEVELOPER_GITHUB_URL)
+                }
+                SettingsAction(
+                    title = "Blog",
+                    summary = "blog.zuiges.com",
+                    endIcon = MiuixIcons.Link,
+                    endIconSize = 26.dp,
+                ) {
+                    openLink(DEVELOPER_BLOG_URL)
+                }
+            }
         }
     }
 }
@@ -1198,9 +1267,15 @@ private fun loadReportedFramework(context: Context): FrameworkDetails? {
     )
 }
 
+/** 首页信息卡的显示值缓存：首帧直出、后台刷新回写（见 `LockHomePage`）。 */
+private const val INFO_CACHE_PREFS = "home_info_cache"
+
 // 留空的链接（捐赠 / 使用教程 / 相关资源）在页面上显示「待填写」并置灰。
 private const val DEVELOPER_NAME = "zuige"
 private const val DEVELOPER_HANDLE = "zuige66"
+/** 开发者卡片展开区的外链（2026-10-09 zuige 指定）。 */
+private const val DEVELOPER_GITHUB_URL = "https://github.com/zuige66"
+private const val DEVELOPER_BLOG_URL = "https://blog.zuiges.com"
 private const val REPO_URL = "https://github.com/zuige66/Hyper-MeloLock"
 private const val RELEASES_URL = "$REPO_URL/releases"
 /** 「检查更新」请求的 GitHub Releases API（本仓库）。 */

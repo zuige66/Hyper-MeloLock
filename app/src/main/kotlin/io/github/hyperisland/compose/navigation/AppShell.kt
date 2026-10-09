@@ -61,7 +61,6 @@ import io.github.hyperisland.compose.page.LockAboutPage
 import io.github.hyperisland.compose.page.LockAppearancePage
 import io.github.hyperisland.compose.page.LockHomePage
 import io.github.hyperisland.compose.page.LockMusicAppsPage
-import io.github.hyperisland.compose.page.settings.DeveloperPage
 import io.github.hyperisland.compose.page.apps.NotificationChannelsPage
 import io.github.hyperisland.compose.page.apps.channel.ChannelEditorPage
 import io.github.hyperisland.compose.page.apps.channel.BatchChannelSettingsPage
@@ -372,15 +371,7 @@ internal fun HyperIslandApp(prefs: FlutterPrefsRepository) {
                                 1 -> LockMusicAppsPage()
                                 2 -> LockAppearancePage()
                                 // hero 的渐变背景是逐帧动画，只在停留此页时跑，否则白白耗电。
-                                else -> LockAboutPage(
-                                    isActive = pagerState.currentPage == 3,
-                                    onOpenDeveloper = {
-                                        // 一级 detail 层由 detailShown 控制可见性（visibleDetail 只决定
-                                        // 内容）；这套层迁入后没有别的入口，第一次由「开发者」启用。
-                                        visibleDetail = SettingsDetail.Developer
-                                        detailShown = true
-                                    },
-                                )
+                                else -> LockAboutPage(isActive = pagerState.currentPage == 3)
                             }
                             }
                         }
@@ -451,7 +442,6 @@ internal fun HyperIslandApp(prefs: FlutterPrefsRepository) {
                             )
                         } else {
                             when (visibleDetail) {
-                                SettingsDetail.Developer -> DeveloperPage(::closeDetail)
                                 SettingsDetail.Appearance -> AppearancePage(
                                     prefs = prefs,
                                     materialVisible = materialShown,
