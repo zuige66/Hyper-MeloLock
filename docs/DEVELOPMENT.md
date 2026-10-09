@@ -50,7 +50,7 @@
 
 - **首页**：对齐 HyperIsland 首页版式 —— 顶部大标题加右上角按钮，第一行是「方形激活卡（大号对勾底纹）」加右侧两张数据卡，下面是（按需出现的）适配告警卡、系统信息卡、链接卡和使用说明卡。
   - **实现在 `LockScreenPages.kt` 的 `LockHomePage`**。`page/home/OverviewPage.kt` 只提供共享卡片组件，它这个 `OverviewPage` Composable 本身**没有任何调用点（死代码）**——改首页行为务必改 `LockHomePage`。
-  - 右上角按钮是「重启作用域」：先 `RestartScopeService.hasRoot()` 探测 root，有权限才弹 `RestartScopeDialog`，无权限走模块通道发 `Config.ACTION_RESTART_SYSTEMUI` 显式广播并 Toast `restart_scope_requested`，顺便 `refreshToken++` 刷新首页数据。
+  - 右上角按钮是「重启作用域」：**点开一律弹 `RestartScopeDialog`（与 HyperIsland 一致：先选作用域、再点重启），弹窗默认全选**。重启走 `su`（`RestartScopeService.restart`），拿不到 root 时弹窗显示 `restart_root_required`（「请检查是否已给予本应用 ROOT 权限」），**不做隐式广播回退**（2026-10-09 由 zuige 定夺）。列表由 `R.array.xposed_scope` 驱动，当前两项：系统界面 / 壁纸进程；扩展页通过 `allowedPackages` + `preselectedPackages` 收窄。
   - 状态卡点击即切换模块总开关，标签在 `已激活` / `未激活` 之间切换。
   - 左数据卡为「已开启应用」，取 `Config.enabledAppCount()`（实际勾选数量，未勾选为 `0`）；点击跳到「音乐应用」页。
   - 右数据卡为「封面圆角」，取 `Config.cornerRadiusDp()`；点击跳到「外观」页。
@@ -752,6 +752,8 @@ adb -s 1b3a7d8 reboot
 v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
 `https://blog.zuiges.com/downloads/melolock/Hyper-MeloLock-v0.3.1.apk`（blog 侧 `latest.json` 供检查更新回退）。
 
+2026-10-09：README 效果预览新增多配色合成图（`docs/images/lockscreen-colors.jpg`，四色锁屏实拍），安装节补充 v0.3.1 APK 直链；同步在博客（Hexo）发布介绍文章 `hyper-melolock-lockscreen-cover`，配图存于博客 `source/img/hyper-melolock/`。
+
 对外发布文案见 **[docs/COOLAPK-v0.3.1.md](COOLAPK-v0.3.1.md)**，里面标了发布前检查项（配图需重截、两侧源版本一致）。
 
 ## 后续
@@ -1108,3 +1110,20 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     `nativeCensus()` 里的 `keyguardRoot=` 一项就是为此存在的，它比 `cover=V1.00`（只说明我们
     自己的层还在、可见）更能说明问题。本轮补了三个采样点（信号 +0ms / 淡出起点 +760ms /
     摘层 +920ms）来定位系统到底在什么时候把锁屏根藏起来。
+
+36. 2026-10-09 **点小封面跳音乐 App 真正可用 + 首页「重启作用域」对齐 HyperIsland**：
+
+    **① 点小封面跳 App**（三轮真机排查，详见上文「补充（2026-10-08）」的第 4 条修订）：直接
+    `startActivity` 会被锁屏静默回滚；`KeyguardLock` 对系统 uid 已被 Android 16 禁用；最终改为
+    反射调 `KeyguardViewMediator#dismiss(IKeyguardDismissCallback, CharSequence)`（实例由
+    `hookAllConstructors` 捕获），800ms 后复核 `isKeyguardLocked()` 再启动，仅非安全锁启用。
+    最贵的坑是我们自己写的 Proxy 回调兜底分支把 `toString()` 转发回 proxy → 死递归
+    （栈深 14460 层、堆 49→255MB）→ SystemUI OOM/ANR，一度被误判为「系统 dismiss 机制有问题」。
+
+    **② 重启作用域**（zuige 要求与 HyperIsland 一致）：原实现是「有 root 才弹窗、无 root 直接
+    广播重启」，本机（无 su）根本看不到作用域列表。现在改为**点开一律弹 `RestartScopeDialog`**，
+    默认全选（`preselectedPackages` 为空时全选，扩展页仍按预选），确认走 `su`；
+    **无 root 只显示「请检查是否已给予本应用 ROOT 权限」，不重启、不做广播回退**。
+    随之删掉首页的 `hasRoot()` 分支、两条 `ACTION_RESTART_*` 广播与 `refreshToken`（不再需要
+    原地重启后刷新）。附带影响：**本机 app 侧拿不到 su，因此该按钮在本机只会给提示**。
+

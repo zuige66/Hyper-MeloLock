@@ -92,7 +92,8 @@ internal val RestartScopeTargets = listOf(
  * 重启作用域弹窗。
  *
  * @param allowedPackages null 表示显示全部作用域（主页面）；非 null 时仅显示列表内作用域。
- * @param preselectedPackages 进入页面时默认勾选的作用域，会与 [allowedPackages] 求交集。
+ * @param preselectedPackages 进入页面时默认勾选的作用域，会与 [allowedPackages] 求交集；
+ *   **传空集合时默认全选**（首页的行为：点进来就能直接点重启）。
  */
 @Composable
 internal fun RestartScopeDialog(
@@ -116,7 +117,14 @@ internal fun RestartScopeDialog(
             }
     }
     var selectedPackages by remember(show, targets) {
-        mutableStateOf(preselectedPackages.intersect(targets.map { it.packageName }.toSet()))
+        // 首页不传预选（空集合）时默认全选：HyperIsland 的交互是「点进去 → 选作用域 → 点重启」，
+        // 默认全选可以让「只想重启」的用户一步到位；扩展页传了预选，仍按预选勾。
+        val initial = if (preselectedPackages.isEmpty()) {
+            targets.map { it.packageName }.toSet()
+        } else {
+            preselectedPackages.intersect(targets.map { it.packageName }.toSet())
+        }
+        mutableStateOf(initial)
     }
     var restarting by remember(show) { mutableStateOf(false) }
     var error by remember(show) { mutableStateOf<String?>(null) }

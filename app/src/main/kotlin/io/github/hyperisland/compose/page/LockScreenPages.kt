@@ -86,7 +86,6 @@ import io.github.hyperisland.compose.page.home.OverviewInfoCard
 import io.github.hyperisland.compose.page.home.OverviewStatusGrid
 import io.github.hyperisland.compose.service.ApkInstaller
 import io.github.hyperisland.compose.service.HomeSystemInfo
-import io.github.hyperisland.compose.service.RestartScopeService
 import io.github.hyperisland.compose.service.SystemInfoProvider
 import io.github.hyperisland.compose.service.UpdateDownloadService
 import io.github.hyperisland.compose.service.UpdateService
@@ -140,12 +139,11 @@ internal fun LockHomePage(
     var supported by remember { mutableStateOf(Config.deviceSupported()) }
     var systemInfo by remember { mutableStateOf<HomeSystemInfo?>(null) }
     var framework by remember { mutableStateOf<FrameworkDetails?>(null) }
-    var refreshToken by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     var showRestartDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(isActive, refreshToken) {
-        if (!isActive && refreshToken == 0) return@LaunchedEffect
+    LaunchedEffect(isActive) {
+        if (!isActive) return@LaunchedEffect
         enabled = Config.enabled(context)
         enabledAppCount = Config.enabledAppCount(context)
         cornerRadiusDp = Config.cornerRadiusDp(context)
@@ -183,31 +181,11 @@ internal fun LockHomePage(
         title = stringResource(R.string.app_name),
         actionIcon = MiuixIcons.Refresh,
         actionDescription = stringResource(R.string.restart_scope),
-        // 重启作用域：先探测 root 再决定走哪条路。
-        //  · 有 root → 弹出作用域列表，用 su 精确重启选中的进程；
-        //  · 无 root → 走模块通道，广播给被 hook 的进程让它自杀重启（等价一次进程重启）。
-        //    2026-10-08 起作用域含壁纸进程（com.miui.miwallpaper），两条都要发；
-        //    壁纸侧接收器由 WallpaperTexProbe 在 WallpaperService#onCreate 时注册。
-        //    本机 SukiSU 下 adb/app 侧拿不到 su，必须走这条，否则按钮点了没反应。
+        // 重启作用域：与 HyperIsland 一致——**点进去先选作用域、再点重启**。
+        // 不再按 root 探测结果决定是否弹窗：弹窗一律显示（默认全选），重启本身需要 root，
+        // 拿不到 root 时由弹窗给出「请检查是否已给予本应用 ROOT 权限」，不做隐式广播回退。
         onAction = {
-            scope.launch {
-                if (RestartScopeService.hasRoot()) {
-                    showRestartDialog = true
-                    return@launch
-                }
-                context.sendBroadcast(
-                    Intent(Config.ACTION_RESTART_SYSTEMUI).setPackage(Config.SYSTEMUI_PACKAGE)
-                )
-                context.sendBroadcast(
-                    Intent(Config.ACTION_RESTART_WALLPAPER).setPackage(Config.WALLPAPER_PACKAGE)
-                )
-                Toast.makeText(
-                    context,
-                    context.getString(R.string.restart_scope_requested),
-                    Toast.LENGTH_LONG,
-                ).show()
-                refreshToken++
-            }
+            showRestartDialog = true
         },
         horizontalContentPadding = 12.dp,
         topContentPadding = 12.dp,
