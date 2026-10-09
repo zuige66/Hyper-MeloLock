@@ -900,7 +900,7 @@ final class LockScreenOverlay {
         LinearLayout header = new LinearLayout(context); header.setGravity(Gravity.CENTER_VERTICAL); card.addView(header, new LinearLayout.LayoutParams(-1, dp(64)));
         cardArt = new ImageView(context); cardArt.setScaleType(ImageView.ScaleType.CENTER_CROP); cardArt.setClipToOutline(true);
         artBackgroundDrawable = new GradientDrawable(); artBackgroundDrawable.setCornerRadius(dp(12)); artBackgroundDrawable.setColor(0xFF404040); cardArt.setBackground(artBackgroundDrawable);
-        // 点击小封面 → 跳当前音乐 App（锁屏上由系统先弹解锁验证，行为同点通知）。
+        // 点击小封面 → 跳当前音乐 App（见 launchMusicApp：先收锁屏再启动）。
         cardArt.setOnClickListener(v -> launchMusicApp());
         cardArt.setContentDescription("打开音乐应用");
         header.addView(cardArt, new LinearLayout.LayoutParams(dp(64), dp(64)));
@@ -1108,7 +1108,25 @@ final class LockScreenOverlay {
         return lum * alpha > 0.5f;
     }
 
-    /** 点击卡片小封面：跳当前媒体会话所属的音乐 App；没有会话或包名不可启动就静默忽略。 */
+    /**
+     * 点击卡片小封面：跳当前媒体会话所属的音乐 App；没有会话或包名不可启动就静默忽略。
+     *
+     * **为什么不能直接 `startActivity`**（2026-10-09 真机实测）：启动本身会被批准
+     * （`BAL_ALLOW_NON_APP_VISIBLE_WINDOW`，START_TASK_TO_FRONT），但**锁屏还亮着**，
+     * 系统不允许目标 Activity 变为可见 → 整个转场被 `transition.abort()` 回滚，
+     * 屏幕上毫无反应。日志证据：`START ... result code=3` 紧跟 `handleStartResult transition.abort()`。
+     *
+     * 收锁屏的两条路都已真机验证过：
+     * - ❌ `KeyguardManager.KeyguardLock`：Android 16 的 WMS 对系统 uid 直接抛
+     *   `UnsupportedOperationException: Only apps can use the KeyguardLock API`（权限给了也不行）。
+     * - ✅ 调 SystemUI 自己的 `KeyguardViewMediator`（实例由 HookEntry 构造器 hook 捕获）。
+     *   dex 核实过的两个落点：无参 `exitKeyguardAndFinishSurfaceBehindRemoteAnimation()`
+     *   （HyperOS 自加，语义就是「退出锁屏让后面的 surface 接管」）和
+     *   `dismiss(IKeyguardDismissCallback, CharSequence)`。反射按名字找、逐个试、异常兜底。
+     *
+     * 只在**非安全锁**（`isKeyguardSecure()==false`）时启用：有 PIN/图案的设备跳过收锁屏
+     * （绝不能绕过验证），退回直接启动。收锁屏失败同样退回直接启动——失败关闭。
+     */
     private void launchMusicApp() {
         try {
             MediaSource.Snapshot snapshot = shown;
@@ -1117,11 +1135,100 @@ final class LockScreenOverlay {
             Intent intent = context.getPackageManager().getLaunchIntentForPackage(pkg);
             if (intent == null) { Log.i(TAG, "Card tap: no launch intent for " + pkg); return; }
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            android.app.KeyguardManager keyguard = context.getSystemService(android.app.KeyguardManager.class);
+            boolean locked = keyguard != null && keyguard.isKeyguardLocked();
+            boolean secure = keyguard != null && keyguard.isKeyguardSecure();
+            Log.i(TAG, "Card tap: launch " + pkg + " locked=" + locked + " secure=" + secure);
+            if (locked && !secure && dismissKeyguardInternal(pkg)) {
+                // 锁屏已在退场。**这里不能太快**（2026-10-09 实测 150ms 会 OOM 崩 SystemUI）：
+                // dismiss → 解锁动画 → app 启动 → MIUI 转场快照全部压进同一窗口，
+                // SystemUI 的 256MB 堆瞬时堆积 ~180MB 直接 OOM（堆平时只有 ~75MB）。
+                // 正常的「解锁→再开 app」是两个动作，GC 有喘息时间；拆开时序对齐这个节奏。
+                main.postDelayed(() -> {
+                    try {
+                        android.app.KeyguardManager km = context.getSystemService(android.app.KeyguardManager.class);
+                        boolean stillLocked = km != null && km.isKeyguardLocked();
+                        Log.i(TAG, "Card tap: deferred launch " + pkg + " stillLocked=" + stillLocked);
+                        if (stillLocked) return;   // 没真解锁就别硬启动（会再被 abort），失败关闭
+                        context.startActivity(intent);
+                        Log.i(TAG, "Card tap: keyguard dismissed, app launched " + pkg);
+                    } catch (Throwable error) { Log.w(TAG, "Card tap deferred start failed", error); }
+                }, 800);
+                return;
+            }
             context.startActivity(intent);
-            Log.i(TAG, "Card tap: launching " + pkg);
         } catch (Throwable error) {
             Log.w(TAG, "Card tap launch failed", error);
         }
+    }
+
+    /**
+     * 调 `KeyguardViewMediator` 收掉锁屏。非安全锁才允许调（安全锁绝不能绕过验证）。
+     *
+     * 落点与字节码依据（2026-10-09 dex 反汇编核实）：
+     * - **`dismiss(IKeyguardDismissCallback, CharSequence)`（首选）**：往 Handler 发 DISMISS 消息，
+     *   分支里 `mShowing==true` 时会走 `StatusBarKeyguardViewManager.mActivityStarter` 的
+     *   原生 dismiss 路径（就是系统点通知那套）→ 非安全锁直接 keyguardGoingAway、跑原生解锁动画。
+     *   callback 不能赌 null 安全（handleMessage 在 SystemUI 主线程，NPE = SystemUI 崩溃），
+     *   用 `java.lang.reflect.Proxy` 在运行时造一个空实现（AIDL 接口是普通接口，可代理）。
+     * - `exitKeyguardAndFinishSurfaceBehindRemoteAnimation()`（备选）：真机实测条件不满足时
+     *   **内部静默 skip**（`surfaceAnimationRunning=false`），调用成功不代表生效，仅作兜底。
+     *
+     * @return true = 有落点被调用；false = 实例没捕获到 / 方法都失败 / 是安全锁
+     */
+    private boolean dismissKeyguardInternal(String pkg) {
+        Object mediator = HookEntry.keyguardMediator;
+        if (mediator == null) { Log.i(TAG, "Card tap: no mediator instance, plain start"); return false; }
+        ClassLoader loader = mediator.getClass().getClassLoader();
+        Object callback = null;
+        try {
+            Class<?> iface = Class.forName("com.android.internal.policy.IKeyguardDismissCallback", true, loader);
+            callback = java.lang.reflect.Proxy.newProxyInstance(loader, new Class<?>[] {iface},
+                    (proxy, method, args) -> {
+                        String n = method.getName();
+                        if (n.equals("onDismissSucceeded") || n.equals("onDismissError")) {
+                            Log.i(TAG, "Card tap dismiss callback: " + n);
+                            return null;
+                        }
+                        if (n.equals("asBinder")) return proxy;
+                        // **绝不能再转发回 proxy**（2026-10-09 血案）：系统注册回调时会打日志
+                        // `"Adding callback: " + callback` → 调 toString() → 旧代码兜底分支
+                        // `method.invoke(proxy, args)` 又调回自己 → 无限递归（实测栈深 14460 层、
+                        // 堆瞬间 +180MB → OOM）。Object 三个方法必须直接返回，其余一律 no-op。
+                        if (n.equals("toString")) return "MeloLockDismissCallback";
+                        if (n.equals("hashCode")) return System.identityHashCode(proxy);
+                        if (n.equals("equals")) return proxy == (args == null || args.length == 0 ? null : args[0]);
+                        return null;
+                    });
+        } catch (Throwable error) {
+            Log.w(TAG, "Card tap: dismiss callback proxy unavailable", error);
+        }
+        for (String name : new String[] {"dismiss", "exitKeyguardAndFinishSurfaceBehindRemoteAnimation"}) {
+            try {
+                java.lang.reflect.Method target = null;
+                for (java.lang.reflect.Method method : mediator.getClass().getDeclaredMethods()) {
+                    if (name.equals(method.getName())) { target = method; break; }
+                }
+                if (target == null) { Log.i(TAG, "Card tap: mediator has no " + name); continue; }
+                target.setAccessible(true);
+                Class<?>[] params = target.getParameterTypes();
+                if ("dismiss".equals(name) && params.length == 2
+                        && params[0].getName().contains("IKeyguardDismissCallback")) {
+                    if (callback == null) { Log.i(TAG, "Card tap: dismiss skipped (no callback)"); continue; }
+                    target.invoke(mediator, callback, "io.github.melolock");
+                } else if (params.length == 0) {
+                    target.invoke(mediator);
+                } else {
+                    Log.i(TAG, "Card tap: skip " + name + " (unexpected signature " + params.length + " args)");
+                    continue;
+                }
+                Log.i(TAG, "Card tap: keyguard exit via mediator#" + name);
+                return true;
+            } catch (Throwable error) {
+                Log.w(TAG, "Card tap: mediator#" + name + " failed", error);
+            }
+        }
+        return false;
     }
 
     private void showMusic() {

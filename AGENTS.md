@@ -73,6 +73,9 @@
 11. **不要与其他会话/人工并行编辑 `LockScreenOverlay.java`**。
 12. **构建必须加 `timeout`**：Windows 杀毒锁 dex 会让构建挂 3 小时才 FAIL。
 13. **改动前先 `git commit`**（见下方事故记录）；**改完同步三处文档**。
+14. **`java.lang.reflect.Proxy` 的 InvocationHandler 里，绝不能把调用转发回 `proxy` 自己**（如兜底 `method.invoke(proxy, args)`）。系统对回调做字符串拼接（`"Adding callback: " + callback`）就会调 `toString()` → 进 handler → 再调回 proxy → **无限递归**。2026-10-09 实测：站内栈 14460 层、堆 49MB→255MB 秒爆，SystemUI OOM/ANR 崩溃重启，被误判成「系统 dismiss 机制有问题」排查了三轮。Object 三方法必须直接返回。
+15. **从 SystemUI 直接 `startActivity` 在锁屏上是静默失效的**（启动被批准，但 `transition.abort()` 因为锁屏不让 Activity 变可见）。要点亮别的 App 必须先把锁屏收掉；而 `KeyguardManager.KeyguardLock` 对系统 uid 已禁用（Android 16 抛 `Only apps can use the KeyguardLock API`）——正解是反射调 `KeyguardViewMediator#dismiss(IKeyguardDismissCallback, CharSequence)`（实例用 `hookAllConstructors` 捕获），详见 `docs/DEVELOPMENT.md`。
+16. **卡死/OOM 类问题，DropBox 的 ANR 记录常常拿不到栈**（OOM 先杀进程，ANR trace 没写成；`/data/anr`、`/data/miuilog` 对 shell 不可读）→ 用**模块内临时探针**采样 Java 栈。**采样必须由模块自己排**（在触发点 `postDelayed` 采样），外部 `am broadcast` 对时会 miss：接收器默认跑在主线程，主线程卡死时 `onReceive` 会被排队到风暴之后。探针若用广播，须 `registerReceiver(..., scheduler=后台Handler, ...)`。
 
 **验证闭环**：装 APK → 重启作用域（`am crash` 或模块广播）→ 让用户复现 → 读日志对账 → 提交。
 设备拒绝 ADB 注入输入事件，UI 交互只能人工；SELinux 拦 shell 写 app data，配置只能由用户在 App 里改。

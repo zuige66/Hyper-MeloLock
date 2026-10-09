@@ -191,7 +191,16 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 **补充（2026-10-08）：播放器卡片底色 + 点小封面跳音乐 App**
 
 - **底色**：新增 element 键 `card_bg`（`Config.ELEMENT_DEFAULTS` 默认 `0xF2181818`＝历史硬编码黑，老配置外观不变）。外观页「播放器」分组现在共 **6 档 M3 风格 tonal 配色**（`CARD_BG_VALUES`，与标签一一对应）：深色 `0xF2181818`（原硬编码黑）/ 墨蓝 `0xF21E2A3C`（M3 深色容器调）/ 浅色 `0xF2C7C7CC`（中性浅灰）/ 蓝灰 `0xF2B6C1D6`（系统浅色磨砂同款，用户截图取色）/ 淡紫 `0xF2D8CEF4`（M3 secondaryContainer 系）/ 淡粉 `0xF2F4CEDA`（M3 tertiaryContainer 系）。**浅色档不只是换背景**：`buildPlayerCard` 里按底色 sRGB 亮度（`isLightColor`，alpha 折算，阈值 0.5）联动标题/副标题/时间/图标/进度条配色——浅灰底配白字根本看不清，所以整套联动换深字。`card_bg` 进 `elementSignature`，改完自动触发整场重建，无需额外处理。加新档位只改 Compose 端 `CARD_BG_VALUES`，SystemUI 端亮度判定是通用的。
-- **点击跳转**：`cardArt` 挂 `OnClickListener`（`launchMusicApp()`）：从 `shown.controller` 拿当前媒体会话包名 → `getLaunchIntentForPackage` + `FLAG_ACTIVITY_NEW_TASK` → `startActivity`。没有会话/包名起不来时静默忽略并打日志。锁屏上点它走系统标准路径：**先弹解锁验证（bouncer），通过后直达 App**（与点锁屏通知一致，不绕过锁屏）。
+- **点击跳转**：`cardArt` 挂 `OnClickListener`（`launchMusicApp()`）。**真机踩坑三轮，最终实现如下**（2026-10-09 定稿，全部有真机日志/dex 字节码佐证）：
+
+  1. **直接 `startActivity` 不生效**：启动本身会被批准（`BAL_ALLOW_NON_APP_VISIBLE_WINDOW`），但锁屏还亮着，系统不允许目标 Activity 变为可见 → `handleStartResult transition.abort()` 整个转场回滚，屏幕毫无反应（日志：`START ... result code=3` 紧跟 `transition.abort()`）。
+  2. **`KeyguardManager.KeyguardLock` 是死路**：SystemUI 虽然持 `DISABLE_KEYGUARD` 权限，但 Android 16 的 WMS 对系统 uid 直接抛 `UnsupportedOperationException: Only apps can use the KeyguardLock API`。
+  3. **正解：调 SystemUI 自己的 `KeyguardViewMediator`**。实例由 `HookEntry.hookMediatorCapture()`（`hookAllConstructors`）捕获；点封面时反射调 **`dismiss(IKeyguardDismissCallback, CharSequence)`**——反汇编该 ROM 的 `KeyguardViewMediator$14.handleMessage` 的 DISMISS 分支确认：`mShowing==true` 时走 `StatusBarKeyguardViewManager.mActivityStarter.executeRunnableDismissingKeyguard(...)`，**就是系统点通知那套原生 dismiss**，非安全锁直接 `keyguardGoingAway` 并跑原生解锁动画。备选落点 `exitKeyguardAndFinishSurfaceBehindRemoteAnimation()` 实测会因 `surfaceAnimationRunning=false` 内部静默 skip（调用成功≠生效），仅作兜底。
+  4. **回调不能传 null，也不能用会递归的 Proxy**（`dismiss` 的 callback 会被 `DismissCallbackRegistry` 存起来并打日志，null 有 NPE 崩 SystemUI 的风险）→ 用 `java.lang.reflect.Proxy` 造空实现。**这里踩了本次最贵的一个坑**：InvocationHandler 兜底分支写成 `method.invoke(proxy, args)` 把 `toString()` 转发回代理自己，而注册回调时系统恰好打 `"Adding callback: " + callback` → **无限递归**（真机栈深 **14460** 层），堆 49MB→255MB 秒爆 → OOM/ANR/SystemUI 崩溃重启。修法：Object 三方法（`toString`/`hashCode`/`equals`）直接返回，其余一律 no-op，绝不回环调用。
+  5. **启动要延后**：`dismiss` 后等 **800ms**（`km.isKeyguardLocked()` 复核为 false）再 `startActivity`，让解锁动画先跑完——挤在同一窗口会把内存峰值叠起来。
+  6. **只在非安全锁启用**：`isKeyguardSecure()==true` 时跳过收锁屏（绝不绕过验证），退回直接启动。任何一环失败都是失败关闭（打日志、不启动）。
+
+- **排查手段（可复用）**：DropBox（`dumpsys dropbox --print system_app_anr`）只有 CPU 采样、无卡死进程 Java 栈（OOM 先杀进程）；`/data/miuilog`、`/data/anr` 对 shell 不可读。有效做法是**模块内临时探针**：`StackDumpProbe`（独立类，`HookEntry` 挂载点安装）注册后台 Looper 的广播接收器 + **在 `dismiss` 调用处自排 12 张栈采样**（外部 `am broadcast` 对时会miss——接收器默认在主线程，主线程卡死时 `onReceive` 会被排队）。注意广播接收器必须 `registerReceiver(..., scheduler=后台Handler, ...)`。结论拿到后探针源码与安装调用已按约定删除。
 
 ### 左侧通知栏下拉：改成直接禁用该手势（当前方案）
 

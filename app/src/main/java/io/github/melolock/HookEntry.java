@@ -14,9 +14,22 @@ import java.util.WeakHashMap;
 public final class HookEntry implements IXposedHookLoadPackage {
     private static final String TAG = "MeloLock";
     private static final WeakHashMap<View, LockScreenOverlay> overlays = new WeakHashMap<>();
+    /**
+     * 捕获到的 `KeyguardViewMediator` 实例（点击小封面跳 App 时收锁屏用）。
+     *
+     * 2026-10-09 实测：从 SystemUI 直接 `startActivity` 启动音乐 App 会被系统以
+     * `transition.abort()` 静默回滚（锁屏不允许后面的 Activity 变可见）；而公开的
+     * `KeyguardManager.KeyguardLock` 在 Android 16 上对系统 uid 直接抛
+     * `UnsupportedOperationException: Only apps can use the KeyguardLock API`。
+     * 唯一出路是调 SystemUI 自己的 `KeyguardViewMediator`（dex 核实有无参的
+     * `exitKeyguardAndFinishSurfaceBehindRemoteAnimation()` 与
+     * `dismiss(IKeyguardDismissCallback, CharSequence)`）。实例由构造器 hook 捕获。
+     */
+    public static volatile Object keyguardMediator;
     @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
         if (!"com.android.systemui".equals(param.packageName) ||
                 !Config.FINGERPRINT.equals(Build.FINGERPRINT)) return;
+        Log.i(TAG, "HookEntry rev=HE2 (mediator capture + card-tap launch)");
         try {
             Class<?> root = XposedHelpers.findClass(
                     "com.android.keyguard.widget.HyperOSKeyguardRootView", param.classLoader);
@@ -49,6 +62,9 @@ public final class HookEntry implements IXposedHookLoadPackage {
             // 唤醒信号同理：装不上只是「快速息屏亮屏」退回固定延时预显。
             try { hookWakeSignal(param.classLoader); }
             catch (Throwable error) { Log.w(TAG, "Wake signal hook install failed", error); }
+            // 捕获锁屏中介实例：装不上只是「点小封面跳 App」退回直接启动（失败关闭）。
+            try { hookMediatorCapture(param.classLoader); }
+            catch (Throwable error) { Log.w(TAG, "Mediator capture hook install failed", error); }
             XposedBridge.log(TAG + ": hook armed for exact OS3 build");
             Log.i(TAG, "SystemUI root constructor hook installed");
         } catch (Throwable error) {
@@ -232,6 +248,21 @@ public final class HookEntry implements IXposedHookLoadPackage {
                 if (method.getName().toLowerCase(java.util.Locale.ROOT).contains(needle))
                     out.append(method.getName()).append(' ');
         return out.length() == 0 ? "(none)" : out.toString().trim();
+    }
+
+    /**
+     * 捕获 `KeyguardViewMediator` 实例。构造器 hook 最稳：中介随 SystemUI 启动创建，
+     * 拿到的是系统正在用的那个实例。所有构造器重载都挂（参数个数不猜）。
+     */
+    private static void hookMediatorCapture(ClassLoader loader) {
+        Class<?> type = XposedHelpers.findClass(
+                "com.android.systemui.keyguard.KeyguardViewMediator", loader);
+        XposedBridge.hookAllConstructors(type, new XC_MethodHook() {
+            @Override protected void afterHookedMethod(MethodHookParam hook) {
+                keyguardMediator = hook.thisObject;
+                Log.i(TAG, "KeyguardViewMediator instance captured");
+            }
+        });
     }
 
     private static void notifySystemWakingUp() {

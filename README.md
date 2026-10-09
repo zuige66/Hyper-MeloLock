@@ -76,7 +76,7 @@
 
 ### 👆 点封面直达音乐 App
 
-锁屏播放器卡片上的小专辑封面可以点：轻点后由系统先弹解锁验证，通过后直接打开当前正在播放的音乐应用。底色支持 7 档（含跟随封面动态取色），浅色档文字自动换深色。
+锁屏播放器卡片上的小专辑封面可以点：轻点即解锁并直接打开当前正在播放的音乐应用（与系统点通知进 App 的路径一致）。底色支持 7 档（含跟随封面动态取色），浅色档文字自动换深色。设置了锁屏密码的设备上，该手势暂不生效。
 
 </td>
 <td width="50%">
@@ -108,6 +108,12 @@
 ---
 
 ## 📸 效果预览
+
+<p align="center">
+<img src="docs/images/lockscreen-colors.jpg" width="720" alt="多配色锁屏效果"/>
+<br/><b>多配色锁屏</b>
+<br/>时间颜色可跟随专辑封面自动取色
+</p>
 
 <table>
 <tr>
@@ -153,7 +159,7 @@
 
 ## 🚀 安装
 
-1. 到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases) 下载最新 APK 安装（正式签名，可直接覆盖升级）。
+1. 到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases) 下载最新 APK 安装（正式签名，可直接覆盖升级）；最新版直链：[Hyper-MeloLock-v0.3.1.apk](https://github.com/zuige66/Hyper-MeloLock/releases/download/v0.3.1/Hyper-MeloLock-v0.3.1.apk)。
 2. 在 Vector 中启用本模块，**作用域勾这两项**，缺一项对应功能就不生效：
    - `com.android.systemui` —— 锁屏覆盖层本体，**必须**
    - `com.miui.miwallpaper` —— 封面壁纸化（不勾则仍是「在 SystemUI 里叠一层」的旧效果）
