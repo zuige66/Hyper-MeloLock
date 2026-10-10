@@ -1456,5 +1456,21 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **装机复现顺序（实测有效）**：`adb uninstall`（debug↔release 签名不同必须卸）→
       `adb install -r` → `am crash com.android.systemui`。**注意第一次 crash 后新 SystemUI
       可能没注入**（作用域扫描时机），查 `--pid=<新PID>` 里有没有 `MeloLock(`，没有就再 crash 一次。
+
+51. 2026-10-11 **发布 v0.3.3**（versionCode 13，tag `v0.3.3`）：
+
+    - Release 已建（id `409060606`），资产 `Hyper-MeloLock-v0.3.3.apk`（3,667,278 字节，
+      正式签名 SHA-1 `2b73265b…`）。发版物料（Release 正文 / 备用源 latest.json / 酷安推文）
+      集中在 `docs/release-v0.3.3.md`。
+    - **两条更新源都要发**：主源 `api.github.com/…/releases/latest`（无需鉴权，public 仓库可读），
+      备用源 `blog.zuiges.com/downloads/melolock/latest.json`（静态文件，**必须手动同步**，
+      字段缺一即判无效源）。判定：`versionCode` 整数比较 **或** `versionName` 三段比较，
+      任一更新即提示升级，两条源口径必须一致。
+    - **本机发版手册**（无 gh CLI / 无 token 时的路径）：git push + tag 走 SSH；
+      Release 与资产用 curl 调 API（`Authorization: Bearer $GH_PAT`，PAT 只放环境变量、不落盘）。
+      两个坑：① Windows curl 读不了 MSYS 的 `/tmp` 路径，临时文件要用 `$TEMP`（Windows 绝对路径）；
+      ② 访问 GitHub 要加 `--ssl-no-revoke`，否则 schannel 吊销检查失败（http=000）。
+      资产上传走 `uploads.github.com`，`Content-Type: application/vnd.android.package-archive`。
+    - 降级测试：`adb install -r -d <旧 apk>` 可装回旧版验证「检查更新」链路。
     - **注意**：`produceReleaseComposeMapping` 首跑可能因 maven central 网络抖动
       （asm 9.9.1 下载 TLS 握手失败）报错，重跑一次即可。

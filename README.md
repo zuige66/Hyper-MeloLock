@@ -159,7 +159,7 @@
 
 ## 🚀 安装
 
-1. 到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases) 下载最新 APK 安装（正式签名，可直接覆盖升级）；最新版直链：[Hyper-MeloLock-v0.3.2.apk](https://github.com/zuige66/Hyper-MeloLock/releases/download/v0.3.2/Hyper-MeloLock-v0.3.2.apk)。
+1. 到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases) 下载最新 APK 安装（正式签名，可直接覆盖升级）；最新版直链：[Hyper-MeloLock-v0.3.3.apk](https://github.com/zuige66/Hyper-MeloLock/releases/download/v0.3.3/Hyper-MeloLock-v0.3.3.apk)。安装包约 3.6MB。
 2. 在 Vector 中启用本模块，**作用域勾这两项**，缺一项对应功能就不生效：
    - `com.android.systemui` —— 锁屏覆盖层本体，**必须**
    - `com.miui.miwallpaper` —— 封面壁纸化（不勾则仍是「在 SystemUI 里叠一层」的旧效果）
@@ -197,7 +197,7 @@ apksigner verify --print-certs -v app/build/outputs/apk/release/app-release.apk
 
 - 模块**不做机型限制**（多机型测试期，任何设备都会尝试启用）：目前只在 Redmi Note 9 Pro（`gauguinpro`，`OS3.0.303.0.WNKCNXM`）上完整验证过，其他机型首页会显示「未验证机型」提示，如遇锁屏显示异常请到 GitHub 反馈。Hook 找不到目标界面时会自动恢复原生锁屏。
 - 封面壁纸化依赖 `com.miui.miwallpaper` 作用域，且必须重启过一次手机才生效；没勾或没重启时封面仍会正常显示，只是系统那些毛玻璃效果取不到专辑色，其余功能不受影响。
-- 「Xposed 框架」一行显示模块回报的运行状态（如「Vector（模块运行中，API v102）」）；框架的完整版本号无法在应用内读到，以管理器里的信息为准。
+- 「Xposed 框架」一行在读不到框架完整版本时，会显示模块回报的粗略状态（如「Vector（模块运行中，API v102）」）。**重启一次设备**后即可显示精确版本（含框架名、版本号、版本码）；刚装完还没重启就显示那行粗略文案是正常的。
 - 配置端的联系方式 / 支持开发 / 相关资源仍是占位状态；「使用教程」已指向博客介绍文章，点击任意外链都会先弹确认再跳转浏览器。
 
 ---
