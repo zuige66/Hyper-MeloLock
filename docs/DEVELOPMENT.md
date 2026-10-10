@@ -1445,5 +1445,16 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
       `apksigner verify` SHA-1 `2b73265b...` 与 keystore 记录一致。
     - **行为变化（需真机回归确认）**：① 首启不再发上游欢迎测试通知、不再上报遥测；
       ② release 首次安装需在 Vector 重勾作用域（包名未变，从旧 release 升级则不用）。
+    - **R8 踩坑（必读）**：模块内有两处「自己反射自己」被混淆打断——
+      `ShortcutAnimBackdrop` 用 `XposedHelpers.findAndHookMethod("io.github.melolock.LockScreenOverlay")`
+      加 `getObjectField(value, "shownArtwork"/"shown")` 读自己的字段，R8 后真机刷
+      `W/MeloLock: [scrim] artwork read failed … NoSuchFieldError: lm0#shownArtwork`（类名被压成
+      `lm0`、字段被改名），表现为转场遮罩拿不到封面、只能铺纯色。
+      **修法**：`-keep class io.github.melolock.LockScreenOverlay { *; }`。
+      教训：启用 R8 前盘点反射点要覆盖 `XposedHelpers.findAndHookMethod/getObjectField/
+      getStaticObjectField`，不能只 grep `Class.forName`。
+    - **装机复现顺序（实测有效）**：`adb uninstall`（debug↔release 签名不同必须卸）→
+      `adb install -r` → `am crash com.android.systemui`。**注意第一次 crash 后新 SystemUI
+      可能没注入**（作用域扫描时机），查 `--pid=<新PID>` 里有没有 `MeloLock(`，没有就再 crash 一次。
     - **注意**：`produceReleaseComposeMapping` 首跑可能因 maven central 网络抖动
       （asm 9.9.1 下载 TLS 握手失败）报错，重跑一次即可。
