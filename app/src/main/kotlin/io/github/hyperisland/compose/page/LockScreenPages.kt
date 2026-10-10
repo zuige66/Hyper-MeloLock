@@ -492,7 +492,7 @@ internal fun LockAppearancePage() {
 
     // 各分组的「恢复默认」键集（↺ 按钮）；背景组例外：三态存 SharedPreferences 非 elements。
     val sectionDefaultKeys: Map<String, List<String>> = mapOf(
-        "global" to listOf(Config.SWATCH_PICK, Config.SONG_FADE),
+        "global" to listOf(Config.SWATCH_PICK, Config.SONG_FADE, Config.HIDE_SHORTCUTS),
         "fx" to listOf(Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.COVER_POP, Config.PLAYER_CARD_POP),
         "date" to listOf(Config.DATE_ENABLED, Config.DATE_SIZE, Config.DATE_WEIGHT, Config.DATE_COLOR, Config.DATE_SPACING),
         "sign" to listOf(Config.SIGN_ENABLED, Config.SIGN_SIZE, Config.SIGN_WEIGHT, Config.SIGN_COLOR, Config.SIGN_SPACING),
@@ -536,6 +536,13 @@ internal fun LockAppearancePage() {
                     icon = null,
                     checked = value(Config.SONG_FADE) != 0,
                     onCheckedChange = { update(Config.SONG_FADE, if (it) 1 else 0) },
+                )
+                PreferenceSwitch(
+                    title = "隐藏相机 / 手电筒",
+                    summary = "隐藏锁屏底部那一排快捷图标（含触摸响应），锁屏更干净",
+                    icon = null,
+                    checked = value(Config.HIDE_SHORTCUTS) != 0,
+                    onCheckedChange = { update(Config.HIDE_SHORTCUTS, if (it) 1 else 0) },
                 )
             }
         }

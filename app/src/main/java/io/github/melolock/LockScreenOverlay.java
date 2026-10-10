@@ -101,6 +101,13 @@ final class LockScreenOverlay {
      */
     private static final long UNLOCK_COVER_HOLD_MS = 200;
     private static final long UNLOCK_COVER_FADE_MS = 460;
+    /** 快捷栏容器按 id 查找的最大次数（见 applyShortcutRowVisibility）：找不到就彻底放弃，不每帧扫树。 */
+    private static final int SHORTCUT_LOOKUP_LIMIT = 5;
+    /**
+     * 快捷栏被隐藏时，「展开通知 / 返回播放器」入口的兜底纵向位置（占前景高度的比例）。
+     * 真机 1080×2400：快捷带中心 y=2255、底部提示文案中心 y=2257 → 约屏高的 94%。
+     */
+    private static final float ENTRY_FALLBACK_CENTER_RATIO = 0.94f;
     /**
      * SCREEN_OFF 之后等面板**黑透**再"预显"场景的延时（避开熄屏动画）。
      *
@@ -347,6 +354,14 @@ final class LockScreenOverlay {
     private boolean fxVectorIcons;
     /** 调试日志开关（debug_log，默认关）：开＝周期性细节日志照打，关＝门控（见 MediaSource.verboseLog）。 */
     private boolean debugLog;
+    /**
+     * 隐藏锁屏底部快捷栏（手电筒 / 相机，hide_shortcuts，默认关）。
+     * 开＝整排容器置 GONE（图标与触摸响应一起没），入口按钮改走几何兜底对齐。
+     */
+    private boolean hideShortcuts;
+    /** 快捷栏容器缓存（见 applyShortcutRowVisibility）：避免每个 pre-draw 周期都全树按 id 找。 */
+    private View cachedShortcutRow;
+    private int shortcutRowLookups;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -422,6 +437,9 @@ final class LockScreenOverlay {
     LockScreenOverlay(View root) {
         this.root = (ViewGroup) root;
         context = root.getContext();
+        // 新的场景实例＝新的锁屏视图树：快捷栏缓存必须清掉，否则会一直对着上一轮的旧 View 改可见性。
+        cachedShortcutRow = null;
+        shortcutRowLookups = 0;
         keyguardGuard = () -> {
             if (suspended) {
                 // 解锁后场景已淡出并置 GONE，守卫必须完全放手：继续隐藏原生层会破坏，
@@ -454,6 +472,7 @@ final class LockScreenOverlay {
                 } else {
                     hideNativeWallpaperLayers(root);
                     hideNativeClockLayers(root);
+                    applyShortcutRowVisibility();
                     // 通知栈的显隐完全由 expanded 决定：展开时它自己在淡入（由 show() 保证可见），
                     // 收起时立即隐藏——不再做淡出（淡出层盖在时钟上，会让时间看起来闪一下）。
                     if (expanded) show(notifications); else hide(notifications);
@@ -874,8 +893,10 @@ final class LockScreenOverlay {
         fxCoverPop = elem(elements, Config.COVER_POP) != 0;
         fxPlayerCardPop = elem(elements, Config.PLAYER_CARD_POP) != 0;
         fxVectorIcons = elem(elements, Config.PLAYER_VECTOR_ICONS) != 0;
+        hideShortcuts = elem(elements, Config.HIDE_SHORTCUTS) != 0;
         Log.i(TAG, "Fx: button=" + fxButtonFeedback + " smooth=" + fxSmoothProgress
-                + " pop=" + fxCoverPop + " cardPop=" + fxPlayerCardPop + " songFade=" + songFadeEnabled);
+                + " pop=" + fxCoverPop + " cardPop=" + fxPlayerCardPop + " songFade=" + songFadeEnabled
+                + " hideShortcuts=" + hideShortcuts);
         signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
         boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
         boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
@@ -1566,7 +1587,7 @@ final class LockScreenOverlay {
     private void showMusic() {
         boolean animateIn = !playerSceneVisible;
         boolean returning = expanded;   // 从通知页返回：走共享元素的反向动画
-        expanded = false; hideNativeWallpaperLayers(root); hideNativeClockLayers(root);
+        expanded = false; hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility();
         // 取消动画**只在真的发生页面切换时做**：showMusic() 是每次快照（约 2 秒一次）都被
         // render() 调一遍的，无条件 cancel 会把刚启动的组件动效（封面弹入）在画出第一帧前
         // 就掐掉，而且缩放会永远卡在动画起点 0.9 —— 真机表现就是「封面弹入没生效」。
@@ -1673,7 +1694,7 @@ final class LockScreenOverlay {
         }
         if (notificationButton != null) notificationButton.setVisibility(View.VISIBLE);
         ensureBackgroundOrder();
-        if (root != null) { hideNativeWallpaperLayers(root); hideNativeClockLayers(root); }
+        if (root != null) { hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility(); }
     }
 
     /**
@@ -1712,7 +1733,7 @@ final class LockScreenOverlay {
         expanded = true; playerSceneVisible = false; main.removeCallbacks(progressTicker);
         // The album backdrop and the module clock remain visible. Only the native
         // notification stack is revealed; restoring all views would show wallpaper.
-        show(notifications); hideNativeWallpaperLayers(root); hideNativeClockLayers(root);
+        show(notifications); hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility();
         immersiveClock.setVisibility(View.VISIBLE); immersiveClock.setAlpha(1f);
         foreground.animate().cancel(); cover.animate().cancel(); playerCard.animate().cancel();
         foreground.setVisibility(View.VISIBLE); foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f);
@@ -2300,6 +2321,12 @@ final class LockScreenOverlay {
         entryAlignAttempts++;
         View anchor = findShortcutAnchor();
         int height = foreground.getHeight();
+        if (anchor == null && hideShortcuts && height > 0) {
+            // 快捷栏被我们 GONE 了，量不到锚点是预期内的。按屏高比例把入口放回原快捷带的位置，
+            // 否则入口会停在默认 dp(10)（贴屏幕底边，压住底部提示文案/手势条）。
+            fallbackAlignEntryToBand(height);
+            return;
+        }
         if (anchor == null || height <= 0) {
             // 头三次尝试会附带一次「底部带子里到底有什么」的清单，方便换机型/换版本时改判据。
             if (entryAlignAttempts <= 3) {
@@ -2323,6 +2350,26 @@ final class LockScreenOverlay {
         params.bottomMargin = margin;
         notificationButton.setLayoutParams(params);
         Log.i(TAG, "Entry aligned to shortcut row: anchor=" + anchor.getHeight() + "px centerY=" + anchorCenterY + " margin=" + margin + "px");
+    }
+
+    /**
+     * 快捷栏被隐藏时的入口兜底对齐：真机 1080×2400 上快捷带中心 y≈2255（底部提示文案中心 2257），
+     * 约为屏高 94%，按前景高度折算即可。
+     */
+    private void fallbackAlignEntryToBand(int height) {
+        FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) notificationButton.getLayoutParams();
+        if (params == null) return;
+        int anchorCenterY = Math.round(height * ENTRY_FALLBACK_CENTER_RATIO);
+        int margin = height - anchorCenterY - params.height / 2;
+        if (margin < 0 || margin > dp(160)) {
+            Log.i(TAG, "Fallback entry band rejected: centerY=" + anchorCenterY + " margin=" + margin + "px");
+            return;
+        }
+        entryAligned = true;
+        if (margin == params.bottomMargin) return;
+        params.bottomMargin = margin;
+        notificationButton.setLayoutParams(params);
+        Log.i(TAG, "Entry aligned to fallback band (shortcuts hidden): centerY=" + anchorCenterY + " margin=" + margin + "px");
     }
 
     /**
@@ -2581,6 +2628,43 @@ final class LockScreenOverlay {
      * 现在把 id / 类名里带 `aod`、`doze`、`superwallpaper` 的也一并按住，并在**首次**按住时打一行日志，
      * 便于确认到底盖住了哪些视图（幂等：已 hide 过的不再重复）。
      */
+    /**
+     * 按 `hide_shortcuts` 显隐锁屏底部快捷栏（手电筒 / 相机那一排）。
+     *
+     * 为什么必须每次锁屏都重复施加：系统回到锁屏时会重建/重显这一排，我们 hide 过的
+     * 视图下次是新实例；反过来关掉开关时也要**显式恢复 VISIBLE**——藏过一次就别指望
+     * 系统自己把它放回来。
+     *
+     * 成本：全树按 id 查找不便宜，所以结果缓存进 `cachedShortcutRow`，最多找
+     * `SHORTCUT_LOOKUP_LIMIT` 次（找不到就放弃，宁可不隐藏也不每帧扫树）。
+     * 换 ROM / 换版本时 id 改名会表现为「开关无效」，日志里能看到查找次数。
+     */
+    private void applyShortcutRowVisibility() {
+        if (!hideShortcuts && cachedShortcutRow == null && shortcutRowLookups >= SHORTCUT_LOOKUP_LIMIT) return;
+        if (root == null && windowRoot == null) return;
+        if (cachedShortcutRow == null && shortcutRowLookups < SHORTCUT_LOOKUP_LIMIT) {
+            shortcutRowLookups++;
+            View container = windowRoot != null ? windowRoot : root;
+            // 容器优先（一次 GONE 整排）；容器 id 改名时退而求其次逐个按钮。
+            String[] names = { "keyguard_shortcut_container", "keyguard_shortcut_layout",
+                    "shortcut_view_left_layout", "shortcut_view_right_layout" };
+            for (String name : names) {
+                View view = findByIdInAnyPackage(container, name);
+                if (view != null) { cachedShortcutRow = view; break; }
+            }
+            if (cachedShortcutRow == null && shortcutRowLookups == 1) {
+                Log.i(TAG, "Shortcut row not found (lookup " + shortcutRowLookups + "); hide_shortcuts inactive");
+            }
+        }
+        if (cachedShortcutRow == null) return;
+        int target = hideShortcuts ? View.GONE : View.VISIBLE;
+        if (cachedShortcutRow.getVisibility() != target) {
+            cachedShortcutRow.setVisibility(target);
+            Log.i(TAG, "Shortcut row " + (hideShortcuts ? "hidden" : "restored")
+                    + " id=" + resourceName(cachedShortcutRow));
+        }
+    }
+
     private void hideNativeWallpaperLayers(View view) {
         if (view == null || view == background) return;
         String idName = resourceName(view);

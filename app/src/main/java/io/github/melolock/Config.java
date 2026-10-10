@@ -187,6 +187,16 @@ public final class Config {
      */
     public static final String DEBUG_LOG = "debug_log";
 
+    /**
+     * 隐藏锁屏底部快捷栏（手电筒 / 相机那一排）。
+     *
+     * 2026-10-11 zuige 要求：沉浸场景要干净，图标和它们的触摸响应一起去掉。
+     * 打开后我们的「展开通知 / 返回播放器」入口不能再按快捷栏实测坐标对齐（那排视图已经
+     * GONE），改走几何兜底——见 `LockScreenOverlay.alignEntryWithShortcutRow()`。
+     * 默认关：动的是系统自带的相机/手电筒入口，属于激进改动，交给用户选。
+     */
+    public static final String HIDE_SHORTCUTS = "hide_shortcuts";
+
     /** 字符串值元素：签名正文。走同一条 /elements 通道（value 列本来就是字符串形式），但不进整数解析。 */
     public static final String DATE_SIGNATURE = "date_signature";
 
@@ -243,6 +253,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(PLAYER_CARD_POP, 1);
         ELEMENT_DEFAULTS.put(PLAYER_VECTOR_ICONS, 1);
         ELEMENT_DEFAULTS.put(DEBUG_LOG, 0);
+        ELEMENT_DEFAULTS.put(HIDE_SHORTCUTS, 0);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */
