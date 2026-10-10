@@ -15,6 +15,12 @@
 # 这里把成员一起钉住，防止后续有人在 Provider 里加反射点后踩坑。
 -keep class io.github.melolock.ConfigProvider { *; }
 
+# LockScreenOverlay 会被本模块自己按名字反射：
+#   ① ShortcutAnimBackdrop 用 XposedHelpers.findAndHookMethod("io.github.melolock.LockScreenOverlay", …)
+#   ② 同一处用 getObjectField 读它的 shownArtwork / shown 字段。
+# 类名与字段名都不能动（2026-10-11 真机踩到：NoSuchFieldError: lm0#shownArtwork）。
+-keep class io.github.melolock.LockScreenOverlay { *; }
+
 # libxposed service 由管理器（Vector）跨进程绑定回调，接口实现挂在
 # Application（Manifest 保留）上；库自带 consumer 规则，这里只兜底不警告。
 -dontwarn io.github.libxposed.**
