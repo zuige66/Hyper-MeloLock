@@ -1259,3 +1259,21 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     `MiuixIcons.ArrowRight` 会报「receiver type mismatch」。另：`ImageVector` 的正确包名是
     `androidx.compose.ui.graphics.vector.ImageVector`（不是 `...graphics.ImageVector`）。
 
+
+43. 2026-10-10 **两处图标微调（zuige 截图反馈）**：
+
+    - **「恢复默认」图标**：`MiuixIcons.Reset` 是撤回弯钩（↩ 观感，zuige 说像「撤回」），
+      换成 `MiuixIcons.Refresh`（循环圆圈箭头，与右上角重启作用域同款）。`Reset` import 已删
+      （全项目仅此一处使用）。
+    - **关于页开发者卡片箭头**：真身在 `LockScreenPages.kt` 的 `DeveloperCard`——原来根本
+      不是 Icon，是文字符号 `"▸"`（15sp，zuige 截图里的小实心三角）。换成
+      `MiuixIcons.Basic.ArrowRight` 17dp + 原 spring 旋转。**又踩「上游文件是死代码」坑**：
+      第一轮误改了上游 `AboutPage.kt`（那份用的是 `about_developer_avatar`，本项目开发者卡片
+      在 `LockAboutPage`＝`LockScreenPages.kt` 内、用 `dev_avatar`），已 `git checkout` 回滚。
+      判别方法同 `OverviewPage` 之坑：先搜资源/导航真身，再动手。
+    - **验证插曲（重申红线）**：`am crash` 重启 SystemUI 后日志出现
+      `ClassNotFoundException: HyperOSKeyguardRootView` + `r8-map-id` 混淆帧——是 **Vector 框架
+      对同包第二次回调的空 PathClassLoader 常态**（`DexPathList[[],...]` 必然找不到类，失败即忽略），
+      混淆帧来自框架自身（`tYuD.Xmj...`）不是我们的包；判断依据是同一秒前后的
+      `Unlock/Wake signal hook armed`、`Keyguard root attached / compatible` 全部正常。
+      **别被异常栈吓到，先看正常标记行。**

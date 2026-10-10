@@ -119,7 +119,6 @@ import top.yukonga.miuix.kmp.icon.extended.Months
 import top.yukonga.miuix.kmp.icon.extended.Music
 import top.yukonga.miuix.kmp.icon.extended.Play
 import top.yukonga.miuix.kmp.icon.extended.Refresh
-import top.yukonga.miuix.kmp.icon.extended.Reset
 import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.icon.extended.Update
 import top.yukonga.miuix.kmp.icon.extended.WorldClock
@@ -1100,13 +1099,13 @@ private fun DeveloperCard(openLink: (String) -> Unit) {
                 )
             }
             Spacer(Modifier.weight(1f))
-            Text(
-                text = "▸",
+            Icon(
+                imageVector = MiuixIcons.Basic.ArrowRight,
+                contentDescription = null,
                 modifier = Modifier
                     .padding(start = 12.dp)
                     .graphicsLayer { rotationZ = arrowRotation },
-                fontSize = 15.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
         }
         if (expanded) {
@@ -1455,7 +1454,7 @@ private fun CollapsibleSection(
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
-                    imageVector = MiuixIcons.Reset,
+                    imageVector = MiuixIcons.Refresh,
                     contentDescription = "恢复默认",
                     tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                     modifier = Modifier.size(20.dp),
