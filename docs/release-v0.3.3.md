@@ -50,10 +50,19 @@ Hyper MeloLock v0.3.3 更新：安装包从 39MB 瘦到 3.6MB
 【下载】
 https://github.com/zuige66/Hyper-MeloLock/releases/tag/v0.3.3
 
-有问题评论区反馈，带上机型和系统版本。
+【交流】
+QQ 群：1129363923
+加群链接：https://qm.qq.com/q/mEJT74MJa0
+（应用「关于」页里也有入口，装了 QQ 会直接拉起群资料卡）
+
+有问题群里或评论区反馈，带上机型和系统版本。
+
+> 群号与短链取自 `LockScreenPages.kt` 的 `QQ_GROUP_NUMBER` / `QQ_GROUP_JOIN_URL`，
+> 与应用内「QQ 交流群」入口完全一致，改群号时两处要同步。
 
 ## 备选短版（酷安动态/评论区用）
 
 Hyper MeloLock v0.3.3：安装包 39MB → 3.6MB，顺手修了转场背景偶尔变纯色的问题，
 不再上报任何统计数据。旧版直接覆盖安装，不用卸载。
 下载：https://github.com/zuige66/Hyper-MeloLock/releases/tag/v0.3.3
+交流 QQ 群：1129363923（https://qm.qq.com/q/mEJT74MJa0）
