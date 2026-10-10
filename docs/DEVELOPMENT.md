@@ -621,7 +621,7 @@ SHA-256: 65:7C:4D:30:52:BC:13:18:98:1E:65:F6:7E:8B:0A:DD:DE:E6:72:01:DB:AC:92:A1
 
 校验方式：`apksigner verify --print-certs -v app/build/outputs/apk/release/app-release.apk`。
 
-**Release 不开混淆**：这是 Xposed 模块，Hook 与 ROM 内部视图都靠类名/方法名字符串定位，R8 收益极小、风险不小。另外迁入的 HyperIsland 多语言资源里有第三方库遗留的 `ExtraTranslation`，所以 `lint.checkReleaseBuilds` 关掉了，否则 release 会被它们拦住。
+**Release 已启用 R8 混淆 + 资源收缩（2026-10-10 变更，覆盖旧约定）**：原「不开混淆」的理由是 Xposed 靠类名定位——但实际盘点后，框架只按 `xposed_init` 的 3 个 FQN 反射实例化入口，Manifest 组件由 AGP 的 aapt 规则自动保留，模块内反射（`Class.forName`/`getDeclaredMethod`）全部指向 ROM 类。因此 keep 面（`app/proguard-rules.pro`）只需钉住 3 个入口类 + `ConfigProvider`，其余全混淆。配合 HyperIsland 死代码清理（见变更 #50），release APK 从 39MB 降到 3.6MB。**红线：新增按类名/字符串反射本模块类的代码时，必须同步加 keep 规则并真机回归。**另外 `lint.checkReleaseBuilds` 仍关闭（第三方库 `ExtraTranslation` 历史遗留）。
 
 Windows 上 `:app:dexBuilderDebug` 偶尔会以 `Unable to delete directory ... project_dex_archive` 或 `desugar_graph\\...\\graph.bin (拒绝访问)` 失败：这是杀毒/索引进程仍占用刚生成的 `.dex`，不是代码问题（Kotlin 与 Java 编译此时已通过）。删掉被占用的中间目录后重跑即可，必要时降并发：
 
@@ -1414,3 +1414,36 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
       =VectorLegacyBridge），App 端 fallback 用它做「是 Vector」的进程内证据；旧包没回报
       该字段时按设备门禁仍显示 Vector。删探针后 SystemUI 日志只剩一行
       `Framework reported: version=102 bridgeTag=VectorLegacyBridge ...`。
+
+50. 2026-10-11 **项目精简：HyperIsland 死代码清理 + R8 混淆启用（release 39MB → 3.6MB）**：
+
+    - **死代码删除**（Kotlin 237 → 38 个文件）：
+      - `io.github.hyperisland.xposed.**`（约 120 个文件，灵岛全部 Hook / 通知模板 /
+        islanddispatch / 屏幕录制钩子）——`xposed_init` 只登记 3 个 MeloLock 入口，
+        这些类永远不会被加载；
+      - `screenrecorder/` 三件套、死页面（`page/apps/**`、`page/settings/**`、
+        `AboutPage`/`AppsPage`/`SettingsPage`）、死服务（AiConfig/HubClient/
+        IslandBackground/IslandMaterial/KeepIsland/TestNotification/Analytics）、
+        `core/helper`、`core/data`、死组件（PredictiveNavigation*、AiConfigDialogs 等）；
+      - `AppShell.kt` 瘦身：4 个 tab 全是 Lock 页面，detail 导航层（渠道/Toast/AI 配置/
+        扩展钩子页）的入口状态无任何赋值点，属死路径，整层删除；
+      - `OverviewPage` 死 Composable 删除（见 AGENTS.md 红线），只留共享卡片；
+      - `FlutterPrefsRepository` 918 → 约 100 行，只留活代码用到的读写与统计。
+    - **从 git 里捞回来的活代码**：`AboutBackground.kt`（LockAboutPage 的 hero 渐变动效
+      `AnimatedAboutBackground` / `rememberAboutAnimationTime` / `animatedGradientColors`，
+      原来在已删的上游 AboutPage.kt 里）；`liquid/Lens.kt`、`liquid/Vibrancy.kt`
+      （LiquidGlassNavigationBar 实际在用，第一轮误删后恢复）。
+    - **依赖清理**：删 `dexkit`（省 4 ABI 的 libdexkit.so，1.4MB）、`aptabase`
+      （上游 AnalyticsService 在往 `aptabase.1812z.top` 发用户环境快照——上游端点，非本项目，
+      顺带除掉）、`hyperisland_kit`、`graphics-shapes`，全部零引用。
+    - **资源清理**：strings 7 语言 1023 → 120 条（脚本按 R.string / @string 引用扫描），
+      死 drawable/raw/layout（灵岛 focus 通知布局、face_unlock、上游头像字标等）删除。
+    - **R8 启用**：`isMinifyEnabled = true` + `isShrinkResources = true`，
+      `app/proguard-rules.pro` keep 3 个 xposed 入口 + `ConfigProvider`。
+      验证：单 dex 2.8MB；dex 内 HookEntry/ShortcutAnimBackdrop/WallpaperCover/
+      ConfigProvider/XposedPrefsSyncApp/UpdateDownloadService 与 `rev=HE` 字符串全部在；
+      `apksigner verify` SHA-1 `2b73265b...` 与 keystore 记录一致。
+    - **行为变化（需真机回归确认）**：① 首启不再发上游欢迎测试通知、不再上报遥测；
+      ② release 首次安装需在 Vector 重勾作用域（包名未变，从旧 release 升级则不用）。
+    - **注意**：`produceReleaseComposeMapping` 首跑可能因 maven central 网络抖动
+      （asm 9.9.1 下载 TLS 握手失败）报错，重跑一次即可。

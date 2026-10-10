@@ -49,9 +49,15 @@ android {
     }
     buildTypes {
         release {
-            // 不开混淆：这是个 Xposed 模块，Hook 与 ROM 内部视图都靠类名/方法名字符串定位，
-            // 开 ProGuard/R8 收益极小、风险不小。
-            isMinifyEnabled = false
+            // 2026-10-10 起启用 R8：HyperIsland 死代码删除后，剩下的混淆面完全可控——
+            // Xposed 只按类名实例化 xposed_init 的 3 个入口（见 proguard-rules.pro），
+            // Manifest 组件由 AGP 自动保留，模块内反射全部指向 ROM 类。
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             if (signingConfigs.findByName("release") != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
