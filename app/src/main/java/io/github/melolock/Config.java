@@ -146,7 +146,10 @@ public final class Config {
      * 主色来源（全局一项，所有跟随档共用同一主色保证色相统一）：
      * 0＝最鲜艳优先（Palette 鲜艳桶 vibrant→darkVibrant→lightVibrant→muted→…，现状），
      * 1＝占比优先（直接取 population 最大的色块；2026-10-09 起不再在 top5 里挑鲜艳——
-     * 旧版两档挑出来的色大多相同，用户感知不到差别）。
+     * 旧版两档挑出来的色大多相同，用户感知不到差别），
+     * 2＝色族占比（近似色归并成族再比人口：有彩色按色相 ≤30° 归族、无彩色不参赛，
+     * 彩族总人口 ≥15% 才有资格赢、族代表取族内最大桶；专治照片类封面「绿草被拆桶、
+     * 阴影黑桶抢赢」「小红标偷家」，2026-10-10 zuige 四张样张定标）。
      */
     public static final String SWATCH_PICK = "swatch_pick";
 
@@ -161,11 +164,28 @@ public final class Config {
      * 组件动效开关（外观页「动效」分组，均默认开）：
      * button_feedback＝控制按钮按压缩放回弹 + 播放/暂停切换弹跳；
      * smooth_progress＝进度条在两次采样之间平滑推进（跳变 >15% 视为切歌/拖动，直接落位）；
-     * cover_pop＝换歌时大封面缩放弹入（需 song_fade 同时开启，弹入叠加在交叉过渡上）。
+     * cover_pop＝换歌时大封面缩放弹入（需 song_fade 同时开启，弹入叠加在交叉过渡上）；
+     * player_card_pop＝换歌时播放器卡片与大封面同款缩放弹入（独立开关）。
      */
     public static final String BUTTON_FEEDBACK = "button_feedback";
     public static final String SMOOTH_PROGRESS = "smooth_progress";
     public static final String COVER_POP = "cover_pop";
+    public static final String PLAYER_CARD_POP = "player_card_pop";
+
+    /**
+     * 播放键图标风格（外观页「播放器」分组，默认开）：
+     * player_vector_icons＝1 用矢量圆润图标（双三角/实心块），0 回退旧版字符播放键「◀ Ⅱ ▶ ⌁ ♡ ▣」。
+     */
+    public static final String PLAYER_VECTOR_ICONS = "player_vector_icons";
+
+    /**
+     * 调试日志开关（「设置」页底部「调试」分组，默认关）：
+     * 开＝SystemUI 侧输出周期性细节日志（每轮媒体快照的 Session/Media ready、逐帧 render 跳过、
+     * 逐句歌词的取色结果等）；关＝只留生命周期/状态变化/错误级日志。
+     * 平时关闭防止刷爆 logcat 缓冲（媒体通知日志几分钟就能把主缓冲轮转空的教训，2026-10-10）；
+     * 排查问题时在 App 里一开，adb 抓到的就全是干货。
+     */
+    public static final String DEBUG_LOG = "debug_log";
 
     /** 字符串值元素：签名正文。走同一条 /elements 通道（value 列本来就是字符串形式），但不进整数解析。 */
     public static final String DATE_SIGNATURE = "date_signature";
@@ -220,6 +240,9 @@ public final class Config {
         ELEMENT_DEFAULTS.put(BUTTON_FEEDBACK, 1);
         ELEMENT_DEFAULTS.put(SMOOTH_PROGRESS, 1);
         ELEMENT_DEFAULTS.put(COVER_POP, 1);
+        ELEMENT_DEFAULTS.put(PLAYER_CARD_POP, 1);
+        ELEMENT_DEFAULTS.put(PLAYER_VECTOR_ICONS, 1);
+        ELEMENT_DEFAULTS.put(DEBUG_LOG, 0);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */

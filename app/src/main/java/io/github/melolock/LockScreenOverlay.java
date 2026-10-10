@@ -18,6 +18,7 @@ import android.graphics.Color;
 import android.graphics.RenderEffect;
 import android.graphics.Shader;
 import android.graphics.Typeface;
+import io.github.hyperisland.R;
 import androidx.palette.graphics.Palette;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
@@ -180,7 +181,7 @@ final class LockScreenOverlay {
                 screenOffAtMs = android.os.SystemClock.elapsedRealtime();
                 // Keep the already-rendered scene in SystemUI memory.  Rebuilding it
                 // only after SCREEN_ON is what caused the one-second stock-screen flash.
-                Log.i(TAG, "SCREEN_OFF kept=" + state());
+                if (debugLog) Log.i(TAG, "SCREEN_OFF kept=" + state());
                 main.removeCallbacks(progressTicker);
                 // 暗期预显主触发已改到「系统唤醒信号」在面板还黑着时同步摆可见性（见 onSystemWakingUp）；
                 // 这里只留兜底：万一唤醒信号没来（极少见），仍按原延时摆回，亮屏第一帧还是我们的。
@@ -295,7 +296,8 @@ final class LockScreenOverlay {
     private TextView dateLine, signatureLine;
     /** 播放器卡片可回填的配色件：底色/小封面底 + 卡内三枚非控制图标。 */
     private GradientDrawable cardBackgroundDrawable, artBackgroundDrawable;
-    private TextView iconWave, iconHeart, iconQueue;
+    /** 非控制图标三枚：矢量模式是 ImageView，旧字符模式是 TextView，统一按 View 持有（配色联动时按实际类型分发）。 */
+    private View iconWave, iconHeart, iconQueue;
     /** 卡片底色配置（create 时读一次）：0＝跟随封面，其余为手选 ARGB。 */
     private int cardBgConfig;
     /** 「跟随封面」缓存（主线程读写）：按曲目 key（title|artist|尺寸）缓存取色结果——
@@ -304,7 +306,7 @@ final class LockScreenOverlay {
     /** 取色结果：专辑主色原始 RGB（0＝未取到/取色失败）。各「跟随封面」档按各自取色风格从这里推导。 */
     private int autoSwatch;
     /** 缓存该结果时的主色来源档位；换档位必须重取（见 maybeExtractCardPalette 的缓存 key 注释）。 */
-    private boolean autoSwatchPick;
+    private int autoSwatchPick;   // 主色来源档位快照（0=vibrant 1=dominant 2=family），与 swatchPickMode 配套做缓存命中
     // ── 切歌动效：封面交叉淡化 + 文字换字淡入淡出 + 跟随配色渐变 ──
     // 三者都是「封面/文字真的变了」才跑一次的短过渡，不碰「每 2 秒快照引用去重」的性能红线。
     /** 封面交叉淡化时长：一次性 TransitionDrawable，成本远低于周期性模糊层重绘。 */
@@ -334,11 +336,17 @@ final class LockScreenOverlay {
     /** 各「跟随封面」档的取色风格（create 时读定）：false＝低饱和磨砂（M3E），true＝鲜艳原色直出。 */
     private boolean cardBgPick, clockPick, datePick, signPick, entryColorPick, entryBgPick;
     /** 主色来源（全局，create 时读定）：false＝最鲜艳优先（鲜艳桶优先），true＝占比最高直取。 */
-    private boolean swatchDominant;
+    private int swatchPickMode;   // 0=vibrant 1=dominant 2=family（色族占比）
     /** 切歌柔和过渡总开关（song_fade，默认开）：关＝封面/文字/配色全部瞬时切换（旧版行为）。 */
     private boolean songFadeEnabled;
     /** 组件动效开关（外观页「动效」分组，create 时读定）：按钮反馈 / 进度条平滑 / 封面弹入。 */
-    private boolean fxButtonFeedback, fxSmoothProgress, fxCoverPop;
+    private boolean fxButtonFeedback, fxSmoothProgress, fxCoverPop, fxPlayerCardPop;
+    /** 播放器卡片弹入动画窗口标记：弹入进行中，showMusic() 的幂等 scale 复位必须让路（否则 0.90 起点同帧被打平）。 */
+    private boolean cardPopRunning;
+    /** 播放键图标风格（player_vector_icons，默认开）：开＝矢量圆润图标，关＝旧版字符播放键。create 时读定。 */
+    private boolean fxVectorIcons;
+    /** 调试日志开关（debug_log，默认关）：开＝周期性细节日志照打，关＝门控（见 MediaSource.verboseLog）。 */
+    private boolean debugLog;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -350,7 +358,14 @@ final class LockScreenOverlay {
         @Override public void run() {
             if (playPause == null || pendingGlyph == null || pendingGlyph.equals(shownPlayGlyph)) return;
             shownPlayGlyph = pendingGlyph;
-            playPause.setText(pendingGlyph);
+            // 旧字符模式是 TextView（pendingGlyph 是 "play"/"pause" 语义值，映射回「▶」「Ⅱ」）；
+            // 矢量模式是 ImageView，不能 setImageResource（宿主解析不了模块 id，见 icon() 注释）。
+            if (playPause instanceof TextView) {
+                ((TextView) playPause).setText("pause".equals(pendingGlyph) ? "Ⅱ" : "▶");
+            } else {
+                Drawable glyphDrawable = moduleDrawable("pause".equals(pendingGlyph) ? R.drawable.ic_media_pause_block : R.drawable.ic_play_rounded);
+                if (glyphDrawable != null) ((ImageView) playPause).setImageDrawable(glyphDrawable);
+            }
             if (fxButtonFeedback) {
                 Log.i(TAG, "Fx: play glyph -> " + pendingGlyph);
                 playPause.animate().cancel();
@@ -371,7 +386,9 @@ final class LockScreenOverlay {
     private int dateTextDay = -1;
     /** 背景三层：模糊封面 / 纯色底（style==2 才可见）/ 遮罩。提为字段以便 resume() 就地更新。 */
     private View solidFill, baseScrim;
-    private TextView title, artist, previous, playPause, next, elapsed, duration;
+    private TextView title, artist, elapsed, duration;
+    /** 传输控制三键：player_vector_icons 开＝矢量圆润 ImageView，关＝旧版字符 TextView；统一按 View 持有。 */
+    private View previous, playPause, next;
     private ProgressBar progress;
     private TextClock immersiveClock;
     private Button notificationButton;
@@ -609,6 +626,22 @@ final class LockScreenOverlay {
                     if (cover.getScaleX() != 1f) { cover.animate().cancel(); cover.setScaleX(1f); cover.setScaleY(1f); }
                 }, 420);
             }
+            // 播放器卡片弹入（player_card_pop，zuige：把专辑的动效搞一份到播放器上）：与大封面
+            // 同款 90%→100% 过冲回弹、同拍触发（同挂「封面真换了」分支，首现与切歌都会弹）、
+            // 独立开关。注意 cardPopRunning：showMusic() 的幂等 scale 复位同帧就跟在后面，
+            // 不让路的话 0.90 起点立刻被打平（cover 没这问题是因为那行复位不动 cover 的 scale）。
+            if (fxPlayerCardPop && playerCard != null) {
+                Log.i(TAG, "Fx: card pop");
+                cardPopRunning = true;
+                playerCard.animate().cancel();
+                playerCard.setScaleX(0.90f); playerCard.setScaleY(0.90f);
+                playerCard.animate().scaleX(1f).scaleY(1f).setDuration(340)
+                        .setInterpolator(POP_INTERPOLATOR).start();
+                playerCard.postDelayed(() -> {
+                    cardPopRunning = false;
+                    if (playerCard.getScaleX() != 1f) { playerCard.animate().cancel(); playerCard.setScaleX(1f); playerCard.setScaleY(1f); }
+                }, 420);
+            }
         }
         // 「跟随封面」档取色：每次快照都过一遍（缓存命中只是一行字符串比较，很便宜）——
         // 挂在封面变化分支里的话，换「主色来源」档位后要等下一首歌才会重取，用户会以为没生效。
@@ -623,7 +656,8 @@ final class LockScreenOverlay {
         // 播放/暂停图标：变化**先挂起 600ms 再提交**（glyphCommit）。切歌瞬间播放器会经历
         // playing → 缓冲/暂停 → playing，图标闪一下又变回去非常碍眼（zuige 反馈）；
         // 600ms 内翻回当前显示状态的挂起直接撤销，屏幕上毫无痕迹。稳定 600ms 的才算真状态变化。
-        String playGlyph = snapshot.playing ? "Ⅱ" : "▶";
+        // 值是 "play"/"pause" 语义标记（矢量图标切换），只做等值比较不直接上屏。
+        String playGlyph = snapshot.playing ? "pause" : "play";
         if (!playGlyph.equals(shownPlayGlyph) && playPause != null) {
             pendingGlyph = playGlyph;
             main.removeCallbacks(glyphCommit);
@@ -831,13 +865,17 @@ final class LockScreenOverlay {
         signPick = elem(elements, Config.SIGN_PICK) != 0;
         entryColorPick = elem(elements, Config.ENTRY_COLOR_PICK) != 0;
         entryBgPick = elem(elements, Config.ENTRY_BG_PICK) != 0;
-        swatchDominant = elem(elements, Config.SWATCH_PICK) != 0;
+        swatchPickMode = Math.max(0, Math.min(2, elem(elements, Config.SWATCH_PICK)));
+        debugLog = elem(elements, Config.DEBUG_LOG) != 0;
+        MediaSource.verboseLog = debugLog;
         songFadeEnabled = elem(elements, Config.SONG_FADE) != 0;
         fxButtonFeedback = elem(elements, Config.BUTTON_FEEDBACK) != 0;
         fxSmoothProgress = elem(elements, Config.SMOOTH_PROGRESS) != 0;
         fxCoverPop = elem(elements, Config.COVER_POP) != 0;
+        fxPlayerCardPop = elem(elements, Config.PLAYER_CARD_POP) != 0;
+        fxVectorIcons = elem(elements, Config.PLAYER_VECTOR_ICONS) != 0;
         Log.i(TAG, "Fx: button=" + fxButtonFeedback + " smooth=" + fxSmoothProgress
-                + " pop=" + fxCoverPop + " songFade=" + songFadeEnabled);
+                + " pop=" + fxCoverPop + " cardPop=" + fxPlayerCardPop + " songFade=" + songFadeEnabled);
         signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
         boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
         boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
@@ -922,7 +960,7 @@ final class LockScreenOverlay {
                 + "sp | sign=" + (elem(elements, Config.SIGN_ENABLED) != 0) + " len=" + signatureText.length()
                 + " | pick vivid: card" + cardBgPick + " clock" + clockPick + " date" + datePick
                 + " sign" + signPick + " entry" + entryColorPick + "/" + entryBgPick
-                + " | swatch=" + (swatchDominant ? "dominant" : "vibrant"));
+                + " | swatch=" + (swatchPickMode == 2 ? "family" : swatchPickMode == 1 ? "dominant" : "vibrant"));
         Log.i(TAG, "Custom media card overlay created in " + createAttempts + " attempt(s)");
         createAttempts = 0;
         unlockRestoreLogged = false;
@@ -1130,14 +1168,26 @@ final class LockScreenOverlay {
         LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, -1, 1f); labelParams.leftMargin = dp(14); header.addView(labels, labelParams);
         title = label(Color.WHITE, 22, true); artist = label(0xFF9E9EA3, 15, false);
         labels.addView(title, new LinearLayout.LayoutParams(-1, dp(34))); labels.addView(artist, new LinearLayout.LayoutParams(-1, dp(24)));
-        iconWave = icon("⌁", 30, Color.WHITE); header.addView(iconWave, new LinearLayout.LayoutParams(dp(38), -1));
         LinearLayout controls = new LinearLayout(context); controls.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-1, dp(54)); controlsParams.topMargin = dp(4); card.addView(controls, controlsParams);
-        iconHeart = icon("♡", 28, Color.WHITE); controls.addView(iconHeart, controlParams());
-        previous = icon("◀", 29, Color.WHITE); previous.setOnClickListener(v -> transport(1)); attachPressFeedback(previous); controls.addView(previous, controlParams());
-        playPause = icon("Ⅱ", 34, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); attachPressFeedback(playPause); controls.addView(playPause, controlParams());
-        next = icon("▶", 29, Color.WHITE); next.setOnClickListener(v -> transport(3)); attachPressFeedback(next); controls.addView(next, controlParams());
-        iconQueue = icon("▣", 27, Color.WHITE); controls.addView(iconQueue, controlParams());
+        if (fxVectorIcons) {
+            iconWave = icon(R.drawable.ic_wave_rounded, 26, Color.WHITE); header.addView(iconWave, new LinearLayout.LayoutParams(dp(38), -1));
+            iconHeart = icon(R.drawable.ic_heart_rounded, 26, Color.WHITE); controls.addView(iconHeart, controlParams());
+            previous = icon(R.drawable.ic_media_previous_double, 28, Color.WHITE); previous.setOnClickListener(v -> transport(1)); attachPressFeedback(previous); controls.addView(previous, controlParams());
+            playPause = icon(R.drawable.ic_media_pause_block, 32, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); attachPressFeedback(playPause); controls.addView(playPause, controlParams());
+            next = icon(R.drawable.ic_media_next_double, 28, Color.WHITE); next.setOnClickListener(v -> transport(3)); attachPressFeedback(next); controls.addView(next, controlParams());
+            iconQueue = icon(R.drawable.ic_queue_rounded, 26, Color.WHITE); controls.addView(iconQueue, controlParams());
+            Log.i(TAG, "Player icons: vector-rounded");
+        } else {
+            // 旧版字符播放键（player_vector_icons=0 的回退）：TextView + Unicode 字形，形状随字体。
+            iconWave = iconGlyph("⌁", 30, Color.WHITE); header.addView(iconWave, new LinearLayout.LayoutParams(dp(38), -1));
+            iconHeart = iconGlyph("\u2661", 28, Color.WHITE); controls.addView(iconHeart, controlParams());
+            previous = iconGlyph("\u25c0", 29, Color.WHITE); previous.setOnClickListener(v -> transport(1)); attachPressFeedback(previous); controls.addView(previous, controlParams());
+            playPause = iconGlyph("\u2161", 34, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); attachPressFeedback(playPause); controls.addView(playPause, controlParams());
+            next = iconGlyph("\u25b6", 29, Color.WHITE); next.setOnClickListener(v -> transport(3)); attachPressFeedback(next); controls.addView(next, controlParams());
+            iconQueue = iconGlyph("\u25a3", 27, Color.WHITE); controls.addView(iconQueue, controlParams());
+            Log.i(TAG, "Player icons: glyph-legacy");
+        }
         LinearLayout timeline = new LinearLayout(context); timeline.setGravity(Gravity.CENTER_VERTICAL); card.addView(timeline, new LinearLayout.LayoutParams(-1, dp(28)));
         elapsed = label(0xFF9E9EA3, 14, false); elapsed.setGravity(Gravity.CENTER); timeline.addView(elapsed, new LinearLayout.LayoutParams(dp(48), -1));
         progress = new ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal); progress.setMax(1000);
@@ -1161,8 +1211,8 @@ final class LockScreenOverlay {
         artBackgroundDrawable.setColor(lightCard ? 0xFF9E9EA3 : 0xFF404040);
         title.setTextColor(titleColor); artist.setTextColor(subColor);
         elapsed.setTextColor(subColor); duration.setTextColor(subColor);
-        iconWave.setTextColor(titleColor); iconHeart.setTextColor(titleColor); iconQueue.setTextColor(titleColor);
-        previous.setTextColor(titleColor); playPause.setTextColor(titleColor); next.setTextColor(titleColor);
+        applyIconColor(iconWave, titleColor); applyIconColor(iconHeart, titleColor); applyIconColor(iconQueue, titleColor);
+        applyIconColor(previous, titleColor); applyIconColor(playPause, titleColor); applyIconColor(next, titleColor);
         progress.setProgressTintList(ColorStateList.valueOf(lightCard ? 0xFF3C3C40 : 0xFFD7D7DA));
         progress.setProgressBackgroundTintList(ColorStateList.valueOf(lightCard ? 0xFF9E9EA3 : 0xFF444449));
     }
@@ -1217,7 +1267,7 @@ final class LockScreenOverlay {
         // **缓存 key 必须带上档位**：只比 mediaKey 的话，用户在「主色来源」换档后不换歌就永远
         // 复用旧档位算出来的色 —— 真机表现就是「明明选了占比优先，颜色还是鲜艳档那个」
         // （2026-10-09 zuige 反馈的根因）。
-        if (mediaKey != null && mediaKey.equals(autoMediaKey) && swatchDominant == autoSwatchPick) {
+        if (mediaKey != null && mediaKey.equals(autoMediaKey) && swatchPickMode == autoSwatchPick) {
             // 同曲同档位：只做「新视图补齐配色」的兜底，且不在渐变中途打断。
             if (autoSwatch != 0 && (swatchAnimator == null || !swatchAnimator.isRunning())) {
                 displayedSwatch = autoSwatch;
@@ -1230,14 +1280,17 @@ final class LockScreenOverlay {
             String candidates = "";
             try {
                 Palette palette = Palette.from(art).maximumColorCount(24).resizeBitmapSize(112).generate();
-                Palette.Swatch swatch = swatchDominant ? pickDominantSwatch(palette) : pickSwatch(palette);
+                Palette.Swatch swatch = swatchPickMode == 2 ? pickFamilySwatch(palette)
+                        : swatchPickMode == 1 ? pickDominantSwatch(palette) : pickSwatch(palette);
                 if (swatch != null) swatchRgb = swatch.getRgb();
-                // 两种档位的候选色一起打出来：换档时用户在同张封面上 A/B 对比才有据可依。
+                // 各档位的候选色一起打出来：换档时用户在同张封面上 A/B 对比才有据可依。
                 Palette.Swatch dominant = pickDominantSwatch(palette);
                 Palette.Swatch vivid = pickSwatch(palette);
-                candidates = (swatchDominant ? "dominant" : "vivid") + " dominant="
-                        + Integer.toHexString(dominant == null ? 0 : dominant.getRgb())
-                        + " vivid=" + Integer.toHexString(vivid == null ? 0 : vivid.getRgb());
+                Palette.Swatch family = pickFamilySwatch(palette);
+                candidates = (swatchPickMode == 2 ? "family" : swatchPickMode == 1 ? "dominant" : "vivid")
+                        + " dominant=" + Integer.toHexString(dominant == null ? 0 : dominant.getRgb())
+                        + " vivid=" + Integer.toHexString(vivid == null ? 0 : vivid.getRgb())
+                        + " family=" + Integer.toHexString(family == null ? 0 : family.getRgb());
             } catch (Throwable error) {
                 Log.w(TAG, "Card palette extract failed", error);   // swatchRgb=0 → 各档回兜底色（失败关闭）
             }
@@ -1245,9 +1298,9 @@ final class LockScreenOverlay {
             final String picks = candidates;
             main.post(() -> {
                 autoMediaKey = mediaKey;
-                autoSwatchPick = swatchDominant;
+                autoSwatchPick = swatchPickMode;
                 animateSwatchTo(rgb);   // 渐变到新主色，动画每帧内刷新全套「跟随封面」档
-                Log.i(TAG, "Card palette applied key=" + mediaKey + " swatch=" + Integer.toHexString(rgb)
+                if (debugLog) Log.i(TAG, "Card palette applied key=" + mediaKey + " swatch=" + Integer.toHexString(rgb)
                         + " pick[" + picks + "]");
             });
         });
@@ -1279,6 +1332,54 @@ final class LockScreenOverlay {
         Palette.Swatch best = null;
         for (Palette.Swatch s : swatches) {
             if (best == null || s.getPopulation() > best.getPopulation()) best = s;
+        }
+        return best;
+    }
+
+    /**
+     * 色族占比（swatch_pick=2）：把 Palette 量化桶按色相近似归并成"色族"再比人口——
+     * 修复纯 dominant 桶比拼的两个翻车场景（2026-10-10 zuige 四张样张定标）：
+     * ① 照片类封面主色被明暗拆散成多个桶，而阴影/深色区聚成一个大桶抢赢（绿草封面选出近黑）；
+     * ② 灰色调封面上的小红标等小面积鲜艳色在「最鲜艳优先」下偷家。
+     * 规则：无彩色（S&lt;0.15 或 V&lt;0.12）不参赛；有彩色按色相环形距离 ≤30° 归族、族分＝人口和；
+     * 彩族总人口 &lt; 总量 15% 视为封面本就是无彩色主导，回退全量最大桶（保证灰调封面不出红）；
+     * 族代表＝族内人口最大的桶（真实取自封面，不做加权平均防止浑色）。
+     */
+    private static Palette.Swatch pickFamilySwatch(Palette palette) {
+        if (palette == null) return null;
+        java.util.List<Palette.Swatch> swatches = palette.getSwatches();
+        if (swatches == null || swatches.isEmpty()) return null;
+        long total = 0;
+        for (Palette.Swatch s : swatches) total += s.getPopulation();
+        java.util.ArrayList<java.util.List<Palette.Swatch>> families = new java.util.ArrayList<>();
+        java.util.ArrayList<Float> familyHues = new java.util.ArrayList<>();
+        long chromaticPopulation = 0;
+        float[] hsv = new float[3];
+        for (Palette.Swatch s : swatches) {
+            Color.colorToHSV(s.getRgb(), hsv);
+            if (hsv[1] < 0.15f || hsv[2] < 0.12f) continue;   // 无彩色：不进彩族
+            chromaticPopulation += s.getPopulation();
+            int home = -1;
+            for (int i = 0; i < families.size(); i++) {
+                float dh = Math.abs(hsv[0] - familyHues.get(i));
+                if (dh > 180f) dh = 360f - dh;
+                if (dh <= 30f) { home = i; break; }
+            }
+            if (home < 0) { families.add(new java.util.ArrayList<>()); familyHues.add(hsv[0]); home = families.size() - 1; }
+            families.get(home).add(s);
+        }
+        Palette.Swatch fallback = pickDominantSwatch(palette);
+        if (families.isEmpty() || chromaticPopulation * 100L < total * 15L) return fallback;
+        Palette.Swatch best = fallback;
+        long bestScore = -1;
+        for (java.util.List<Palette.Swatch> family : families) {
+            long score = 0;
+            Palette.Swatch head = null;
+            for (Palette.Swatch s : family) {
+                score += s.getPopulation();
+                if (head == null || s.getPopulation() > head.getPopulation()) head = s;
+            }
+            if (score > bestScore) { bestScore = score; best = head; }
         }
         return best;
     }
@@ -1516,7 +1617,11 @@ final class LockScreenOverlay {
                     .setInterpolator(fastOutSlowIn()).start();
         } else {
             foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f);
-            playerCard.setAlpha(1f); playerCard.setTranslationY(0f); playerCard.setScaleX(1f); playerCard.setScaleY(1f);
+            playerCard.setAlpha(1f); playerCard.setTranslationY(0f);
+            // 卡片弹入进行中绝不能把 scale 拉回 1：这个 else 分支与 applySnapshot 的弹入同帧
+            // 执行（render → applySnapshot → showMusic），无条件复位会把 0.90 弹入起点立刻打平。
+            // 弹入自带 420ms 兜底复位，这里只做「没在弹」时的幂等复位。
+            if (!cardPopRunning) { playerCard.setScaleX(1f); playerCard.setScaleY(1f); }
         }
         ensureCoverVisible();
         playerSceneVisible = true;
@@ -2356,7 +2461,7 @@ final class LockScreenOverlay {
     private void skip(String reason) {
         if (reason.equals(lastSkipReason)) return;
         lastSkipReason = reason;
-        Log.i(TAG, "render skipped: " + reason + " " + state());
+        if (debugLog) Log.i(TAG, "render skipped: " + reason + " " + state());
     }
 
     private void registerGuard() {
@@ -2548,7 +2653,48 @@ final class LockScreenOverlay {
         TextView text = new TextView(context); text.setTextColor(color); text.setTextSize(sizeSp); text.setSingleLine(true); text.setEllipsize(TextUtils.TruncateAt.END);
         if (bold) text.setTypeface(android.graphics.Typeface.DEFAULT_BOLD); return text;
     }
-    private TextView icon(String value, int sizeSp, int color) { TextView icon = new TextView(context); icon.setText(value); icon.setTextColor(color); icon.setTextSize(sizeSp); icon.setGravity(Gravity.CENTER); icon.setClickable(true); return icon; }
+    /**
+     * 矢量图标版：Material Symbols Rounded 的 drawable，CENTER 不缩放居中（外层仍是 weight 格子，
+     * 与旧字符按钮同布局语义）；颜色走 ColorFilter，与「跟随封面」配色联动兼容。
+     * 注意**不能** setImageResource：宿主 SystemUI 的 Resources 不认识模块的编译期 id
+     * （0x7f08xxxx 会撞上宿主自己的资源，NotFoundException 后静默画空——按钮在、能点、看不见），
+     * 必须先从模块包上下文拿 Resources，显式 getDrawable 成对象再 setImageDrawable。
+     */
+    private ImageView icon(int drawableRes, int sizeDp, int color) {
+        ImageView icon = new ImageView(context);
+        icon.setImageDrawable(moduleDrawable(drawableRes));
+        icon.setScaleType(ImageView.ScaleType.CENTER);
+        icon.setColorFilter(color);
+        icon.setClickable(true);
+        return icon;
+    }
+    /** 模块自己的 Resources（懒建，宿主进程里唯一能正确解析模块资源 id 的入口）；拿不到返回 null。 */
+    private android.content.res.Resources moduleResources;
+    private Drawable moduleDrawable(int resId) {
+        if (moduleResources == null) {
+            try {
+                moduleResources = context.createPackageContext("io.github.melolock", Context.CONTEXT_IGNORE_SECURITY).getResources();
+            } catch (Exception e) {
+                Log.w(TAG, "module package context failed: " + e);
+                return null;
+            }
+        }
+        try {
+            return moduleResources.getDrawable(resId);
+        } catch (Exception e) {
+            Log.w(TAG, "module drawable " + resId + " failed: " + e);
+            return null;
+        }
+    }
+    /** 旧字符播放键工厂（player_vector_icons=0 回退）：TextView + Unicode 字形。 */
+    private TextView iconGlyph(String value, int sizeSp, int color) {
+        TextView icon = new TextView(context); icon.setText(value); icon.setTextColor(color); icon.setTextSize(sizeSp); icon.setGravity(Gravity.CENTER); icon.setClickable(true); return icon;
+    }
+    /** 图标配色联动按实际类型分发：TextView 走 setTextColor，ImageView 走 ColorFilter。 */
+    private void applyIconColor(View view, int color) {
+        if (view instanceof TextView) ((TextView) view).setTextColor(color);
+        else if (view instanceof ImageView) ((ImageView) view).setColorFilter(color);
+    }
     private LinearLayout.LayoutParams controlParams() { return new LinearLayout.LayoutParams(0, -1, 1f); }
     private static String emptyAs(String value, String fallback) { return value == null || value.isEmpty() ? fallback : value; }
     private static String time(long value) { long seconds = Math.max(0, value / 1000); return String.format(java.util.Locale.US, "%d:%02d", seconds / 60, seconds % 60); }

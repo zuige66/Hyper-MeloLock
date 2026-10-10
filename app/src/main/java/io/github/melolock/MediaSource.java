@@ -19,6 +19,12 @@ import java.util.concurrent.Executors;
 /** MediaSession-only data and transport layer; no player package names or ROM classes. */
 final class MediaSource {
     private static final String TAG = "MeloLock";
+    /**
+     * 细节日志开关（debug_log，LockScreenOverlay.create() 按配置写这里）：
+     * 关＝不打每轮快照的周期性日志（Session/Media ready/Keeping previous frame），
+     * 开＝排查问题时全量输出。生命周期与错误级日志不受它门控。
+     */
+    static volatile boolean verboseLog;
     interface Listener { void onMedia(Snapshot snapshot); }
     static final class Snapshot {
         final MediaController controller;
@@ -168,7 +174,7 @@ final class MediaSource {
             pendingArtworkUri = null;
             pendingArtworkController = null;
             cancelGrace();
-            Log.i(TAG, "Media ready from bitmap in " + elapsed(refreshStart) + "ms title=" + snapshot.title);
+            if (verboseLog) Log.i(TAG, "Media ready from bitmap in " + elapsed(refreshStart) + "ms title=" + snapshot.title);
             listener.onMedia(snapshot);
         } else if (selected != null && artworkUri != null) {
             final MediaController controller = selected;
@@ -177,7 +183,7 @@ final class MediaSource {
             // 在新 URI 真正解码成功前，上一首完整画面继续显示，避免短暂退回原生锁屏。
             boolean alreadyDecoding = uri.equals(pendingArtworkUri) && controller == pendingArtworkController;
             if (lastReady != null) {
-                Log.i(TAG, "Keeping previous frame while artwork decode is pending in " + elapsed(refreshStart) + "ms");
+                if (verboseLog) Log.i(TAG, "Keeping previous frame while artwork decode is pending in " + elapsed(refreshStart) + "ms");
                 listener.onMedia(lastReady);
             } else {
                 Log.i(TAG, "No cached frame in " + elapsed(refreshStart) + "ms; artwork decode required");
@@ -219,7 +225,7 @@ final class MediaSource {
                             metadata.getLong(MediaMetadata.METADATA_KEY_DURATION), state.getPlaybackSpeed(), true);
                     pendingArtworkUri = null;
                     pendingArtworkController = null;
-                    Log.i(TAG, "Media ready from URI decode in " + elapsed(refreshStart) + "ms title=" + lastReady.title);
+                    if (verboseLog) Log.i(TAG, "Media ready from URI decode in " + elapsed(refreshStart) + "ms title=" + lastReady.title);
                     listener.onMedia(lastReady);
                 });
             });
@@ -233,7 +239,7 @@ final class MediaSource {
                         lastReady.durationMs, pausedState.getPlaybackSpeed(),
                         pausedState.getState() == PlaybackState.STATE_PLAYING);
             }
-            Log.i(TAG, "Session paused in " + elapsed(refreshStart) + "ms; keeping last frame");
+            if (verboseLog) Log.i(TAG, "Session paused in " + elapsed(refreshStart) + "ms; keeping last frame");
             cancelGrace();
             listener.onMedia(lastReady);
         } else if (lastReady != null) {
@@ -245,7 +251,7 @@ final class MediaSource {
                 graceScheduled = true;
                 main.postDelayed(sessionLost, SESSION_GRACE_MS);
             }
-            Log.i(TAG, "Session unavailable in " + elapsed(refreshStart) + "ms; keeping last frame up to "
+            if (verboseLog) Log.i(TAG, "Session unavailable in " + elapsed(refreshStart) + "ms; keeping last frame up to "
                     + SESSION_GRACE_MS + "ms title=" + lastReady.title);
         } else {
             lastReady = null;

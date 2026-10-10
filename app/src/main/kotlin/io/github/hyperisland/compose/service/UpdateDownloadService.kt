@@ -45,15 +45,28 @@ internal class UpdateDownloadService : Service() {
         Thread {
             val target = File(File(filesDir, "update").apply { mkdirs() }, fileName)
             try {
+                // 三层直链级联：api.github.com 资产端点（主）→ github.com 浏览器直链（备）
+                // → blog 静态源（tier3，此处懒取，检查阶段不再串行拉它——HyperDuo 式两层拆分）。
                 try {
                     download(url, target)
                 } catch (primaryError: Throwable) {
-                    // 主源失败自动换备用源重试一次（GitHub 直链在国内基本下不动，
-                    // K60 Pro 用户实测；blog 直链可达）。
-                    if (cancelled || fallbackUrl.isBlank() || fallbackUrl == url) throw primaryError
+                    if (cancelled) throw primaryError
                     Log.w(TAG, "Primary download failed (${primaryError::class.simpleName}: ${primaryError.message}); trying fallback")
-                    if (target.exists()) target.delete()
-                    download(fallbackUrl, target)
+                    try {
+                        if (target.exists()) target.delete()
+                        if (fallbackUrl.isNotBlank() && fallbackUrl != url) {
+                            download(fallbackUrl, target)
+                        } else {
+                            throw primaryError
+                        }
+                    } catch (fallbackError: Throwable) {
+                        if (cancelled) throw fallbackError
+                        Log.w(TAG, "Fallback download failed (${fallbackError::class.simpleName}: ${fallbackError.message}); trying blog tier3")
+                        val blogUrl = runCatching { UpdateService.fetchBlogApkUrl() }.getOrNull().orEmpty()
+                        if (blogUrl.isBlank() || blogUrl == url || blogUrl == fallbackUrl) throw fallbackError
+                        if (target.exists()) target.delete()
+                        download(blogUrl, target)
+                    }
                 }
                 if (cancelled) return@Thread
                 notifyDone(target, launchInstall(target))
@@ -76,6 +89,9 @@ internal class UpdateDownloadService : Service() {
             connectTimeout = NETWORK_TIMEOUT_MILLIS
             readTimeout = NETWORK_TIMEOUT_MILLIS
             instanceFollowRedirects = true
+            // api.github.com 资产端点没这个头会回 JSON 元数据而不是字节（HyperDuo 踩过）；
+            // 对 blog/浏览器直链无害（下载 APK 本来就要二进制）。
+            setRequestProperty("Accept", "application/octet-stream")
         }
         try {
             val code = connection.responseCode

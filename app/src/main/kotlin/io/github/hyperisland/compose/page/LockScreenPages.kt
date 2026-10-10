@@ -490,13 +490,14 @@ internal fun LockAppearancePage() {
     // 各分组的「恢复默认」键集（↺ 按钮）；背景组例外：三态存 SharedPreferences 非 elements。
     val sectionDefaultKeys: Map<String, List<String>> = mapOf(
         "global" to listOf(Config.SWATCH_PICK, Config.SONG_FADE),
-        "fx" to listOf(Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.COVER_POP),
+        "fx" to listOf(Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.COVER_POP, Config.PLAYER_CARD_POP),
         "date" to listOf(Config.DATE_ENABLED, Config.DATE_SIZE, Config.DATE_WEIGHT, Config.DATE_COLOR, Config.DATE_SPACING),
         "sign" to listOf(Config.SIGN_ENABLED, Config.SIGN_SIZE, Config.SIGN_WEIGHT, Config.SIGN_COLOR, Config.SIGN_SPACING),
         "clock" to listOf(Config.CLOCK_SIZE, Config.CLOCK_SPACING, Config.CLOCK_WEIGHT, Config.CLOCK_COLOR, Config.CLOCK_ROUNDNESS, Config.CLOCK_STROKE),
         "cover" to listOf(Config.COVER_SCALE, Config.COVER_WIDTH, Config.COVER_HEIGHT, Config.COVER_SPACING),
-        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK),
+        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.BLOCK_LEFT_SHADE, Config.PLAYER_VECTOR_ICONS),
         "entry" to listOf(Config.ENTRY_COLOR, Config.ENTRY_COLOR_PICK, Config.ENTRY_BG, Config.ENTRY_BG_PICK),
+        "debug" to listOf(Config.DEBUG_LOG),
     )
     fun resetSection(key: String) {
         sectionDefaultKeys[key]?.forEach { k ->
@@ -515,15 +516,15 @@ internal fun LockAppearancePage() {
         }
     }
 
-    CollapsingPage(title = "外观") {
+    CollapsingPage(title = "设置") {
         item {
             CollapsibleSection("全局", "global", MiuixIcons.Settings, expandedSections, ::toggleSection, { resetSection("global") }) {
                 PreferenceDropdown(
                     title = "主色来源",
                     summary = "跟随封面时挑选专辑主色的方式",
                     icon = null,
-                    items = listOf("最鲜艳优先", "占比优先（封面占比最大的色）"),
-                    selectedIndex = value(Config.SWATCH_PICK).coerceIn(0, 1),
+                    items = listOf("最鲜艳优先", "占比优先（封面占比最大的色）", "色族占比（近似色归并，抗干扰）"),
+                    selectedIndex = value(Config.SWATCH_PICK).coerceIn(0, 2),
                     onSelectedIndexChange = { update(Config.SWATCH_PICK, it) },
                 )
                 PreferenceSwitch(
@@ -557,6 +558,13 @@ internal fun LockAppearancePage() {
                     icon = null,
                     checked = value(Config.COVER_POP) != 0,
                     onCheckedChange = { update(Config.COVER_POP, if (it) 1 else 0) },
+                )
+                PreferenceSwitch(
+                    title = "卡片弹入",
+                    summary = "换歌时播放器卡片与大封面同款弹入",
+                    icon = null,
+                    checked = value(Config.PLAYER_CARD_POP) != 0,
+                    onCheckedChange = { update(Config.PLAYER_CARD_POP, if (it) 1 else 0) },
                 )
             }
         }
@@ -679,6 +687,13 @@ internal fun LockAppearancePage() {
                     checked = value(Config.BLOCK_LEFT_SHADE) != 0,
                     onCheckedChange = { update(Config.BLOCK_LEFT_SHADE, if (it) 1 else 0) },
                 )
+                PreferenceSwitch(
+                    title = "圆润图标",
+                    summary = "播放键用矢量圆润图标；关闭后回退旧版字符播放键",
+                    icon = null,
+                    checked = value(Config.PLAYER_VECTOR_ICONS) != 0,
+                    onCheckedChange = { update(Config.PLAYER_VECTOR_ICONS, if (it) 1 else 0) },
+                )
             }
         }
         item {
@@ -732,6 +747,17 @@ internal fun LockAppearancePage() {
                     allowManualInput = false,
                     onValueChange = { alpha = it },
                     onValueChangeFinished = { Config.setOverlayAlpha(context, alpha.toInt()) },
+                )
+            }
+        }
+        item {
+            CollapsibleSection("调试", "debug", MiuixIcons.Settings, expandedSections, ::toggleSection, { resetSection("debug") }) {
+                PreferenceSwitch(
+                    title = "调试日志",
+                    summary = "锁屏侧输出周期性细节日志，排查问题时开启；平时关闭以免刷爆日志缓冲",
+                    icon = null,
+                    checked = value(Config.DEBUG_LOG) != 0,
+                    onCheckedChange = { update(Config.DEBUG_LOG, if (it) 1 else 0) },
                 )
             }
         }

@@ -25,8 +25,12 @@ internal object UpdateService {
     private const val TAG = "MeloLock[App]"
 
     /**
-     * 检查更新：先走 GitHub Releases API；失败（国内网络常见）自动回退 blog 的
-     * latest.json（Hexo 静态源，按 versionCode 比较）。两个源都失败才抛错弹失败框。
+     * 检查更新：先走 GitHub Releases API（4s 超时，连不上不等——HyperDuo 实测 api.github.com
+     * 在国内通常 1.5s 内响应，超时基本等于不通）；失败自动回退 blog 的 latest.json（Hexo 静态源，
+     * 按 versionCode 比较）。两个源都失败才抛错弹失败框。
+     *
+     * **主源必须是本模块仓库**：曾错指上游 1812z/HyperIsland（迁移遗留），GitHub 通了比对的也是
+     * 别人家的 release，每次检查白等（2026-10-10 借鉴 HyperDuo UpdateController 时发现并修正）。
      */
     suspend fun fetchIfNewer(
         currentVersion: String,
@@ -71,24 +75,32 @@ internal object UpdateService {
             if (remoteVersion.isBlank() || !isNewer(remoteVersion, currentVersion)) {
                 return@withContext null
             }
-            // APK 直链：优先取 assets 里的 .apk（下载安装要用直链，releases 页是 HTML 不能下）
-            var apkUrl = ""
+            // APK 直链：优先 api.github.com 资产端点（HyperDuo 实测 github.com 的
+            // browser_download_url 在国内间歇性握手失败，资产端点 10/10 通；
+            // 下载时带 Accept: application/octet-stream，见 UpdateDownloadService），
+            // browser 直链作第二层，blog 静态源第三层（下载失败时服务内懒取，见其 tier3）。
+            var assetId = 0L
+            var browserUrl = ""
             val assets = release.optJSONArray("assets")
             if (assets != null) {
                 for (index in 0 until assets.length()) {
-                    val assetUrl = assets.optJSONObject(index)?.optString("browser_download_url").orEmpty()
-                    if (assetUrl.endsWith(".apk", ignoreCase = true)) { apkUrl = assetUrl; break }
-                    if (apkUrl.isEmpty()) apkUrl = assetUrl
+                    val asset = assets.optJSONObject(index) ?: continue
+                    val assetUrl = asset.optString("browser_download_url").orEmpty()
+                    if (!assetUrl.endsWith(".apk", ignoreCase = true)) continue
+                    assetId = asset.optLong("id")
+                    browserUrl = assetUrl
+                    break
                 }
             }
-            Log.i(TAG, "GitHub release v$remoteVersion apk=" + (apkUrl.ifBlank { "(none)" }))
+            val primaryUrl = if (assetId > 0L) ASSET_API + assetId else browserUrl
+            Log.i(TAG, "GitHub release v$remoteVersion apk=" + (primaryUrl.ifBlank { "(none)" }))
             AppUpdate(
                 version = remoteVersion,
                 releaseUrl = downloadUrl,
                 changelog = release.optString("body"),
-                apkUrl = apkUrl.ifBlank { downloadUrl },
-                // blog 直链在国内可达，作为下载阶段的备用源；拉不到不阻塞检查更新本身。
-                fallbackApkUrl = runCatching { fetchBlogApkUrl() }.getOrNull(),
+                apkUrl = primaryUrl.ifBlank { downloadUrl },
+                // 第二层：GitHub 浏览器直链（与主源同源不同端点；blog 第三层在下载服务内懒取）。
+                fallbackApkUrl = browserUrl.ifBlank { null },
             )
         } finally {
             connection.disconnect()
@@ -153,8 +165,8 @@ internal object UpdateService {
         }
     }
 
-    /** blog 源的 APK 直链（给 GitHub 源当下载备用；拉不到返回 null，由调用方忽略）。 */
-    private fun fetchBlogApkUrl(): String? {
+    /** blog 源的 APK 直链（第三层兜底，由 UpdateDownloadService 在主备两层都失败时懒取）。 */
+    internal fun fetchBlogApkUrl(): String? {
         val apkUrl = fetchBlogManifest().optString("apkUrl")
         return apkUrl.ifBlank { null }
     }
@@ -168,12 +180,16 @@ internal object UpdateService {
 }
 
 private const val LATEST_RELEASE_API =
-    "https://api.github.com/repos/1812z/HyperIsland/releases/latest"
+    "https://api.github.com/repos/zuige66/Hyper-MeloLock/releases/latest"
+/** GitHub 资产下载端点前缀：拼 assetId 得直链，下载时须带 Accept: application/octet-stream。 */
+private const val ASSET_API =
+    "https://api.github.com/repos/zuige66/Hyper-MeloLock/releases/assets/"
 private const val MODULE_DOWNLOAD_URL =
     "https://hyperisland.1812z.top/downloads.html#module-download"
 /** blog 回退源：Hexo 静态 JSON（zuige66 的 blog，部署在 GitHub Pages + 自定义域名）。 */
-private const val BLOG_LATEST_JSON =
+internal const val BLOG_LATEST_JSON =
     "https://blog.zuiges.com/downloads/melolock/latest.json"
-private const val NETWORK_TIMEOUT_MILLIS = 10_000
+/** GitHub 检查超时：4s（zuige 定标——api.github.com 通的话 1.5s 内，4s 不通就是不通，立刻走 blog）。 */
+private const val NETWORK_TIMEOUT_MILLIS = 4_000
 private const val BLOG_FALLBACK_TIMEOUT_MILLIS = 5_000
 private const val VERSION_PART_COUNT = 3

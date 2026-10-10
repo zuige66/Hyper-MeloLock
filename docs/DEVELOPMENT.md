@@ -21,6 +21,10 @@
 
 完整原文保留在上述 WorkBuddy 路径；本节是当前仓库的执行约定，后续变更日志也按该技能的“装包 → 重启作用域 → 用户复现 → 日志对账 → 文档更新”闭环记录。
 
+## 最近改动补充
+
+2026-10-10：播放器控制栏改用用户提供的实心圆角图标样式。新增 `ic_media_previous_double`、`ic_media_next_double` 与 `ic_media_pause_block` 三个模块矢量资源，上一首/下一首为双三角，暂停为两根圆角竖条；播放态仍使用现有圆角播放图标。图标通过模块 `Resources` 解码后设置到 `ImageView`，避免把模块资源 ID 直接交给 SystemUI 宿主解析。待下一次 Debug APK 安装并重启 SystemUI 后真机验收尺寸、间距和点击区域。
+
 - **仓库**：<https://github.com/zuige66/Hyper-MeloLock>
 - **下载**：[Releases](https://github.com/zuige66/Hyper-MeloLock/releases) → 最新版 [v0.2.0](https://github.com/zuige66/Hyper-MeloLock/releases/download/v0.2.0/Hyper-MeloLock-v0.2.0.apk)（`Hyper-MeloLock-v0.2.0.apk`，正式签名，37.1 MB）
 - **许可**：AGPL-3.0（见 `LICENSE`）
@@ -1296,3 +1300,87 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **红线升级（Vector stale dex）**：`install -r` + `am crash` 一次后 SystemUI 仍报 `rev=WCV-2`
       （APK dex 已确认含 WCV-3）——**Vector 给新进程注入了旧 dex，必须再 crash 一次才加载新码**。
       以后验证 SystemUI 侧改动：**先看 rev 标记，不对就再 crash，别急着怀疑代码。**
+
+45. 2026-10-10 **播放器卡片弹入（player_card_pop，zuige：把专辑的动效搞一份到播放器上）**：
+
+    - 大封面弹入同款 90%→100% 过冲回弹（340ms + 420ms 兜底），挂同一「封面真换了」分支——
+      首现与切歌都弹、同拍触发；独立开关 `player_card_pop`（动效分组「卡片弹入」，恢复默认键集已加入）。
+    - **同帧冲突坑（本次关键）**：`showMusic()` 的非入场分支每次快照都幂等复位
+      `playerCard.setScaleX(1f)`，而 render() 的调用序是 `applySnapshot → showMusic` —— 弹入刚把
+      scale 设到 0.90 就被同帧打平（cover 没这问题：那行复位不碰 cover 的 scale）。
+      修法：`cardPopRunning` 窗口标记（弹入启动置位、420ms 兜底清除），复位分支让路。
+    - Fx 诊断行加 `cardPop=` 字段（兼作新代码标记）。
+
+46. 2026-10-10 **播放器图标换 Material Symbols Rounded 矢量图（zuige：字符图标太瘦太尖）**：
+
+    - 旧按钮全是 TextView + Unicode 字形（`◀ Ⅱ ▶ ⌁ ♡ ▣`），粗细随字体、笔画瘦且尖。
+      换成 Material Symbols Rounded v0.48.0 weight 500 矢量 drawable ×7
+      （skip_previous / play / pause / skip_next / wave / heart / queue，取自
+      `@material-symbols/svg-500/rounded/{name}.svg`）。
+    - **SVG→VectorDrawable 的 viewBox 坑**：Material Symbols viewBox 是 `0 -960 960 960`（y 负向），
+      包一层 `<group android:translateY="960">` 即可平移回正，**不需要翻转**。
+    - **字段全部 TextView→ImageView**（iconWave/iconHeart/iconQueue/previous/playPause/next），
+      新 `icon(int drawableRes, int sizeDp, int color)` 重载（setImageResource + CENTER + ColorFilter）；
+      配色联动 `setTextColor`×6 → `setColorFilter`×6（跟随封面亮暗色同步走 ColorFilter）。
+      旧 `icon(String,...)` 无调用方后删除——**同一逻辑不留两份**。
+    - 播放/暂停切换语义化：glyph 值 `"Ⅱ"/"▶"` → `"pause"/"play"`（只做等值比较，600ms 挂起
+      提交与回退逻辑不变；glyphCommit 里 `setText` → `setImageResource(ic_pause/ic_play)`），
+      弹跳动效保留（ImageView 同样支持 animate().scaleX）。
+    - 新代码标记：`Player icons: vector-rounded`。
+    - **教训（重装流程）**：设备上是 release 签名 v0.3.2（应用内更新装的）→ debug 包覆盖装报
+      `INSTALL_FAILED_UPDATE_INCOMPATIBLE` → **完整 uninstall + install 后，Vector 在新 SystemUI
+      进程不再加载模块**（新 PID 无任何 MeloLock/HookEntry 日志）——与 #44 的「install -r 后 stale dex」
+      是两回事：这次是作用域/模块开关失效，**必须在 Vector 里重新勾选 + App 里重开开关**（人工操作）。
+      另外：媒体通知的巨型 MediaData 日志（单条 2KB+、每秒多条）几分钟就能把 logcat 主缓冲轮转掉，
+      重启 SystemUI 后要**立刻**抓标记。
+    - **严重 bug 与修复（首次上机即暴露）**：图标全部空白但可点击。日志
+      `W/ImageView: Unable to find resource: 2131230896` → `NotFoundException: Drawable
+      com.android.systemui:drawable/$$avd_rhombus...` —— **宿主进程里不能 `setImageResource(模块 R.id)`**：
+      编译期常量 id（0x7f08xxxx）被拿到 SystemUI 的 Resources 解析，撞上宿主自己的同 id 资源，
+      找不到时 ImageView 静默画空（不抛异常）。修法：`moduleDrawable(resId)`——懒建
+      `context.createPackageContext("io.github.melolock", CONTEXT_IGNORE_SECURITY).getResources()`，
+      显式 `getDrawable` 成对象再 `setImageDrawable`；icon() 与 glyphCommit 两处都走它。
+      **红线：宿主进程用模块资源，永远走包上下文，不走编译期 id。**
+    - **风格开关（player_vector_icons，zuige 要求可回退）**：外观页「播放器」分组新增「圆润图标」
+      开关（默认开）。create() 读 `fxVectorIcons`，buildPlayerCard 两套工厂二选一：矢量
+      `icon(int,...)`（ImageView + moduleDrawable）或旧字符 `iconGlyph(String,...)`（TextView +
+      Unicode 「◀ Ⅱ ▶ ⌁ ♡ ▣」）；六枚图标字段统一按 `View` 持有，配色联动走
+      `applyIconColor`（TextView→setTextColor / ImageView→setColorFilter）；glyphCommit 按
+      `instanceof` 分发（pendingGlyph 仍是 "play"/"pause" 语义值，字符分支映射回「▶」「Ⅱ」）。
+      新标记：`Player icons: vector-rounded` / `Player icons: glyph-legacy`。
+      坑：块替换补丁把夹在中间的 `controls` 声明行一起吞了（10 个「找不到符号」全因它）——
+      大块替换后先查「被替换区间内是否有无关声明」。
+
+47. 2026-10-10 **取色新增第三档「色族占比」（swatch_pick=2，zuige 四张样张定标）**：
+
+    - **背景**：占比优先（单桶 population 最大）在照片类封面翻车——绿草被明暗拆散成多桶，
+      阴影/深色区聚成一个大黑桶抢赢（《没把要说的话说完》dominant=ff181818，背景黑白）；
+      灰调封面上的小红标也会在鲜艳档偷家。zuige 定标：红外套封面要出红、蓝海要出蓝、
+      绿军装封面不出梅花红、十八般武艺（灰调+小红标）不出红。
+    - **算法**（`pickFamilySwatch`）：无彩色（S<0.15 或 V<0.12）不参赛；有彩色按色相环形
+      距离 ≤30° 归族（族色相锚定首个成员）、族分＝人口和；**彩族总人口 < 总量 15% 视为
+      无彩色主导封面，回退全量最大桶**（灰调封面不出红的关键）；族代表＝族内人口最大桶
+      （真实取自封面，不做加权平均防止浑色）。
+    - **改动面**：`swatchDominant` 布尔 → `swatchPickMode` 三态（0=vibrant 1=dominant 2=family），
+      `autoSwatchPick` 同步改 int（缓存命中比较跟着改）；诊断行三档候选色齐打
+      （`dominant= vivid= family=`），A/B 对比有据。UI：主色来源下拉加第三项。
+    - 验证：装机后 family 字段正常输出；四张样张待 zuige 切档翻封面确认。
+
+48. 2026-10-10 **更新检查提速 + debug_log 调试日志开关（借鉴 HyperDuo，zuige 拍板）**：
+
+    - **参照物**：yixing233/HyperDuo（libxposed 102 模块，源码在 `D:/Workplace/_ref-hyperduo`）。
+      它的更新检查快没有任何黑科技：单个 api.github.com 请求（国内通常 1.5s 内）+ 3 次重试退避；
+      下载用 api.github.com 资产端点（browser_download_url 所在的 github.com 间歇性握手失败，
+      资产端点实测 10/10 通，须带 Accept: application/octet-stream 否则回 JSON）。
+    - **修 bug**：主源曾错指上游 `1812z/HyperIsland`（迁移遗留）——GitHub 通了比对的也是别人家
+      的 release。改 `zuige66/Hyper-MeloLock`。
+    - **检查链路**（zuige 定标 4s）：GitHub 4s 超时（原来 10s），不通立刻走 blog latest.json；
+      **删掉检查成功后串行拉 blog 拿 fallbackApkUrl 的那一次请求**（每次检查白加一跳）。
+    - **下载三层级联**：api 资产端点（主）→ github.com 浏览器直链（备）→ blog apkUrl（tier3，
+      UpdateDownloadService 内懒取 `UpdateService.fetchBlogApkUrl()`，不再检查期预取）。
+    - **debug_log 开关**（Config elements 通道，默认 0）：设置页（原「外观」改名）底部「调试」分组。
+      门控对象＝周期性日志：MediaSource 的 Media ready×2 / Keeping previous frame / Session
+      paused / Session unavailable（static volatile verboseLog），Overlay 的 SCREEN_OFF kept /
+      render skipped / Card palette applied。生命周期/状态变化/错误级（Keyguard root、restore
+      reason、Fx、Player icons、WCV push/clear）不受门控。平时防日志洪水（媒体通知 2KB+ 单条
+      几分钟能轮转掉 logcat 主缓冲），排查时 App 里一开 adb 全是干货。

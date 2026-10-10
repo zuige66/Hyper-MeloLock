@@ -15,3 +15,6 @@ keystore.properties
 
 # 临时调试截图（README 展示图在 docs/images/，不受此规则影响）
 hmsc-*.png
+
+# 构建产物：release APK 不入库（网页 Release 上传用）
+*.apk
