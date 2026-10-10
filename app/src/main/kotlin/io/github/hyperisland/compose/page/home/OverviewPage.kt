@@ -1,14 +1,11 @@
 package io.github.hyperisland.compose.page.home
 
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,21 +13,17 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -38,33 +31,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.hyperisland.R
 import io.github.hyperisland.XposedPrefsSyncApp
-import io.github.hyperisland.compose.component.CollapsingPage
-import io.github.hyperisland.compose.component.RestartScopeDialog
-import io.github.hyperisland.compose.component.SettingsAction
 import io.github.hyperisland.compose.data.FlutterPrefsRepository
 import io.github.hyperisland.compose.service.HomeSystemInfo
 import io.github.hyperisland.compose.service.SystemInfoProvider
-import io.github.hyperisland.compose.service.TestNotificationService
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import top.yukonga.miuix.kmp.basic.Button
-import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.CardDefaults
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.Text
-import top.yukonga.miuix.kmp.basic.TextButton
-import top.yukonga.miuix.kmp.basic.TextField
-import top.yukonga.miuix.kmp.icon.MiuixIcons
-import top.yukonga.miuix.kmp.icon.extended.Refresh
-import top.yukonga.miuix.kmp.icon.extended.Link
-import top.yukonga.miuix.kmp.preference.SwitchPreference
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.PressFeedbackType
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 internal data class ModuleState(
     val active: Boolean,
@@ -131,138 +110,6 @@ internal fun rememberHomeOverviewState(prefs: FlutterPrefsRepository): HomeOverv
         onDispose(removeListener)
     }
     return state
-}
-
-@Composable
-internal fun OverviewPage(
-    state: HomeOverviewState,
-    isActive: Boolean,
-    onOpenApps: () -> Unit,
-    onOpenToastApps: () -> Unit,
-) {
-    val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var showCustomTest by remember { mutableStateOf(false) }
-    var showRestartDialog by remember { mutableStateOf(false) }
-    val statusAlert = homeStatusAlert(state.status, state.systemInfo)
-
-    LaunchedEffect(isActive) {
-        if (isActive) state.refresh(context)
-    }
-    CollapsingPage(
-        title = "HyperIsland",
-        actionIcon = MiuixIcons.Refresh,
-        actionDescription = stringResource(R.string.restart_scope),
-        // 本模块的真实首页是 LockScreenPages.LockHomePage，重启作用域的逻辑在那边；
-        // 这里保持上游 HyperIsland 的原样，避免同一份逻辑出现两个版本。
-        onAction = { showRestartDialog = true },
-        horizontalContentPadding = 12.dp,
-        topContentPadding = 12.dp,
-        bottomContentPadding = 16.dp,
-    ) {
-        item {
-            val unknown = stringResource(R.string.unknown)
-            OverviewStatusGrid(
-                active = state.status?.active == true,
-                versionText = stringResource(
-                    R.string.software_version,
-                    state.systemInfo?.appVersion.orEmpty().ifBlank { unknown },
-                ),
-                primaryTitle = stringResource(R.string.enabled_app_islands),
-                primaryValue = state.enabledAppCount.toString(),
-                onPrimaryClick = onOpenApps,
-                secondaryTitle = stringResource(R.string.enabled_toast_islands),
-                secondaryValue = state.toastEnabledAppCount.toString(),
-                onSecondaryClick = onOpenToastApps,
-                onStatusClick = { TestNotificationService.sendDefault(context) },
-                onStatusLongPress = { showCustomTest = true },
-            )
-        }
-        if (statusAlert != null) {
-            item {
-                OverviewAlertCard(
-                    title = statusAlert.title,
-                    message = statusAlert.message,
-                    warning = statusAlert.warning,
-                )
-            }
-        }
-        item {
-            val unknown = stringResource(R.string.unknown)
-            val info = state.systemInfo
-            val status = state.status
-            val appVersion = info?.let { "${it.appVersion} (${it.appVersionCode})" }
-                .orEmpty()
-                .ifBlank { unknown }
-            val frameworkVersion = status
-                ?.takeIf { it.serviceConnected }
-                ?.let {
-                    stringResource(
-                        R.string.framework_details,
-                        it.framework.ifBlank { unknown },
-                        it.frameworkVersion.ifBlank { unknown },
-                        it.frameworkVersionCode,
-                        it.apiVersion,
-                    )
-                }
-                ?: unknown
-            OverviewInfoCard(
-                rows = listOf(
-                    stringResource(R.string.system_version) to
-                        info?.systemVersion.orEmpty().ifBlank { unknown },
-                    stringResource(R.string.app_version) to appVersion,
-                    stringResource(R.string.xposed_framework) to frameworkVersion,
-                    stringResource(R.string.device_model) to
-                        info?.deviceModel.orEmpty().ifBlank { unknown },
-                ),
-            )
-        }
-        item {
-            Card {
-                SettingsAction(
-                    title = stringResource(R.string.support_development),
-                    summary = stringResource(R.string.support_development_summary),
-                    endIcon = MiuixIcons.Link,
-                    endIconSize = 26.dp,
-                    onClick = { context.openUrl(DONATION_URL) },
-                )
-                SettingsAction(
-                    title = stringResource(R.string.documentation),
-                    summary = stringResource(R.string.documentation_summary),
-                    endIcon = MiuixIcons.Link,
-                    endIconSize = 26.dp,
-                    onClick = { context.openUrl(DOCUMENTATION_URL) },
-                )
-                SettingsAction(
-                    title = stringResource(R.string.related_resources),
-                    summary = stringResource(R.string.related_resources_summary),
-                    endIcon = MiuixIcons.Link,
-                    endIconSize = 26.dp,
-                    onClick = { context.openUrl(RESOURCES_URL) },
-                )
-            }
-        }
-    }
-
-    CustomTestDialog(
-        show = showCustomTest,
-        enabled = state.status?.active == true,
-        onDismiss = { showCustomTest = false },
-        onSend = { title, content, clearPrevious, enableFloat ->
-            TestNotificationService.sendCustom(
-                context = context,
-                title = title,
-                content = content,
-                clearPrevious = clearPrevious,
-                enableFloat = enableFloat,
-            )
-            showCustomTest = false
-        },
-    )
-    RestartScopeDialog(
-        show = showRestartDialog,
-        onDismiss = { showRestartDialog = false },
-    )
 }
 
 private data class HomeStatusAlert(
@@ -520,10 +367,6 @@ internal fun OverviewStatCard(
     }
 }
 
-private fun Context.openUrl(url: String) {
-    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-}
-
 @Composable
 internal fun OverviewInfoCard(
     rows: List<Pair<String, String>>,
@@ -558,78 +401,7 @@ private fun InfoText(title: String, content: String, bottomPadding: androidx.com
     )
 }
 
-@Composable
-private fun CustomTestDialog(
-    show: Boolean,
-    enabled: Boolean,
-    onDismiss: () -> Unit,
-    onSend: (String, String, Boolean, Boolean) -> Unit,
-) {
-    var title by remember(show) { mutableStateOf("") }
-    var content by remember(show) { mutableStateOf("") }
-    var clearPrevious by remember(show) { mutableStateOf(true) }
-    var enableFloat by remember(show) { mutableStateOf(true) }
-    WindowDialog(
-        show = show,
-        title = stringResource(R.string.custom_test_notification),
-        onDismissRequest = onDismiss,
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            TextField(
-                value = title,
-                onValueChange = { title = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = stringResource(R.string.custom_test_title),
-                useLabelAsPlaceholder = true,
-                singleLine = true,
-            )
-            TextField(
-                value = content,
-                onValueChange = { content = it },
-                modifier = Modifier.fillMaxWidth(),
-                label = stringResource(R.string.custom_test_content),
-                useLabelAsPlaceholder = true,
-                minLines = 2,
-                maxLines = 4,
-            )
-            SwitchPreference(
-                checked = clearPrevious,
-                onCheckedChange = { clearPrevious = it },
-                title = stringResource(R.string.clear_previous_notification),
-                summary = stringResource(R.string.clear_previous_notification_summary),
-            )
-            SwitchPreference(
-                checked = enableFloat,
-                onCheckedChange = { enableFloat = it },
-                title = stringResource(R.string.expand_notification),
-                summary = stringResource(R.string.enable_float_summary),
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                TextButton(
-                    text = stringResource(R.string.cancel),
-                    onClick = onDismiss,
-                    modifier = Modifier.weight(1f),
-                )
-                Button(
-                    onClick = { onSend(title, content, clearPrevious, enableFloat) },
-                    enabled = enabled,
-                    modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColorsPrimary(),
-                ) {
-                    Text(stringResource(R.string.send_test_notification))
-                }
-            }
-        }
-    }
-}
-
 private const val SYSTEM_UI_PACKAGE = "com.android.systemui"
-private const val DONATION_URL = "https://hyperisland.1812z.top/donors.html"
-private const val DOCUMENTATION_URL = "https://hyperisland.1812z.top/"
-private const val RESOURCES_URL = "https://hyperisland.1812z.top/downloads.html"
 private const val MIN_SUPPORTED_API = 101
 private const val REQUIRED_FOCUS_PROTOCOL = 3
 private const val ANDROID_15_SDK = 35
