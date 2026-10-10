@@ -32,6 +32,10 @@
         <meta-data android:name="xposeddescription" android:value="澎湃 OS 3 音乐锁屏，默认关闭" />
         <meta-data android:name="xposedminversion" android:value="93" />
         <meta-data android:name="xposedscope" android:resource="@array/xposed_scope" />
+        <!-- 声明 libxposed 能力：管理器（SukiSU Ultra 的 Vector）据此向本 App 暴露
+             XposedService（框架版本/scope/RemotePreferences）。缺它时服务绑不上，
+             首页「Xposed 框架」只能显示 legacy 回报的粗略文案（HyperDuo 有此声明，2026-10-10 对齐）。 -->
+        <meta-data android:name="libxposed" android:value="true" />
         <provider android:name="io.github.melolock.ConfigProvider" android:authorities="io.github.melolock.config"
             android:exported="true" />
         <!-- 更新包下载：前台服务（DownloadManager 的完成广播依赖本进程存活，大文件下载期间

@@ -43,11 +43,12 @@ public final class HookEntry implements IXposedHookLoadPackage {
                             Log.i(TAG, "Keyguard root attached; visibility=" + attached.getVisibility()
                                     + " shown=" + attached.isShown() + " window=" + attached.getWindowToken());
                             attached.post(() -> attach(attached));
-                            // 框架信息回报（2026-10-09）：App 进程拿不到框架版本——Vector 不实现
-                            // libxposed 的服务绑定，XposedServiceHelper 永远超时。SystemUI 进程里
-                            // legacy API 的 XposedBridge 可用，经 ConfigProvider /runtime 写回，
-                            // App 端首页「Xposed 框架」行 fallback 读它。独立线程：insert 会拉起
-                            // App 进程，不能阻塞 SystemUI；独立 try：失败只损失首页显示。
+                            // 框架信息回报（2026-10-10 修订）：App 进程的 libxposed 服务绑定依赖
+                            // Vector 开机时推送 binder（应用须声明 libxposed meta-data），错过开机
+                            // 就绑不上——所以 SystemUI 侧经 ConfigProvider /runtime 把 legacy API
+                            // 能拿到的信息（API 版本、XposedBridge.TAG）写回，App 端首页
+                            // 「Xposed 框架」行 fallback 读它。独立线程：insert 会拉起 App 进程，
+                            // 不能阻塞 SystemUI；独立 try：失败只损失首页显示。
                             try { reportFrameworkInfo(attached.getContext()); }
                             catch (Throwable error) { Log.w(TAG, "Framework report spawn failed", error); }
                             // 封面壁纸化（2026-10-08）：SystemUI 侧把媒体封面下发给壁纸进程。
@@ -87,16 +88,26 @@ public final class HookEntry implements IXposedHookLoadPackage {
      * 探测类名按真机 logcat 里实际命中的为准；全不命中时名字由 App 端显示兜底文案。
      */
     private static void reportFrameworkInfo(android.content.Context context) {
+        // XposedBridge.TAG（2026-10-10 真机探针确认）：Vector legacy 桥把它设为
+        // "VectorLegacyBridge"，是「当前框架是 Vector」的进程内直接证据；拿不到时留空，
+        // App 端按设备门禁兜底显示。
+        String bridgeTag = "";
+        try {
+            java.lang.reflect.Field field = XposedBridge.class.getDeclaredField("TAG");
+            field.setAccessible(true);
+            bridgeTag = String.valueOf(field.get(null));
+        } catch (Throwable ignored) { }
         try {
             int version = XposedBridge.getXposedVersion();
             android.content.ContentValues values = new android.content.ContentValues();
             values.put("xposed_version", version);
+            values.put("bridge_tag", bridgeTag);
             values.put("lsposed_native_api", classPresent("org.lsposed.lspd.nativebridge.NativeAPI"));
             values.put("lsposed_main", classPresent("org.lsposed.lspd.core.Main"));
             values.put("sukisu_ultra", classPresent("com.sukisu.ultra.core.Main"));
             values.put("reported_at", System.currentTimeMillis());
             context.getContentResolver().insert(Config.RUNTIME_URI, values);
-            Log.i(TAG, "Framework reported: version=" + version
+            Log.i(TAG, "Framework reported: version=" + version + " bridgeTag=" + bridgeTag
                     + " lsposedNative=" + values.get("lsposed_native_api")
                     + " lsposedMain=" + values.get("lsposed_main")
                     + " sukiSu=" + values.get("sukisu_ultra"));

@@ -54,6 +54,10 @@ class XposedPrefsSyncApp : Application(), XposedServiceHelper.OnServiceListener 
     override fun onServiceBind(service: XposedService) {
         xposedService = service
         ServiceState.markReady(service.apiVersion, service.frameworkName, service.frameworkVersion)
+        // 框架精确值（zuige 要 HyperDuo 级别的识别精度）；这行兼作新代码验证标记。
+        Log.i(TAG, "XposedService bound: api=" + service.apiVersion
+                + " framework=" + service.frameworkName
+                + " " + service.frameworkVersion + " (" + service.frameworkVersionCode + ")")
         Log.d(TAG, "XposedService bound, syncing sharded prefs")
         syncAllToRemote(service)
         ServiceState.notifyReady()

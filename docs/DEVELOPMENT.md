@@ -1384,3 +1384,33 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
       render skipped / Card palette applied。生命周期/状态变化/错误级（Keyguard root、restore
       reason、Fx、Player icons、WCV push/clear）不受门控。平时防日志洪水（媒体通知 2KB+ 单条
       几分钟能轮转掉 logcat 主缓冲），排查时 App 里一开 adb 全是干货。
+
+49. 2026-10-10 **首页统计卡双行化 + 框架识别精确化（zuige：要 HyperDuo 级精度）**：
+
+    - **统计卡**：主卡改双行——上行「作用域应用」（xposed_scope 数组数量，点击进重启作用域
+      弹窗）、下行「已启用媒体应用」（原「已开启应用」改名，点击进媒体应用页）。
+      `OverviewStatusGrid` 加可选 `primarySecondTitle/Value/Click`，新增 `OverviewStatCardTwoRow`
+      （Card 内两行各自 clickable，Card 本体不点）。**zuige 否决双行样式**（「样式不好看」），
+      已 `git checkout` 还原 OverviewPage.kt，改为 LockHomePage 放两张标准统计卡：
+      「作用域应用」（点击重启作用域弹窗）/「已启用媒体应用」（点击进媒体应用页）。
+    - **框架识别的重大发现**：`XposedServiceHelper` 绑定在 Vector（JingMatrix fork）上**是通的**
+      （真机 22:20:02 `XposedService bound`）——旧注释「Vector 不实现、必超时」已过时。
+      精确框架信息就在 `service.frameworkName/frameworkVersion/frameworkVersionCode`，
+      HyperDuo 显示的 "Vector 2.2 (3080) 88f8e1fa-JingMatrix-Vector" 就是同一来源。
+    - **修复三处**：① `loadXposedServiceFramework` 的 awaitReady 1.5s→3s（绑定异步完成，
+      1.5s 窗口实测错过绑定完成时机，表现为一直走 fallback）；② onServiceBind 加 Log.i 打印
+      精确值（验证标记）；③ service 返回名字/版本皆空时回退 reported 路径（避免显示
+      「未知 未知 (0) API 102」）。管理器包名 `com.sukisu.ultra`。
+    - **环境注意**：熄屏时 HyperOS 不调度跨应用服务绑定——adb `am start` 验证不了绑定，
+      必须真机亮屏打开 App。
+    - **hook 侧探针结论（2026-10-10 晚，已按「定位后删除」移除）**：SystemUI 进程里
+      `XposedBridge` 是 Vector legacy 桥（`TAG=VectorLegacyBridge`），`XPOSED_BRIDGE_VERSION=0`
+      （版本号死路），libxposed API 类不在 SystemUI 可见，框架 so 在
+      `/data/adb/modules/zygisk_vector/zygisk/arm64-v8a.so`（shell 无 root 读不到内容）。
+    - **binder 推送时机**：vector meta（Manifest `<meta-data android:name="libxposed"/>`）
+      加上后，杀 App 重开、拉起 SukiSU 管理器都**不会**触发 Vector 推 binder——推送发生在
+      **开机时**（Vector zygote 初始化扫描 libxposed 声明应用）。要拿精确版本号需重启设备一次。
+    - **fallback 兜底升级**：HookEntry 回报加 `bridge_tag`（XposedBridge.TAG 反射读出，
+      =VectorLegacyBridge），App 端 fallback 用它做「是 Vector」的进程内证据；旧包没回报
+      该字段时按设备门禁仍显示 Vector。删探针后 SystemUI 日志只剩一行
+      `Framework reported: version=102 bridgeTag=VectorLegacyBridge ...`。

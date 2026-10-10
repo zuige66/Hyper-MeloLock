@@ -235,12 +235,15 @@ internal fun LockHomePage(
             OverviewStatusGrid(
                 active = enabled,
                 versionText = stringResource(R.string.software_version, BuildConfig.VERSION_NAME),
-                primaryTitle = "已开启应用",
-                primaryValue = if (enabledAppCount < 0) "全部" else enabledAppCount.toString(),
-                onPrimaryClick = onOpenMusicApps,
-                secondaryTitle = "封面圆角",
-                secondaryValue = "$cornerRadiusDp dp",
-                onSecondaryClick = onOpenAppearance,
+                // HyperIsland 原样式：右侧两张独立统计卡上下排。
+                // 「作用域应用」＝声明的作用域数（点击进重启作用域弹窗）；
+                // 「已启用媒体应用」＝原「已开启应用」改名（点击进媒体应用页）。
+                primaryTitle = "作用域应用",
+                primaryValue = context.resources.getStringArray(R.array.xposed_scope).size.toString(),
+                onPrimaryClick = { showRestartDialog = true },
+                secondaryTitle = "已启用媒体应用",
+                secondaryValue = if (enabledAppCount < 0) "全部" else enabledAppCount.toString(),
+                onSecondaryClick = onOpenMusicApps,
                 // HyperIsland 的状态卡是“点击执行主动作”；本模块的主动作就是模块总开关。
                 onStatusClick = {
                     if (Config.setEnabled(context, !enabled)) enabled = !enabled
@@ -1291,9 +1294,10 @@ private fun loadMusicSelection(context: Context): MusicSelection {
 }
 
 /**
- * 框架信息两段式：先走 libxposed 服务绑定（LSPosed 管理器支持，Vector 不实现、必超时），
- * 绑不上就 fallback 读 SystemUI 回报（[loadReportedFramework]）。两路都空返回 null，
- * 首页显示「未知」。
+ * 框架信息两段式：先走 libxposed 服务绑定（精确版：frameworkName/Version 由框架推送，
+ * Vector 也实现了——binder 是 Vector 开机时扫描 libxposed meta 后推过来的，错过开机就
+ * 绑不上），绑不上就 fallback 读 SystemUI 回报（[loadReportedFramework]）。
+ * 两路都空返回 null，首页显示「未知」。
  */
 private fun loadFrameworkDetails(context: Context): FrameworkDetails? {
     loadXposedServiceFramework(context)?.let { return it }
@@ -1301,12 +1305,16 @@ private fun loadFrameworkDetails(context: Context): FrameworkDetails? {
 }
 
 private fun loadXposedServiceFramework(context: Context): FrameworkDetails? {
-    if (!XposedPrefsSyncApp.awaitReady()) return null
+    // 3s：Vector（JingMatrix fork）的 service 绑定是异步的，1.5s 窗口实测会错过绑完成时机。
+    if (!XposedPrefsSyncApp.awaitReady(3000)) return null
     val app = context.applicationContext as? XposedPrefsSyncApp ?: return null
     val info = runCatching { app.getFrameworkInfo() }.getOrNull() ?: return null
     val apiVersion = (info["apiVersion"] as? Number)?.toInt() ?: 0
     val name = info["frameworkName"]?.toString().orEmpty()
     val version = info["frameworkVersion"]?.toString().orEmpty()
+    // 名字与版本都空说明 Vector 的 service 实现没填框架信息（只有 apiVersion）——
+    // 此时显示「未知 未知 (0) API 102」比 fallback 文案更难看，回退回报路径。
+    if (name.isBlank() && version.isBlank()) return null
     if (name.isBlank() && version.isBlank() && apiVersion == 0) return null
     return FrameworkDetails(
         name = name,
@@ -1335,12 +1343,17 @@ private fun loadReportedFramework(context: Context): FrameworkDetails? {
     }.getOrNull() ?: return null
     val apiVersion = values["xposed_version"]?.toIntOrNull() ?: return null
     if (apiVersion <= 0) return null
+    // bridge_tag = SystemUI 进程里 XposedBridge.TAG 静态字段（Vector legacy 桥为
+    // "VectorLegacyBridge"），是「当前框架是 Vector」的进程内证据；旧包没回报这个字段
+    // 或字段异常时，按设备门禁（Config.FINGERPRINT 精确匹配唯一 ROM）仍显示 Vector。
+    val tag = values["bridge_tag"].orEmpty()
+    val name = if (tag.isNotEmpty() && !tag.contains("vector", ignoreCase = true)) tag else "Vector"
     return FrameworkDetails(
-        name = "Vector",
+        name = name,
         version = "",
         versionCode = 0,
         apiVersion = apiVersion,
-        summary = "Vector（模块运行中，API v$apiVersion）",
+        summary = "$name（模块运行中，API v$apiVersion）",
     )
 }
 
