@@ -1195,3 +1195,67 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **外观页结构调整**：原「取色」分组改为「**全局**」分组，内含「主色来源」「切歌淡出动效」
       两项（zuige 指定与日期/签名同级）；「恢复默认」键集随分组改为 `[swatch_pick, song_fade]`。
 
+39. 2026-10-09 **组件动效三项（外观→「动效」分组，均默认开，zuige 多选确定）**：
+
+    新键 `button_feedback` / `smooth_progress` / `cover_pop`（全走 /elements，进 elementSignature，
+    改开关自动触发整场重建）；「动效」分组置于「全局」之后，恢复默认键集三项。
+
+    - **按钮反馈**（`button_feedback`）：⏮ ▶⏸ ⏭ 与卡片小封面按下缩到 0.88、抬起 150ms 回弹
+      （`OnTouchListener` 返回 false 不消费事件，click 照常）；播放/暂停图标变化时弹跳
+      （1.22 过冲回落，`shownPlayGlyph` 按 2 秒快照去重，与封面引用去重同思路）。
+      无动作的装饰图标（♡ ▣）不挂反馈——按了没反应的反馈是负反馈。
+    - **进度条平滑**（`smooth_progress`）：`updateProgress` 改走 `applyProgress`——属性动画
+      从当前值线性滑到目标值（450ms，与 500ms 采样节奏衔接）；跳变 >15%（150/1000）判定为
+      切歌回零/拖动/重建首帧，直接落位不扫条；新动画先取消旧动画；`restore()` 一并取消。
+    - **封面弹入**（`cover_pop`）：换歌时大封面 90% 过冲弹到 100%（340ms，Overshoot 2.2），
+      叠加在交叉过渡之上；**需 song_fade 同时开启**（弹入是交叉过渡的附加层，song_fade 关＝
+      一切瞬时）。弹的是 `cover` 视图本身的 scale，与 clipToOutline 圆角无冲突。
+
+40. 2026-10-09 **两条导致组件动效「看起来没生效」的真机根因（排查实录）**：
+
+    - **`showMusic()` 的动画取消是无条件的**：`render()` 每次快照（约 2 秒一次）都调
+      `showMusic()`，而它开头就 `cover.animate().cancel()` —— 刚启动的封面弹入在画出第一帧前
+      就被掐掉，缩放还会永远停在动画起点 0.9（真机表现＝「封面弹入没生效」）。
+      改为**只在真的发生页面切换时取消**（`returning || animateIn`）；另给两个弹跳加
+      `postDelayed` 兜底，万一被别的路径 cancel，缩放绝不停在 0.85/0.9。
+      **教训：给「每次快照都会跑一遍」的方法里的动画，别无条件 cancel。**
+    - **封面去重不能只按 Bitmap 引用**：有的播放器每次回调都重新解码出新的 Bitmap 实例
+      （同一张图），引用比对永远不等 → 交叉淡化/弹入/Palette 每帧全跑。改为**抽样像素内容指纹**
+      （四角 + 中心 5 点 + 尺寸，`artSignature`），成本 5 次 getPixel，远低于误判一次的代价。
+    - 播放/暂停弹跳幅度：1.28 过冲被判定「太夸张」，改为**与按下一首的按压反馈完全一致**
+      （0.85 下潜 → 1.0 回弹 160ms）；另加 300ms 去抖，缓冲态 ▶/Ⅱ 反复翻转不会把按钮弹成抖动。
+    - 另记一次装机坑：Vector 模块重载与 `adb install` 有竞态，一次 `am crash` 可能仍加载旧 dex
+      （现象：create 成功但新代码的特征日志一条没有）。**验证前必须先看到新代码标记行。**
+
+41. 2026-10-09 **「主色来源」换档不生效的真凶 + 封面弹入解耦 song_fade**：
+
+    - **换档不生效（这才是「选了占比优先、颜色还是鲜艳」的根因）**：取色缓存的 key 只有
+      `mediaKey`，不比档位；而 `maybeExtractCardPalette` 又只在**封面变化**时调用。于是换档后
+      不换歌 → 命中缓存 → 继续用旧档位算出的色；换歌才有变化（用户解读为「档位没用」）。
+      修法两条：① 缓存 key 带档位（`autoSwatchPick`），② 取色调用移出「封面变化」分支，
+      每次快照都过一遍（缓存命中只是一行字符串比较）——换档后不必等下一首歌，下一帧就重取。
+    - **封面弹入不再依赖 song_fade**（zuige 指出没必要耦合）：弹入只是 `cover` 的缩放动效，
+      与封面做不做交叉过渡无关，现独立于 song_fade 分支之外，单独开关生效。
+    - 取色日志加了 A/B 对照：`pick[dominant=ffXXXXXX vivid=ffXXXXXX]`，同张封面换档位
+      可直接比数值。真机样本：《幻听-许嵩》占比 ff181010（近黑）/ 鲜艳 ffd01820（红），
+      《九月底-余佳运》ff6880b0 / ff5070a8。**代价要记住：占比最高的色块常偏暗或接近无彩**，
+      各跟随档对无彩主色会回白/灰文字 + 深色容器，观感接近「没有跟随色」。
+
+42. 2026-10-10 **播放/暂停图标闪烁治理（延迟提交）+ 外观页分组头图标化（关于页风格）**：
+
+    - **图标闪烁**：切歌瞬间播放器经历 playing → 缓冲/暂停 → playing，图标 ▶↔Ⅱ 闪一下又变回去
+    （zuige 反馈）。300ms 弹跳去抖只压住了动画，**文字本身每次都换**。改为**延迟提交**：
+    glyph 变化先挂起（`pendingGlyph` + `glyphCommit`），600ms 内翻回当前显示状态直接撤销挂起，
+    屏幕上毫无痕迹；稳定 600ms 的才换字 + 弹跳（0.85→1.0，与按压反馈一致）。
+    `restore()` 撤销挂起并清字段。**原来 300ms 去抖已删除——600ms 提交延迟本身就是去抖。**
+    - **外观页分组头**：文字符号「↺」「▸」太小气（zuige 截图对比关于页），换成关于页同款
+    Miuix 真图标：每个分组一枚左侧 26dp 图标（全局=Settings / 动效=Play / 日期=Months /
+    签名=Edit / 时间=WorldClock / 专辑封面=Album / 播放器=Music / 通知入口=Messages /
+    背景=Background），恢复默认=Reset 20dp（32dp 圆形热区），箭头=ArrowRight 17dp（保留原
+    spring 旋转动画）。`CollapsibleSection` 增加 `icon: ImageVector` 参数，9 个调用点已同步。
+    - **Miuix 图标包接收者坑**：`miuix-icons` 的 extended 图标挂在 `MiuixIcons` 上
+    （`MiuixIcons.Settings`），而 `miuix-ui` 的 basic 图标（ArrowRight 等）挂在
+    `MiuixIcons.Basic` 子对象上（`MiuixIcons.Basic.ArrowRight`）——写成
+    `MiuixIcons.ArrowRight` 会报「receiver type mismatch」。另：`ImageVector` 的正确包名是
+    `androidx.compose.ui.graphics.vector.ImageVector`（不是 `...graphics.ImageVector`）。
+

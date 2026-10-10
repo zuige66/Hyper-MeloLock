@@ -157,6 +157,16 @@ public final class Config {
      */
     public static final String SONG_FADE = "song_fade";
 
+    /**
+     * 组件动效开关（外观页「动效」分组，均默认开）：
+     * button_feedback＝控制按钮按压缩放回弹 + 播放/暂停切换弹跳；
+     * smooth_progress＝进度条在两次采样之间平滑推进（跳变 >15% 视为切歌/拖动，直接落位）；
+     * cover_pop＝换歌时大封面缩放弹入（需 song_fade 同时开启，弹入叠加在交叉过渡上）。
+     */
+    public static final String BUTTON_FEEDBACK = "button_feedback";
+    public static final String SMOOTH_PROGRESS = "smooth_progress";
+    public static final String COVER_POP = "cover_pop";
+
     /** 字符串值元素：签名正文。走同一条 /elements 通道（value 列本来就是字符串形式），但不进整数解析。 */
     public static final String DATE_SIGNATURE = "date_signature";
 
@@ -207,6 +217,9 @@ public final class Config {
         ELEMENT_DEFAULTS.put(ENTRY_BG_PICK, 1);
         ELEMENT_DEFAULTS.put(SWATCH_PICK, 1);
         ELEMENT_DEFAULTS.put(SONG_FADE, 1);
+        ELEMENT_DEFAULTS.put(BUTTON_FEEDBACK, 1);
+        ELEMENT_DEFAULTS.put(SMOOTH_PROGRESS, 1);
+        ELEMENT_DEFAULTS.put(COVER_POP, 1);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */

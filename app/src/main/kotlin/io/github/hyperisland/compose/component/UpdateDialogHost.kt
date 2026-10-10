@@ -1,5 +1,10 @@
 package io.github.hyperisland.compose.component
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,8 +18,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.core.content.ContextCompat
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -44,6 +55,29 @@ internal fun UpdateDialogHost(
     onDownload: (String, String?) -> Unit,
 ) {
     val available = state as? UpdateDialogState.Available
+    val context = LocalContext.current
+    // Android 13+ 下载进度通知需要 POST_NOTIFICATIONS 运行时授权（Manifest 已声明）。
+    // 先问权限再开下载：**无论用户给不给都照旧下载**——通知只是进度展示，下载链路不依赖它
+    // （应用内还有一条显式广播把百分比回传给关于页）。
+    var pendingDownload by remember { mutableStateOf<Pair<String, String?>?>(null) }
+    val requestNotification = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        val pending = pendingDownload
+        pendingDownload = null
+        if (pending != null) onDownload(pending.first, pending.second)
+    }
+    fun startDownload() {
+        val update = available ?: return
+        val url = update.update.apkUrl
+        val fallback = update.update.fallbackApkUrl
+        val needsPermission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        if (needsPermission) {
+            pendingDownload = url to fallback
+            requestNotification.launch(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            onDownload(url, fallback)
+        }
+    }
     WindowDialog(
         show = available != null,
         title = stringResource(R.string.new_version_found),
@@ -63,10 +97,7 @@ internal fun UpdateDialogHost(
                     )
                     ReleaseNotes(available.update.changelog)
                 }
-                DialogActions(
-                    onCancel = onDismiss,
-                    onConfirm = { onDownload(available.update.apkUrl, available.update.fallbackApkUrl) },
-                )
+                DialogActions(onCancel = onDismiss, onConfirm = ::startDownload)
             }
         }
     }

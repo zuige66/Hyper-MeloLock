@@ -1,6 +1,7 @@
 package io.github.melolock;
 
 import android.animation.ArgbEvaluator;
+import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.KeyguardManager;
 import android.content.BroadcastReceiver;
@@ -30,6 +31,7 @@ import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
@@ -301,6 +303,8 @@ final class LockScreenOverlay {
     private String autoMediaKey;
     /** 取色结果：专辑主色原始 RGB（0＝未取到/取色失败）。各「跟随封面」档按各自取色风格从这里推导。 */
     private int autoSwatch;
+    /** 缓存该结果时的主色来源档位；换档位必须重取（见 maybeExtractCardPalette 的缓存 key 注释）。 */
+    private boolean autoSwatchPick;
     // ── 切歌动效：封面交叉淡化 + 文字换字淡入淡出 + 跟随配色渐变 ──
     // 三者都是「封面/文字真的变了」才跑一次的短过渡，不碰「每 2 秒快照引用去重」的性能红线。
     /** 封面交叉淡化时长：一次性 TransitionDrawable，成本远低于周期性模糊层重绘。 */
@@ -311,6 +315,9 @@ final class LockScreenOverlay {
     private static final long TEXT_SWAP_FALLBACK_MS = 500;
     /** 「跟随封面」配色主色渐变时长。 */
     private static final long SWATCH_FADE_MS = 320;
+    /** 弹跳类动效（播放/暂停切换、封面弹入）共用：过冲插值器，落位时轻微回弹一下。 */
+    private static final android.view.animation.OvershootInterpolator POP_INTERPOLATOR =
+            new android.view.animation.OvershootInterpolator(2.2f);
     /** 配色跟随的展示值：渐变期间从旧主色向 autoSwatch 过渡，各跟随档按它推导；静止时恒等于 autoSwatch。 */
     private int displayedSwatch;
     /** 正在跑的主色渐变；新渐变重起 / 整场销毁时取消。 */
@@ -330,6 +337,34 @@ final class LockScreenOverlay {
     private boolean swatchDominant;
     /** 切歌柔和过渡总开关（song_fade，默认开）：关＝封面/文字/配色全部瞬时切换（旧版行为）。 */
     private boolean songFadeEnabled;
+    /** 组件动效开关（外观页「动效」分组，create 时读定）：按钮反馈 / 进度条平滑 / 封面弹入。 */
+    private boolean fxButtonFeedback, fxSmoothProgress, fxCoverPop;
+    /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
+    private ObjectAnimator progressAnimator;
+    /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
+    private String shownPlayGlyph;
+    /** 播放/暂停图标的**挂起**变化：600ms 内没翻回才真正提交（见 applySnapshot 的注释）。 */
+    private String pendingGlyph;
+    /** 播放/暂停图标的延迟提交：换字 + 弹跳（幅度与按压反馈一致 0.85→1.0）。 */
+    private final Runnable glyphCommit = new Runnable() {
+        @Override public void run() {
+            if (playPause == null || pendingGlyph == null || pendingGlyph.equals(shownPlayGlyph)) return;
+            shownPlayGlyph = pendingGlyph;
+            playPause.setText(pendingGlyph);
+            if (fxButtonFeedback) {
+                Log.i(TAG, "Fx: play glyph -> " + pendingGlyph);
+                playPause.animate().cancel();
+                playPause.setScaleX(0.85f); playPause.setScaleY(0.85f);
+                playPause.animate().scaleX(1f).scaleY(1f).setDuration(160).start();
+                // 兜底：万一被别的路径 cancel，缩放不能永远停在 0.85。
+                playPause.postDelayed(() -> {
+                    if (playPause.getScaleX() != 1f) { playPause.animate().cancel(); playPause.setScaleX(1f); playPause.setScaleY(1f); }
+                }, 400);
+            }
+        }
+    };
+    /** 按压反馈通路诊断：整个场景只打第一次按压的日志。 */
+    private boolean pressFeedbackProbed;
     /** 签名正文（create 时读一次）；进 elementSignature，改签名会触发整场重建。 */
     private String signatureText = "";
     /** 日期行文本对应的天（epoch day）；跨天时重算。 */
@@ -343,6 +378,16 @@ final class LockScreenOverlay {
     private MediaSource.Snapshot shown;
     /** 最近一次铺进三个 ImageView 的封面；比对用，避免每 2 秒重复触发全屏模糊层重绘。 */
     private android.graphics.Bitmap shownArtwork;
+    /**
+     * 最近一次铺的封面**内容指纹**。
+     *
+     * 为什么不能只按 Bitmap 引用去重（2026-10-09 真机查出来的）：有的播放器每次回调都
+     * 重新解码出**新的 Bitmap 实例**（同一张专辑图），引用比对永远不等 —— 于是交叉淡化、
+     * 封面弹入、后台取色每一帧全跑一遍：用户看到的「封面弹入没生效」（其实是一直在弹，
+     * 没有「切歌那一刻」）以及全屏模糊层被反复重设都来源于此。改为抽样像素做内容指纹：
+     * 同一张图重新解码，指纹相同。
+     */
+    private String shownArtSignature;
     private ViewTreeObserver guardObserver;
     private boolean playerSceneVisible;
     private final Runnable progressTicker = new Runnable() {
@@ -537,8 +582,11 @@ final class LockScreenOverlay {
         // 只有封面**真的换了**才重新 setImageBitmap：媒体层每 2 秒交一次快照（带进度），
         // 而给 ImageView 重设同一张 bitmap 也会触发重绘 —— 全屏模糊层每 2 秒被强制重渲染一次，
         // 这本身就是周期性卡顿。文本与进度照旧每次更新（很便宜）。
-        if (snapshot.art != shownArtwork) {
+        // 内容指纹比对（不是引用比对）：见 [shownArtSignature] 的注释。
+        String artKey = artSignature(snapshot.art);
+        if (!artKey.equals(shownArtSignature)) {
             Bitmap previousArtwork = shownArtwork;
+            shownArtSignature = artKey;
             shownArtwork = snapshot.art;
             if (songFadeEnabled) {
                 // 引用去重逻辑原样保留：只有封面真的换了才动这三个视图（性能红线）。
@@ -548,19 +596,64 @@ final class LockScreenOverlay {
             } else {
                 baseBlur.setImageBitmap(snapshot.art); cover.setImageBitmap(snapshot.art); cardArt.setImageBitmap(snapshot.art);
             }
-            // 「跟随封面」档：换歌（曲目 key 变化）才后台取色回填卡片与各文字配色
-            maybeExtractCardPalette(snapshot.art, emptyAs(snapshot.title, "") + "|" + emptyAs(snapshot.artist, "")
-                    + "|" + snapshot.art.getWidth() + "x" + snapshot.art.getHeight());
+            // 大封面弹入（cover_pop）：**独立于切歌淡出**——它只是缩放动效，跟封面做不做
+            // 交叉过渡没有关系（zuige 指出不该耦合）。90% 过冲回弹到 100%。
+            if (fxCoverPop && cover != null) {
+                Log.i(TAG, "Fx: cover pop");
+                cover.animate().cancel();
+                cover.setScaleX(0.90f); cover.setScaleY(0.90f);
+                cover.animate().scaleX(1f).scaleY(1f).setDuration(340)
+                        .setInterpolator(POP_INTERPOLATOR).start();
+                // 兜底同上：缩放绝不能停在 0.9。
+                cover.postDelayed(() -> {
+                    if (cover.getScaleX() != 1f) { cover.animate().cancel(); cover.setScaleX(1f); cover.setScaleY(1f); }
+                }, 420);
+            }
         }
+        // 「跟随封面」档取色：每次快照都过一遍（缓存命中只是一行字符串比较，很便宜）——
+        // 挂在封面变化分支里的话，换「主色来源」档位后要等下一首歌才会重取，用户会以为没生效。
+        maybeExtractCardPalette(snapshot.art, emptyAs(snapshot.title, "") + "|" + emptyAs(snapshot.artist, "")
+                + "|" + snapshot.art.getWidth() + "x" + snapshot.art.getHeight());
         if (songFadeEnabled) {
             applyTextWithFade(title, emptyAs(snapshot.title, "未知曲目"));
             applyTextWithFade(artist, emptyAs(snapshot.artist, "未知艺术家"));
         } else {
             title.setText(emptyAs(snapshot.title, "未知曲目")); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
         }
-        playPause.setText(snapshot.playing ? "Ⅱ" : "▶");
+        // 播放/暂停图标：变化**先挂起 600ms 再提交**（glyphCommit）。切歌瞬间播放器会经历
+        // playing → 缓冲/暂停 → playing，图标闪一下又变回去非常碍眼（zuige 反馈）；
+        // 600ms 内翻回当前显示状态的挂起直接撤销，屏幕上毫无痕迹。稳定 600ms 的才算真状态变化。
+        String playGlyph = snapshot.playing ? "Ⅱ" : "▶";
+        if (!playGlyph.equals(shownPlayGlyph) && playPause != null) {
+            pendingGlyph = playGlyph;
+            main.removeCallbacks(glyphCommit);
+            main.postDelayed(glyphCommit, 600);
+        } else if (pendingGlyph != null && playPause != null) {
+            pendingGlyph = null;                  // 翻回了正在显示的状态：撤销挂起的翻转
+            main.removeCallbacks(glyphCommit);
+        }
         updateProgress();
         refreshDateLine(false);   // 跨天时日期行最多 2 秒后自动翻页；同天只是一次整数比较
+    }
+
+    /**
+     * 封面内容指纹：抽样 5 个位置（四角 + 中心）的像素 + 尺寸。
+     * 同一张专辑图被重新解码出多个 Bitmap 实例时指纹不变——引用比对此刻会误判为「换了封面」。
+     * 成本只有 5 次 getPixel（微秒级），远低于「误判一次」触发的全屏模糊层重绘 + Palette。
+     */
+    private static String artSignature(Bitmap art) {
+        if (art == null || art.isRecycled()) return "";
+        int w = art.getWidth(), h = art.getHeight();
+        if (w <= 0 || h <= 0) return "";
+        int lastX = w - 1, lastY = h - 1;
+        int[] xs = { 0, lastX / 3, (lastX * 2) / 3, lastX, lastX / 2 };
+        int[] ys = { 0, lastY / 3, (lastY * 2) / 3, lastY, lastY / 2 };
+        StringBuilder text = new StringBuilder(64);
+        for (int i = 0; i < xs.length; i++) {
+            try { text.append(Integer.toHexString(art.getPixel(xs[i], ys[i]))).append(','); }
+            catch (RuntimeException ignore) { text.append("x,"); }
+        }
+        return text.append(w).append('x').append(h).toString();
     }
 
     /**
@@ -740,6 +833,11 @@ final class LockScreenOverlay {
         entryBgPick = elem(elements, Config.ENTRY_BG_PICK) != 0;
         swatchDominant = elem(elements, Config.SWATCH_PICK) != 0;
         songFadeEnabled = elem(elements, Config.SONG_FADE) != 0;
+        fxButtonFeedback = elem(elements, Config.BUTTON_FEEDBACK) != 0;
+        fxSmoothProgress = elem(elements, Config.SMOOTH_PROGRESS) != 0;
+        fxCoverPop = elem(elements, Config.COVER_POP) != 0;
+        Log.i(TAG, "Fx: button=" + fxButtonFeedback + " smooth=" + fxSmoothProgress
+                + " pop=" + fxCoverPop + " songFade=" + songFadeEnabled);
         signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
         boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
         boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
@@ -1025,6 +1123,7 @@ final class LockScreenOverlay {
         artBackgroundDrawable = new GradientDrawable(); artBackgroundDrawable.setCornerRadius(dp(12)); artBackgroundDrawable.setColor(0xFF404040); cardArt.setBackground(artBackgroundDrawable);
         // 点击小封面 → 跳当前音乐 App（见 launchMusicApp：先收锁屏再启动）。
         cardArt.setOnClickListener(v -> launchMusicApp());
+        attachPressFeedback(cardArt);
         cardArt.setContentDescription("打开音乐应用");
         header.addView(cardArt, new LinearLayout.LayoutParams(dp(64), dp(64)));
         LinearLayout labels = new LinearLayout(context); labels.setOrientation(LinearLayout.VERTICAL); labels.setGravity(Gravity.CENTER_VERTICAL);
@@ -1035,9 +1134,9 @@ final class LockScreenOverlay {
         LinearLayout controls = new LinearLayout(context); controls.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-1, dp(54)); controlsParams.topMargin = dp(4); card.addView(controls, controlsParams);
         iconHeart = icon("♡", 28, Color.WHITE); controls.addView(iconHeart, controlParams());
-        previous = icon("◀", 29, Color.WHITE); previous.setOnClickListener(v -> transport(1)); controls.addView(previous, controlParams());
-        playPause = icon("Ⅱ", 34, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); controls.addView(playPause, controlParams());
-        next = icon("▶", 29, Color.WHITE); next.setOnClickListener(v -> transport(3)); controls.addView(next, controlParams());
+        previous = icon("◀", 29, Color.WHITE); previous.setOnClickListener(v -> transport(1)); attachPressFeedback(previous); controls.addView(previous, controlParams());
+        playPause = icon("Ⅱ", 34, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); attachPressFeedback(playPause); controls.addView(playPause, controlParams());
+        next = icon("▶", 29, Color.WHITE); next.setOnClickListener(v -> transport(3)); attachPressFeedback(next); controls.addView(next, controlParams());
         iconQueue = icon("▣", 27, Color.WHITE); controls.addView(iconQueue, controlParams());
         LinearLayout timeline = new LinearLayout(context); timeline.setGravity(Gravity.CENTER_VERTICAL); card.addView(timeline, new LinearLayout.LayoutParams(-1, dp(28)));
         elapsed = label(0xFF9E9EA3, 14, false); elapsed.setGravity(Gravity.CENTER); timeline.addView(elapsed, new LinearLayout.LayoutParams(dp(48), -1));
@@ -1115,27 +1214,41 @@ final class LockScreenOverlay {
     /** 「跟随封面」模式：曲目变了才在后台取色（Palette 要几百 ms，绝不占主线程）；结果按曲目 key 缓存。 */
     private void maybeExtractCardPalette(final Bitmap art, final String mediaKey) {
         if (!anyFollow() || art == null || art.isRecycled()) return;
-        if (mediaKey != null && mediaKey.equals(autoMediaKey)) {
-            if (autoSwatch != 0) {   // 缓存命中（场景重建后同曲）直接同步回填，不渐变（展示值落位即可）
-                cancelSwatchAnimation();
+        // **缓存 key 必须带上档位**：只比 mediaKey 的话，用户在「主色来源」换档后不换歌就永远
+        // 复用旧档位算出来的色 —— 真机表现就是「明明选了占比优先，颜色还是鲜艳档那个」
+        // （2026-10-09 zuige 反馈的根因）。
+        if (mediaKey != null && mediaKey.equals(autoMediaKey) && swatchDominant == autoSwatchPick) {
+            // 同曲同档位：只做「新视图补齐配色」的兜底，且不在渐变中途打断。
+            if (autoSwatch != 0 && (swatchAnimator == null || !swatchAnimator.isRunning())) {
+                displayedSwatch = autoSwatch;
                 applyFollowColors();
             }
             return;
         }
         paletteExecutor.execute(() -> {
             int swatchRgb = 0;
+            String candidates = "";
             try {
                 Palette palette = Palette.from(art).maximumColorCount(24).resizeBitmapSize(112).generate();
                 Palette.Swatch swatch = swatchDominant ? pickDominantSwatch(palette) : pickSwatch(palette);
                 if (swatch != null) swatchRgb = swatch.getRgb();
+                // 两种档位的候选色一起打出来：换档时用户在同张封面上 A/B 对比才有据可依。
+                Palette.Swatch dominant = pickDominantSwatch(palette);
+                Palette.Swatch vivid = pickSwatch(palette);
+                candidates = (swatchDominant ? "dominant" : "vivid") + " dominant="
+                        + Integer.toHexString(dominant == null ? 0 : dominant.getRgb())
+                        + " vivid=" + Integer.toHexString(vivid == null ? 0 : vivid.getRgb());
             } catch (Throwable error) {
                 Log.w(TAG, "Card palette extract failed", error);   // swatchRgb=0 → 各档回兜底色（失败关闭）
             }
             final int rgb = swatchRgb;
+            final String picks = candidates;
             main.post(() -> {
                 autoMediaKey = mediaKey;
+                autoSwatchPick = swatchDominant;
                 animateSwatchTo(rgb);   // 渐变到新主色，动画每帧内刷新全套「跟随封面」档
-                Log.i(TAG, "Card palette applied key=" + mediaKey + " swatch=" + Integer.toHexString(rgb));
+                Log.i(TAG, "Card palette applied key=" + mediaKey + " swatch=" + Integer.toHexString(rgb)
+                        + " pick[" + picks + "]");
             });
         });
     }
@@ -1353,7 +1466,10 @@ final class LockScreenOverlay {
         boolean animateIn = !playerSceneVisible;
         boolean returning = expanded;   // 从通知页返回：走共享元素的反向动画
         expanded = false; hideNativeWallpaperLayers(root); hideNativeClockLayers(root);
-        foreground.animate().cancel(); cover.animate().cancel(); playerCard.animate().cancel();
+        // 取消动画**只在真的发生页面切换时做**：showMusic() 是每次快照（约 2 秒一次）都被
+        // render() 调一遍的，无条件 cancel 会把刚启动的组件动效（封面弹入）在画出第一帧前
+        // 就掐掉，而且缩放会永远卡在动画起点 0.9 —— 真机表现就是「封面弹入没生效」。
+        if (returning || animateIn) { foreground.animate().cancel(); cover.animate().cancel(); playerCard.animate().cancel(); }
         cover.setVisibility(View.VISIBLE); playerCard.setVisibility(View.VISIBLE);
         foreground.setVisibility(View.VISIBLE); ensureOnTop(foreground); ensureOnTop(notificationButton); notificationButton.setText("展开通知");
         // hideNativeClockLayers() must never retain an old hidden state on the
@@ -1596,8 +1712,57 @@ final class LockScreenOverlay {
         if (shown == null || progress == null) return;
         long total = shown.durationMs, position = shown.positionMs;
         if (shown.speed > 0f && shown.positionUpdateTimeMs > 0) position += (long) ((android.os.SystemClock.elapsedRealtime() - shown.positionUpdateTimeMs) * shown.speed);
-        if (total > 0) { progress.setProgress((int) Math.min(1000, Math.max(0, position * 1000 / total))); elapsed.setText(time(position)); duration.setText(time(total)); }
-        else { progress.setProgress(0); elapsed.setText("--:--"); duration.setText("--:--"); }
+        if (total > 0) { applyProgress((int) Math.min(1000, Math.max(0, position * 1000 / total))); elapsed.setText(time(position)); duration.setText(time(total)); }
+        else { applyProgress(0); elapsed.setText("--:--"); duration.setText("--:--"); }
+    }
+
+    /**
+     * 进度条落位：平滑档（smooth_progress）用属性动画从当前值滑到目标值（450ms 线性，
+     * 与 500ms 采样节奏衔接，看起来是连续推进而不是每秒跳格）。
+     * 跳变超过 15%（切歌回零 / 用户拖动 / 场景重建首帧）直接落位，避免指针扫过整个条。
+     * 新动画先取消旧的；暂停时目标值不动，等于空操作。
+     */
+    private void applyProgress(int percent) {
+        int current = progress.getProgress();
+        if (!fxSmoothProgress || Math.abs(percent - current) > 150) {
+            if (progressAnimator != null) { progressAnimator.cancel(); progressAnimator = null; }
+            progress.setProgress(percent);
+            return;
+        }
+        if (percent == current) return;
+        if (progressAnimator != null) progressAnimator.cancel();
+        progressAnimator = ObjectAnimator.ofInt(progress, "progress", current, percent);
+        progressAnimator.setDuration(450);
+        progressAnimator.setInterpolator(null);   // null＝线性：与采样节奏等速推进
+        progressAnimator.start();
+    }
+
+    /**
+     * 控制按钮按压反馈：按下缩到 0.85、抬起/取消回弹（不消费事件，click 照常触发）。
+     * 只对真正有动作的按钮挂（⏮ ▶⏸ ⏭ + 点卡片小封面跳 App），无动作的装饰图标不挂。
+     * 下潜只给 50ms：快速点按也有清晰的「按下」观感。首次按压打一行日志确认通路
+     * （只打一次，触摸路径绝不每次都打——诊断探针拖慢主线程是本项目踩过的坑）。
+     */
+    private void attachPressFeedback(View view) {
+        if (!fxButtonFeedback || view == null) return;
+        view.setOnTouchListener((v, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    if (!pressFeedbackProbed) {
+                        pressFeedbackProbed = true;
+                        Log.i(TAG, "Fx: press feedback reached (first press)");
+                    }
+                    v.animate().cancel();
+                    v.animate().scaleX(0.85f).scaleY(0.85f).setDuration(50).start();
+                    break;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    v.animate().cancel();
+                    v.animate().scaleX(1f).scaleY(1f).setDuration(160).start();
+                    break;
+            }
+            return false;
+        });
     }
 
     /** 撤层。reason 只用于诊断日志，用来定位「上滑露壁纸 / 亮屏先见原生锁屏」由哪条路径触发。 */
@@ -1605,10 +1770,13 @@ final class LockScreenOverlay {
         if (foreground != null || background != null || shown != null) Log.i(TAG, "restore reason=" + reason + " " + state());
         main.removeCallbacks(progressTicker); main.removeCallbacks(finishSuspend);
         cancelSwatchAnimation();   // 整场销毁：配色渐变停掉，别继续在孤儿视图上刷颜色
+        if (progressAnimator != null) { progressAnimator.cancel(); progressAnimator = null; }   // 进度平滑动画同理
         // 页面切换动画可能只跑到一半就被撤层：复位通知栈的动画属性，
         // 否则下次 show() 出来的是一张全透明的通知列表。
         if (notifications != null) { notifications.animate().cancel(); endNotificationsLayer(); notifications.setAlpha(1f); notifications.setTranslationY(0f); }
-        unregisterGuard(); shown = null; shownArtwork = null; expanded = false; playerSceneVisible = false; restoreChangedViews();
+        unregisterGuard(); shown = null; shownArtwork = null; shownArtSignature = null; shownPlayGlyph = null;
+        pendingGlyph = null; main.removeCallbacks(glyphCommit);
+        expanded = false; playerSceneVisible = false; restoreChangedViews();
         if (foreground != null && foreground.getParent() == root) root.removeView(foreground);
         // background 挂在窗口根（见 create()），这里按实际父容器移除。
         if (background != null && background.getParent() instanceof ViewGroup) ((ViewGroup) background.getParent()).removeView(background);

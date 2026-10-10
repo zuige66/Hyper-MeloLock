@@ -55,6 +55,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -107,11 +108,21 @@ import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextField
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
+import top.yukonga.miuix.kmp.icon.extended.Album
+import top.yukonga.miuix.kmp.icon.extended.Background
 import top.yukonga.miuix.kmp.icon.extended.Community
+import top.yukonga.miuix.kmp.icon.extended.Edit
 import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.extended.Link
+import top.yukonga.miuix.kmp.icon.extended.Messages
+import top.yukonga.miuix.kmp.icon.extended.Months
+import top.yukonga.miuix.kmp.icon.extended.Music
+import top.yukonga.miuix.kmp.icon.extended.Play
 import top.yukonga.miuix.kmp.icon.extended.Refresh
+import top.yukonga.miuix.kmp.icon.extended.Reset
+import top.yukonga.miuix.kmp.icon.extended.Settings
 import top.yukonga.miuix.kmp.icon.extended.Update
+import top.yukonga.miuix.kmp.icon.extended.WorldClock
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
 
@@ -480,6 +491,7 @@ internal fun LockAppearancePage() {
     // 各分组的「恢复默认」键集（↺ 按钮）；背景组例外：三态存 SharedPreferences 非 elements。
     val sectionDefaultKeys: Map<String, List<String>> = mapOf(
         "global" to listOf(Config.SWATCH_PICK, Config.SONG_FADE),
+        "fx" to listOf(Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.COVER_POP),
         "date" to listOf(Config.DATE_ENABLED, Config.DATE_SIZE, Config.DATE_WEIGHT, Config.DATE_COLOR, Config.DATE_SPACING),
         "sign" to listOf(Config.SIGN_ENABLED, Config.SIGN_SIZE, Config.SIGN_WEIGHT, Config.SIGN_COLOR, Config.SIGN_SPACING),
         "clock" to listOf(Config.CLOCK_SIZE, Config.CLOCK_SPACING, Config.CLOCK_WEIGHT, Config.CLOCK_COLOR, Config.CLOCK_ROUNDNESS, Config.CLOCK_STROKE),
@@ -506,12 +518,12 @@ internal fun LockAppearancePage() {
 
     CollapsingPage(title = "外观") {
         item {
-            CollapsibleSection("全局", "global", expandedSections, ::toggleSection, { resetSection("global") }) {
+            CollapsibleSection("全局", "global", MiuixIcons.Settings, expandedSections, ::toggleSection, { resetSection("global") }) {
                 PreferenceDropdown(
                     title = "主色来源",
                     summary = "跟随封面时挑选专辑主色的方式",
                     icon = null,
-                    items = listOf("最鲜艳优先", "占比优先"),
+                    items = listOf("最鲜艳优先", "占比优先（封面占比最大的色）"),
                     selectedIndex = value(Config.SWATCH_PICK).coerceIn(0, 1),
                     onSelectedIndexChange = { update(Config.SWATCH_PICK, it) },
                 )
@@ -525,7 +537,32 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("日期", "date", expandedSections, ::toggleSection, { resetSection("date") }) {
+            CollapsibleSection("动效", "fx", MiuixIcons.Play, expandedSections, ::toggleSection, { resetSection("fx") }) {
+                PreferenceSwitch(
+                    title = "按钮反馈",
+                    summary = "控制按钮按压缩放回弹，播放/暂停切换弹跳",
+                    icon = null,
+                    checked = value(Config.BUTTON_FEEDBACK) != 0,
+                    onCheckedChange = { update(Config.BUTTON_FEEDBACK, if (it) 1 else 0) },
+                )
+                PreferenceSwitch(
+                    title = "进度条平滑",
+                    summary = "播放进度连续推进，而不是每秒跳一格",
+                    icon = null,
+                    checked = value(Config.SMOOTH_PROGRESS) != 0,
+                    onCheckedChange = { update(Config.SMOOTH_PROGRESS, if (it) 1 else 0) },
+                )
+                PreferenceSwitch(
+                    title = "封面弹入",
+                    summary = "换歌时大封面轻微缩放弹入",
+                    icon = null,
+                    checked = value(Config.COVER_POP) != 0,
+                    onCheckedChange = { update(Config.COVER_POP, if (it) 1 else 0) },
+                )
+            }
+        }
+        item {
+            CollapsibleSection("日期", "date", MiuixIcons.Months, expandedSections, ::toggleSection, { resetSection("date") }) {
                 PreferenceSwitch(
                     title = "显示日期",
                     summary = "时钟上方显示公历、周几与农历",
@@ -550,7 +587,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("签名", "sign", expandedSections, ::toggleSection, { resetSection("sign") }) {
+            CollapsibleSection("签名", "sign", MiuixIcons.Edit, expandedSections, ::toggleSection, { resetSection("sign") }) {
                 PreferenceSwitch(
                     title = "显示签名",
                     summary = "日期行下方的自定义文字",
@@ -576,7 +613,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("时间", "clock", expandedSections, ::toggleSection, { resetSection("clock") }) {
+            CollapsibleSection("时间", "clock", MiuixIcons.WorldClock, expandedSections, ::toggleSection, { resetSection("clock") }) {
                 DpSlider("字号", value(Config.CLOCK_SIZE), 20..120, onCommit = { update(Config.CLOCK_SIZE, it) })
                 DpSlider("粗细", value(Config.CLOCK_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.CLOCK_WEIGHT, it) })
                 DpSlider("描边加粗", value(Config.CLOCK_STROKE), 0..8, onCommit = { update(Config.CLOCK_STROKE, it) })
@@ -601,7 +638,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("专辑封面", "cover", expandedSections, ::toggleSection, { resetSection("cover") }) {
+            CollapsibleSection("专辑封面", "cover", MiuixIcons.Album, expandedSections, ::toggleSection, { resetSection("cover") }) {
                 DpSlider("缩放", value(Config.COVER_SCALE), 10..300, unit = "%", onCommit = { update(Config.COVER_SCALE, it) })
                 DpSlider("宽度 (0=自动)", value(Config.COVER_WIDTH), 0..600, onCommit = { update(Config.COVER_WIDTH, it) })
                 DpSlider("高度 (0=自动)", value(Config.COVER_HEIGHT), 0..600, onCommit = { update(Config.COVER_HEIGHT, it) })
@@ -621,7 +658,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("播放器", "card", expandedSections, ::toggleSection, { resetSection("card") }) {
+            CollapsibleSection("播放器", "card", MiuixIcons.Music, expandedSections, ::toggleSection, { resetSection("card") }) {
                 DpSlider("缩放", value(Config.CARD_SCALE), 10..300, unit = "%", onCommit = { update(Config.CARD_SCALE, it) })
                 DpSlider("宽度 (0=自动)", value(Config.CARD_WIDTH), 0..600, onCommit = { update(Config.CARD_WIDTH, it) })
                 DpSlider("高度 (0=自动)", value(Config.CARD_HEIGHT), 0..600, onCommit = { update(Config.CARD_HEIGHT, it) })
@@ -646,7 +683,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("通知入口", "entry", expandedSections, ::toggleSection, { resetSection("entry") }) {
+            CollapsibleSection("通知入口", "entry", MiuixIcons.Messages, expandedSections, ::toggleSection, { resetSection("entry") }) {
                 PreferenceDropdown(
                     title = "文字颜色",
                     summary = "「展开通知」的文字颜色，可选跟随封面",
@@ -668,7 +705,7 @@ internal fun LockAppearancePage() {
             }
         }
         item {
-            CollapsibleSection("背景", "backdrop", expandedSections, ::toggleSection, { resetSection("backdrop") }) {
+            CollapsibleSection("背景", "backdrop", MiuixIcons.Background, expandedSections, ::toggleSection, { resetSection("backdrop") }) {
                 PreferenceDropdown(
                     title = "背景样式",
                     summary = "玻璃风格模糊封面，沉浸风格纯色底",
@@ -1367,6 +1404,7 @@ private val PICK_STYLE_LABELS = listOf("低饱和磨砂 (M3E)", "鲜艳原色")
 private fun CollapsibleSection(
     title: String,
     key: String,
+    icon: ImageVector,
     expandedKeys: Set<String>,
     onToggle: (String) -> Unit,
     onReset: () -> Unit,
@@ -1396,32 +1434,41 @@ private fun CollapsibleSection(
                 .padding(horizontal = 18.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            // 分组图标（关于页同款 Miuix 真图标）：文字符号「↺ ▸」太小气，zuige 要求对齐关于页的大气感。
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MiuixTheme.colorScheme.onSurface,
+                modifier = Modifier.size(26.dp),
+            )
             Text(
                 text = title,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).padding(start = 13.dp),
                 fontSize = MiuixTheme.textStyles.body1.fontSize,
                 color = MiuixTheme.colorScheme.onSurface,
             )
             Box(
                 modifier = Modifier
-                    .size(30.dp)
+                    .size(32.dp)
                     .clip(CircleShape)
                     .clickable { onReset() },
                 contentAlignment = Alignment.Center,
             ) {
-                Text(
-                    text = "↺",
-                    fontSize = 17.sp,
-                    color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                Icon(
+                    imageVector = MiuixIcons.Reset,
+                    contentDescription = "恢复默认",
+                    tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    modifier = Modifier.size(20.dp),
                 )
             }
-            Text(
-                text = "▸",
+            Icon(
+                imageVector = MiuixIcons.Basic.ArrowRight,
+                contentDescription = null,
+                tint = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                 modifier = Modifier
-                    .padding(start = 12.dp)
+                    .padding(start = 10.dp)
+                    .size(17.dp)
                     .graphicsLayer { rotationZ = arrowRotation },
-                fontSize = 15.sp,
-                color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
             )
         }
         if (expanded) {
