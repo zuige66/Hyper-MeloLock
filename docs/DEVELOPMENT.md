@@ -1472,5 +1472,25 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
       ② 访问 GitHub 要加 `--ssl-no-revoke`，否则 schannel 吊销检查失败（http=000）。
       资产上传走 `uploads.github.com`，`Content-Type: application/vnd.android.package-archive`。
     - 降级测试：`adb install -r -d <旧 apk>` 可装回旧版验证「检查更新」链路。
+
+52. 2026-10-11 **新增「隐藏相机 / 手电筒」开关（hide_shortcuts，全局分组，默认关）**：
+
+    - 需求：zuige 要沉浸场景干净，图标与触摸响应一起去掉（选了「GONE 整排容器」这一档）。
+    - 配置：键 `hide_shortcuts` 进 `ELEMENT_DEFAULTS`（默认 0），走 `/elements` 通道，
+      不动 Provider 列投影；UI 挂在设置页「全局」分组，并加进 `resetSection("global")` 键集。
+    - SystemUI 侧 `applyShortcutRowVisibility()`：按 id 找 `keyguard_shortcut_container`
+      （找不到退 `keyguard_shortcut_layout` / `shortcut_view_left_layout` / `shortcut_view_right_layout`），
+      置 GONE / VISIBLE；**关开关时必须显式恢复 VISIBLE**——藏过一次系统不会自己放回来。
+    - **性能**：按 id 全树查找不便宜，结果缓存进 `cachedShortcutRow`，最多找 5 次
+      （`SHORTCUT_LOOKUP_LIMIT`）就放弃，绝不每帧扫树；场景构造时清缓存（锁屏视图树每轮是新实例）。
+      调用点与 `hideNativeWallpaperLayers/hideNativeClockLayers` 并列（pre-draw 守卫、
+      showMusic、show 通知页）。
+    - **连带问题**：「展开通知 / 返回播放器」入口原本靠量快捷栏坐标对齐，快捷栏 GONE 后量不到 →
+      新增 `fallbackAlignEntryToBand()`，按屏高 94% 折算（真机 1080×2400 快捷带中心 y=2255、
+      底部提示文案中心 2257），否则入口会停在默认 dp(10) 压住底部提示/手势条。
+    - **壁纸那条先不动**：`hideNativeWallpaperLayers()` 本来就已在隐藏 `keyguard_background_layer`
+      及所有 id/类名带 wallpaper/aod/doze/superwallpaper 的视图，**原生锁屏壁纸早就不显示了**。
+      zuige 说的「切到通知时风格不一样」大概率不是壁纸没藏，而是 MIUI 时钟液态玻璃/通知卡模糊
+      采样的是**壁纸窗口**（SystemUI View 树采不到，见 AGENTS.md 红线）——下一步要先看清现象再动手。
     - **注意**：`produceReleaseComposeMapping` 首跑可能因 maven central 网络抖动
       （asm 9.9.1 下载 TLS 握手失败）报错，重跑一次即可。
