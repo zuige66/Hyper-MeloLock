@@ -571,16 +571,16 @@ internal fun LockAppearancePage() {
                     checked = value(Config.DATE_ENABLED) != 0,
                     onCheckedChange = { update(Config.DATE_ENABLED, if (it) 1 else 0) },
                 )
+                PreferenceDropdown(
+                    title = "颜色",
+                    summary = "可选全局取色",
+                    icon = null,
+                    items = TEXT_COLOR_LABELS,
+                    selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.DATE_COLOR)).coerceAtLeast(0),
+                    onSelectedIndexChange = { update(Config.DATE_COLOR, TEXT_COLOR_VALUES[it]) },
+                )
+                PickStyleDropdown(Config.DATE_COLOR, Config.DATE_PICK, ::value, ::update)
                 if (value(Config.DATE_ENABLED) != 0) {
-                    PreferenceDropdown(
-                        title = "颜色",
-                        summary = "可选全局取色",
-                        icon = null,
-                        items = TEXT_COLOR_LABELS,
-                        selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.DATE_COLOR)).coerceAtLeast(0),
-                        onSelectedIndexChange = { update(Config.DATE_COLOR, TEXT_COLOR_VALUES[it]) },
-                    )
-                    PickStyleDropdown(Config.DATE_COLOR, Config.DATE_PICK, ::value, ::update)
                     DpSlider("字号", value(Config.DATE_SIZE), 12..48, onCommit = { update(Config.DATE_SIZE, it) })
                     DpSlider("粗细", value(Config.DATE_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.DATE_WEIGHT, it) })
                     DpSlider("上间距", value(Config.DATE_SPACING), 0..160, onCommit = { update(Config.DATE_SPACING, it) })
@@ -596,17 +596,17 @@ internal fun LockAppearancePage() {
                     checked = value(Config.SIGN_ENABLED) != 0,
                     onCheckedChange = { update(Config.SIGN_ENABLED, if (it) 1 else 0) },
                 )
+                PreferenceDropdown(
+                    title = "颜色",
+                    summary = "可选全局取色",
+                    icon = null,
+                    items = TEXT_COLOR_LABELS,
+                    selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.SIGN_COLOR)).coerceAtLeast(0),
+                    onSelectedIndexChange = { update(Config.SIGN_COLOR, TEXT_COLOR_VALUES[it]) },
+                )
+                PickStyleDropdown(Config.SIGN_COLOR, Config.SIGN_PICK, ::value, ::update)
                 if (value(Config.SIGN_ENABLED) != 0) {
                     SignatureInputField()
-                    PreferenceDropdown(
-                        title = "颜色",
-                        summary = "可选全局取色",
-                        icon = null,
-                        items = TEXT_COLOR_LABELS,
-                        selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.SIGN_COLOR)).coerceAtLeast(0),
-                        onSelectedIndexChange = { update(Config.SIGN_COLOR, TEXT_COLOR_VALUES[it]) },
-                    )
-                    PickStyleDropdown(Config.SIGN_COLOR, Config.SIGN_PICK, ::value, ::update)
                     DpSlider("字号", value(Config.SIGN_SIZE), 10..40, onCommit = { update(Config.SIGN_SIZE, it) })
                     DpSlider("粗细", value(Config.SIGN_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.SIGN_WEIGHT, it) })
                     DpSlider("上间距", value(Config.SIGN_SPACING), 0..160, onCommit = { update(Config.SIGN_SPACING, it) })
@@ -727,6 +727,9 @@ internal fun LockAppearancePage() {
         }
         item {
             CollapsibleSection("通知页", "notify", MiuixIcons.Notes, expandedSections, ::toggleSection, { resetSection("notify") }) {
+                // 底色独立于播放器卡（2026-10-11 zuige）：0=全局取色（自己的取色风格），
+                // 其余手选档与播放器底色同表；想要同色两边设成一样即可。
+                // 主开关置顶（zuige 终版排序 2026-10-11）：关闭时下方选项可见但不生效。
                 PreferenceSwitch(
                     title = "通知页染色",
                     summary = "展开通知时染底色与媒体卡",
@@ -734,19 +737,15 @@ internal fun LockAppearancePage() {
                     checked = value(Config.NOTIFY_CARD_TINT) != 0,
                     onCheckedChange = { update(Config.NOTIFY_CARD_TINT, if (it) 1 else 0) },
                 )
-                if (value(Config.NOTIFY_CARD_TINT) != 0) {
-                    // 底色独立于播放器卡（2026-10-11 zuige）：0=全局取色（自己的取色风格），
-                    // 其余手选档与播放器底色同表；想要同色两边设成一样即可。
-                    PreferenceDropdown(
-                        title = "底色",
-                        summary = "通知页与媒体卡底色",
-                        icon = null,
-                        items = CARD_BG_LABELS,
-                        selectedIndex = CARD_BG_VALUES.indexOf(value(Config.NOTIFY_CARD_BG)).coerceAtLeast(0),
-                        onSelectedIndexChange = { update(Config.NOTIFY_CARD_BG, CARD_BG_VALUES[it]) },
-                    )
-                    PickStyleDropdown(Config.NOTIFY_CARD_BG, Config.NOTIFY_CARD_BG_PICK, ::value, ::update)
-                }
+                PreferenceDropdown(
+                    title = "底色",
+                    summary = "通知页与媒体卡底色",
+                    icon = null,
+                    items = CARD_BG_LABELS,
+                    selectedIndex = CARD_BG_VALUES.indexOf(value(Config.NOTIFY_CARD_BG)).coerceAtLeast(0),
+                    onSelectedIndexChange = { update(Config.NOTIFY_CARD_BG, CARD_BG_VALUES[it]) },
+                )
+                PickStyleDropdown(Config.NOTIFY_CARD_BG, Config.NOTIFY_CARD_BG_PICK, ::value, ::update)
             }
         }
         item {
