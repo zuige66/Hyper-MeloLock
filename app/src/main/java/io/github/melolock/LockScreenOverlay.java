@@ -2737,12 +2737,38 @@ final class LockScreenOverlay {
         View mediaBg = findViewIdRecursive(notifications, "media_bg");
         if (mediaBg == null) { Log.i(TAG, "Media row census: no media_bg"); return; }
         View row = mediaBg;
-        while (row != null && !row.getClass().getSimpleName().contains("ExpandableNotificationRow")) {
+        while (row != null && !row.getClass().getSimpleName().contains("MiuiMediaHeaderView")
+                && !row.getClass().getSimpleName().contains("ExpandableNotificationRow")) {
             row = row.getParent() instanceof View ? (View) row.getParent() : null;
         }
         if (row == null) row = notifications;
         Log.i(TAG, "Media row census root=" + row.getClass().getSimpleName() + " id=" + resourceName(row));
+        // 【临时】把 MiuiMediaHeaderView 自身与父类的所有 Drawable 字段打出来，找黑底的藏身处
+        dumpDrawableFields(row, "mediaHeader");
         censusSubtree(row, 0);
+    }
+
+    private void dumpDrawableFields(View view, String tag) {
+        Class<?> c = view.getClass();
+        while (c != null && c != Object.class) {
+            for (java.lang.reflect.Field f : c.getDeclaredFields()) {
+                try {
+                    f.setAccessible(true);
+                    Object val = f.get(view);
+                    if (val instanceof Drawable) {
+                        Drawable d = (Drawable) val;
+                        Log.i(TAG, "FieldDump[" + tag + "] " + c.getSimpleName() + "#" + f.getName()
+                                + " = " + d.getClass().getName() + " " + d.getIntrinsicWidth() + "x" + d.getIntrinsicHeight()
+                                + " alpha=" + d.getAlpha());
+                    } else if (val instanceof Integer && (f.getName().toLowerCase().contains("tint") || f.getName().toLowerCase().contains("color"))) {
+                        Log.i(TAG, "FieldDump[" + tag + "] " + c.getSimpleName() + "#" + f.getName()
+                                + " = 0x" + Integer.toHexString((Integer) val));
+                    }
+                } catch (Throwable ignored) { }
+            }
+            c = c.getSuperclass();
+        }
+        Log.i(TAG, "FieldDump[" + tag + "] foreground=" + (view.getForeground() != null ? view.getForeground().getClass().getName() : "null"));
     }
 
     private void censusSubtree(View view, int depth) {
