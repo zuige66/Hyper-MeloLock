@@ -2762,8 +2762,10 @@ final class LockScreenOverlay {
         tintOn = true;
         lastCardTintSwatch = displayedSwatch;
         lastCardTintMs = now;
-        int base = displayedSwatch != 0 ? containerFromSwatch(displayedSwatch) : 0xFF181818;
-        int tintColor = (base & 0x00FFFFFF) | 0xE6000000;   // 90% 不透明
+        // 与播放器卡完全同源：cardBgConfig==0 时走 followCardBg()（含 cardBgPick 的 vivid/container 分支），
+        // 手选档直接用配置色；**不做透明度折扣**——zuige 2026-10-11：要一模一样的底色。
+        int base = cardBgConfig == 0 ? followCardBg() : cardBgConfig;
+        int tintColor = base;
         // 字色随底色亮度联动（与 applyCardColors 同一条规则）：亮底墨字、深/艳底白字。
         boolean lightCard = isLightColor(base);
         inkTitleColor = lightCard ? INK_TITLE : INK_TITLE_ON_DARK;
