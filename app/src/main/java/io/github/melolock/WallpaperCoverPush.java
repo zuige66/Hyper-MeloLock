@@ -86,6 +86,20 @@ public final class WallpaperCoverPush {
         }
     }
 
+    /** 模块总开关关闭时由 LockScreenOverlay 调：立即撤下壁纸封面，不等下一次媒体回调。 */
+    public static void clearCover() {
+        worker.execute(() -> {
+            try {
+                lastSentKey = null;
+                lastSnapshot = null;
+                send(null);
+                Log.i(TAG, "WCV cover cleared (module off)");
+            } catch (Throwable error) {
+                Log.w(TAG, "WCV clear failed", error);
+            }
+        });
+    }
+
     /**
      * 封面内容指纹（5 点采样 + 尺寸，与 {@link LockScreenOverlay#artSignature} 同构）：
      * 引用会变（重解码）、title 会变（歌词行），只有像素内容是壁纸真正关心的。
@@ -105,8 +119,21 @@ public final class WallpaperCoverPush {
         return text.append(w).append('x').append(h).toString();
     }
 
-    /** 封面内容没变就不发；快照为空＝通知壁纸侧清除。 */
+    /** 封面内容没变就不发；快照为空＝通知壁纸侧清除。**模块总开关关闭时无条件清除并停推**。 */
     private static void push(MediaSource.Snapshot snapshot) {
+        // 开关闸（2026-10-12 补）：此前这个类自带 MediaSource、装上就推，模块关了封面照样
+        // 钉在锁屏壁纸上——失败关闭被绕过。读不到配置按「关」处理（宁可不推，不越权）。
+        Boolean enabled = Config.enabledOrNull(appContext);
+        if (enabled == null || !enabled) {
+            if (lastSentKey != null) {
+                lastSentKey = null;
+                lastSnapshot = null;
+                send(null);
+                Log.i(TAG, "WCV module off; cover cleared");
+            }
+            lastSnapshot = null;
+            return;
+        }
         Bitmap art = snapshot == null ? null : snapshot.art;
         if (art == null || art.isRecycled()) {
             if (lastSentKey != null) {

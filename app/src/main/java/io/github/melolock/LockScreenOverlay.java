@@ -301,6 +301,17 @@ final class LockScreenOverlay {
      */
     private final java.util.Set<View> hiddenMainClockViews = new java.util.HashSet<>();
     /**
+     * 「要藏的原生层」命中缓存（2026-10-12 响应优化）：pre-draw 守卫每个绘制帧都要按住
+     * 原生时钟层与壁纸层，原来每次都全树递归 + 逐视图 resourceName（资源表反查），
+     * 锁屏/下拉的每帧预算因此被吃掉一截。改为按 TTL 缓存命中列表，期间每帧只遍历列表；
+     * 换视图树（create()）或 TTL 到期才重扫，ROM 主题后续加层最迟 1 秒被纳入。
+     */
+    private final java.util.List<View> cachedClockViews = new java.util.ArrayList<>();
+    private final java.util.List<View> cachedWallpaperViews = new java.util.ArrayList<>();
+    private long clockScanAtMs;
+    private long wallpaperScanAtMs;
+    private static final long NATIVE_SCAN_TTL_MS = 1000;
+    /**
      * 左侧通知栏的宿主视图（`NotificationPanelView#notification_panel`）。
      *
      * 真机视图树显示：`legacy_window_root` 的子节点顺序是
@@ -535,6 +546,9 @@ final class LockScreenOverlay {
         // 新的场景实例＝新的锁屏视图树：快捷栏缓存必须清掉，否则会一直对着上一轮的旧 View 改可见性。
         cachedShortcutRow = null;
         shortcutRowLookups = 0;
+        // 原生层命中缓存同理：换树了必须重扫（见 cachedClockViews 注释）。
+        cachedClockViews.clear(); cachedWallpaperViews.clear();
+        clockScanAtMs = 0; wallpaperScanAtMs = 0;
         keyguardGuard = () -> {
             if (suspended) {
                 // 解锁后场景已淡出并置 GONE，守卫必须完全放手：继续隐藏原生层会破坏，
@@ -627,7 +641,7 @@ final class LockScreenOverlay {
         boolean enabled = read;
         if (lastEnabled == null || lastEnabled != enabled) Log.i(TAG, "Module enabled=" + enabled + " " + state());
         lastEnabled = enabled;
-        if (enabled) media.start(); else { Log.i(TAG, "Module switched off; restoring " + state()); media.stop(); restore("switch-off"); fullTimeTintOff(); }
+        if (enabled) media.start(); else { Log.i(TAG, "Module switched off; restoring " + state()); media.stop(); restore("switch-off"); fullTimeTintOff(); WallpaperCoverPush.clearCover(); }
     }
 
     private boolean compatible() {
@@ -2786,19 +2800,39 @@ final class LockScreenOverlay {
     }
     /** Hides every stock keyguard clock layer; ROM themes may add one after create(). */
     private void hideNativeClockLayers(View view) {
+        // 每帧全树递归（含 resourceName 资源表反查）是锁屏/下拉响应变慢的一处主要开销
+        // （2026-10-12）：命中列表缓存 1 秒，期间每帧只对列表跑；视图树换了由 create() 清缓存。
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (!cachedClockViews.isEmpty() && now - clockScanAtMs < NATIVE_SCAN_TTL_MS) {
+            for (int i = 0; i < cachedClockViews.size(); i++) {
+                View hit = cachedClockViews.get(i);
+                hide(hit);
+                if (isWithinMainClock(hit)) hiddenMainClockViews.add(hit);
+            }
+            return;
+        }
+        cachedClockViews.clear();
+        clockScanAtMs = now;
+        collectClockViews(view, cachedClockViews);
+        for (int i = 0; i < cachedClockViews.size(); i++) {
+            View hit = cachedClockViews.get(i);
+            hide(hit);
+            // 主时钟容器子树内的视图走「策略还原」（见 hiddenMainClockViews 注释）：
+            // 快照可能采自暗屏/AOD 过渡期，回放会把瞬态焊死。
+            if (isWithinMainClock(hit)) hiddenMainClockViews.add(hit);
+        }
+    }
+
+    /** 收集「类名/id 含 clock」的视图（不改动任何状态），供 [hideNativeClockLayers] 缓存复用。 */
+    private void collectClockViews(View view, java.util.List<View> out) {
         // foreground owns TextClock too. Do not recursively hide our own scene.
         if (view == null || view == foreground || view == background) return;
         String className = view.getClass().getName().toLowerCase(java.util.Locale.ROOT);
         String idName = resourceName(view);
-        if (className.contains("clock") || idName.contains("clock")) {
-            hide(view);
-            // 主时钟容器子树内的视图走「策略还原」（见 hiddenMainClockViews 注释）：
-            // 快照可能采自暗屏/AOD 过渡期，回放会把瞬态焊死。
-            if (isWithinMainClock(view)) hiddenMainClockViews.add(view);
-        }
+        if (className.contains("clock") || idName.contains("clock")) out.add(view);
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
-            for (int i = 0; i < group.getChildCount(); i++) hideNativeClockLayers(group.getChildAt(i));
+            for (int i = 0; i < group.getChildCount(); i++) collectClockViews(group.getChildAt(i), out);
         }
     }
     /** True if view is the main clock container itself or one of its descendants. */
@@ -2991,6 +3025,10 @@ final class LockScreenOverlay {
             int base = resolveNotifyBaseColor();
             PorterDuffColorFilter filter = obtainMediaFilter(base);
             int views = applyTintShallow(stackAnchor, base, filter, 0);
+            // **必须置 tintOn**（2026-10-12 染色关不掉的根因）：restore() 的还原路径开头是
+            // `if (!tintOn) return`——泵染的色若不置位，场景销毁时整段还原被跳过，且随后
+            // savedCardTints 被清空，重新捕获的「原始色」已是染后色，污染永久固化。
+            tintOn = true;
             if (views != lastSweepViews || base != lastSweepColor) {
                 Log.i(TAG, "Stack tint sweep(" + reason + ") views=" + views
                         + " color=0x" + Integer.toHexString(base) + " media=" + sweepSawMedia);
@@ -3329,6 +3367,19 @@ final class LockScreenOverlay {
     }
 
     private void hideNativeWallpaperLayers(View view) {
+        // 同 [hideNativeClockLayers]：全树递归按 TTL 缓存命中列表，避免每帧重复遍历。
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (!cachedWallpaperViews.isEmpty() && now - wallpaperScanAtMs < NATIVE_SCAN_TTL_MS) {
+            for (int i = 0; i < cachedWallpaperViews.size(); i++) hide(cachedWallpaperViews.get(i));
+            return;
+        }
+        cachedWallpaperViews.clear();
+        wallpaperScanAtMs = now;
+        collectWallpaperViews(view, cachedWallpaperViews);
+        for (int i = 0; i < cachedWallpaperViews.size(); i++) hide(cachedWallpaperViews.get(i));
+    }
+
+    private void collectWallpaperViews(View view, java.util.List<View> out) {
         if (view == null || view == background) return;
         String idName = resourceName(view);
         String className = view.getClass().getName().toLowerCase(java.util.Locale.ROOT);
@@ -3338,13 +3389,13 @@ final class LockScreenOverlay {
                 || className.contains("aod") || className.contains("superwallpaper");
         if (wallpaperish) {
             boolean first = !changedViews.containsKey(view);
-            hide(view);
+            out.add(view);
             if (first) Log.i(TAG, "Hiding native background layer: id=" + (idName.isEmpty() ? "-" : idName)
                     + " class=" + view.getClass().getSimpleName());
         }
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
-            for (int i = 0; i < group.getChildCount(); i++) hideNativeWallpaperLayers(group.getChildAt(i));
+            for (int i = 0; i < group.getChildCount(); i++) collectWallpaperViews(group.getChildAt(i), out);
         }
     }
     /**
