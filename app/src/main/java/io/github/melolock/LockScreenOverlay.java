@@ -2794,7 +2794,7 @@ final class LockScreenOverlay {
                     + " children=" + header.getChildCount());
         }
         GradientDrawable gd = (GradientDrawable) layer.getBackground();
-        gd.setColor(color != null ? color : Color.TRANSPARENT);
+        gd.setColor(color != null ? 0xFFFF00FF : Color.TRANSPARENT);   // 【临时探针】品红自查
         layer.setVisibility(color != null ? View.VISIBLE : View.GONE);
     }
 
