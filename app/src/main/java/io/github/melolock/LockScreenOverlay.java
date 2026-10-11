@@ -2713,15 +2713,20 @@ final class LockScreenOverlay {
         }
         long now = android.os.SystemClock.uptimeMillis();
         if (tintOn && displayedSwatch == lastCardTintSwatch && now - lastCardTintMs < 500) return;
+        boolean firstPass = !tintOn;
         tintOn = true;
         lastCardTintSwatch = displayedSwatch;
         lastCardTintMs = now;
-        int base = displayedSwatch != 0 ? containerFromSwatch(displayedSwatch) : 0xFF181818;
-        int tint = (base & 0x00FFFFFF) | 0xE6000000;   // 90% 不透明
-        PorterDuffColorFilter filter = new PorterDuffColorFilter(tint, PorterDuff.Mode.SRC_ATOP);
+        // 【临时探针】诊断「滤镜挂上了但卡还是黑」：用纯品红做 unmistakable 颜色，
+        // 并把每个命中视图的 id/类/背景打出来，对照前景截图定位真正的绘制者。结论拿到即删。
+        PorterDuffColorFilter filter = new PorterDuffColorFilter(0xFFFF00FF, PorterDuff.Mode.SRC_ATOP);
+        tintProbeDetails.setLength(0);
         int views = applyTintShallow(notifications, filter, 0);
-        Log.i(TAG, "Notification tint on views=" + views + " swatch=0x" + Integer.toHexString(displayedSwatch));
+        Log.i(TAG, "Notification tint probe views=" + views + " swatch=0x" + Integer.toHexString(displayedSwatch)
+                + (firstPass ? " " + tintProbeDetails : ""));
     }
+
+    private final StringBuilder tintProbeDetails = new StringBuilder();
 
     /** 浅扫（深度 ≤6）：只摸每张卡的直接背景视图，成本约等于一层子视图遍历。 */
     private int applyTintShallow(ViewGroup group, PorterDuffColorFilter filter, int depth) {
@@ -2736,10 +2741,16 @@ final class LockScreenOverlay {
             if (isMediaBg && child instanceof ImageView) {
                 ((ImageView) child).setColorFilter(filter);
                 count++;
+                if (tintOn) tintProbeDetails.append(" [media ").append(child.getWidth()).append("x").append(child.getHeight()).append("]");
             } else if (isCardBg) {
                 Drawable bg = child.getBackground();
                 if (bg != null) bg.mutate().setColorFilter(filter);
                 count++;
+                if (tintOn) tintProbeDetails.append(" [").append(id).append(" ")
+                        .append(child.getClass().getSimpleName()).append(" ")
+                        .append(child.getWidth()).append("x").append(child.getHeight())
+                        .append(" vis=").append(child.getVisibility() == View.VISIBLE)
+                        .append(bg != null ? " " + bg.getClass().getSimpleName() : " noBg").append("]");
             }
             if (child instanceof ViewGroup) count += applyTintShallow((ViewGroup) child, filter, depth + 1);
         }
