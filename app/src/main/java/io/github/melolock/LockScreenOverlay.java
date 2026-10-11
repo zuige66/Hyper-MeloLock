@@ -375,8 +375,9 @@ final class LockScreenOverlay {
      */
     private boolean notifyCardTint;
     private View notificationsScrim;
-    private View notificationsTintLayer;
-    private boolean tintApplied;
+    private boolean tintOn;
+    private int lastCardTintSwatch = -1;
+    private long lastCardTintMs;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -491,6 +492,7 @@ final class LockScreenOverlay {
                     // 通知栈的显隐完全由 expanded 决定：展开时它自己在淡入（由 show() 保证可见），
                     // 收起时立即隐藏——不再做淡出（淡出层盖在时钟上，会让时间看起来闪一下）。
                     if (expanded) show(notifications); else hide(notifications);
+                    if (expanded) applyNotificationTint(true);   // 展开期间节流重挂：系统 rebind 行视图会冲掉滤镜
                     ensureOnTop(foreground);
                     ensureOnTop(notificationButton);
                 }
@@ -2693,36 +2695,32 @@ final class LockScreenOverlay {
     }
 
     /**
-     * 通知页染色（事件驱动，v2）：**不跟 ScrimController 抢颜色**——scrim_notifications
-     * 的颜色由系统控制器每帧接管，setBackgroundColor 下一帧就被写回（真机 10:55 实测染了
-     * 但看不见）。改为在通知栈正下方插一块**我们自己的纯色层**（z 序：栈后、我们的背景之上），
-     * 系统管不着；展开时设色+显示，收起/恢复时 GONE。卡片滤镜一次浅扫常驻（ImageView
-     * 的滤镜挂在视图属性上，重设位图不丢）。
+     * 通知卡染色 v3：**只染每一行通知卡自己的背景**，不动整页底色（zuige 明确：
+     * 2026-10-11 截图反馈，背景层方案回撤）。系统在展开/滚动时会重新 bind 行视图、
+     * 换掉我们挂过滤镜的 drawable 实例，所以展开期间要按 500ms 节流重挂浅扫滤镜
+     * （深度 ≤6，只摸每张卡的直接背景，成本远低于旧版 24 层全栈深扫）；
+     * 主色变了立即重扫。scrim_notifications 归系统 ScrimController 管，绝不碰。
      */
     private void applyNotificationTint(boolean on) {
         if (notifications == null) return;
         if (on && !notifyCardTint) return;
-        if (on == tintApplied) return;
-        tintApplied = on;
+        if (!on) {
+            if (!tintOn) return;
+            tintOn = false;
+            applyTintShallow(notifications, null, 0);
+            Log.i(TAG, "Notification tint off");
+            return;
+        }
+        long now = android.os.SystemClock.uptimeMillis();
+        if (tintOn && displayedSwatch == lastCardTintSwatch && now - lastCardTintMs < 500) return;
+        tintOn = true;
+        lastCardTintSwatch = displayedSwatch;
+        lastCardTintMs = now;
         int base = displayedSwatch != 0 ? containerFromSwatch(displayedSwatch) : 0xFF181818;
         int tint = (base & 0x00FFFFFF) | 0xE6000000;   // 90% 不透明
-        PorterDuffColorFilter filter = on ? new PorterDuffColorFilter(tint, PorterDuff.Mode.SRC_ATOP) : null;
-        ViewGroup parent = notifications.getParent() instanceof ViewGroup ? (ViewGroup) notifications.getParent() : null;
-        if (parent != null && notificationsTintLayer == null) {
-            notificationsTintLayer = new View(context);
-            parent.addView(notificationsTintLayer, parent.indexOfChild(notifications),
-                    notifications.getLayoutParams());
-            Log.i(TAG, "Notification tint layer inserted idx=" + parent.indexOfChild(notificationsTintLayer)
-                    + "/" + (parent.getChildCount() - 1) + " parent=" + parent.getClass().getSimpleName());
-        }
-        if (notificationsTintLayer != null) {
-            notificationsTintLayer.setBackgroundColor(tint);
-            notificationsTintLayer.setVisibility(on ? View.VISIBLE : View.GONE);
-        }
+        PorterDuffColorFilter filter = new PorterDuffColorFilter(tint, PorterDuff.Mode.SRC_ATOP);
         int views = applyTintShallow(notifications, filter, 0);
-        Log.i(TAG, "Notification tint " + (on ? "on" : "off")
-                + " layer=" + (notificationsTintLayer != null) + " views=" + views
-                + " swatch=0x" + Integer.toHexString(displayedSwatch));
+        Log.i(TAG, "Notification tint on views=" + views + " swatch=0x" + Integer.toHexString(displayedSwatch));
     }
 
     /** 浅扫（深度 ≤6）：只摸每张卡的直接背景视图，成本约等于一层子视图遍历。 */
