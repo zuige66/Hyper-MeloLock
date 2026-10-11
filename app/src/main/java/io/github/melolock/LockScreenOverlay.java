@@ -366,6 +366,9 @@ final class LockScreenOverlay {
     private int shortcutRowLookups;
     /** 调试用：锁屏状态下永不息屏（stay_awake，默认关）。 */
     private boolean stayAwake;
+    /** 调试用常亮锁：HyperOS 锁屏的息屏走 AOD 倒计时路径，View 级 keepScreenOn 管不住
+     *  （2026-10-11 真机实证：锁屏根/前景层挂 keepScreenOn 沉浸式下照样息屏），必须持 wakelock。 */
+    private android.os.PowerManager.WakeLock stayAwakeLock;
     /**
      * 通知卡跟随封面（notify_card_tint，默认开）。**事件驱动，零周期扫描**：
      * 通知页整页底色来自通知栈后面的 `scrim_notifications`（深色主题=黑、浅色=白，
@@ -881,8 +884,6 @@ final class LockScreenOverlay {
         // 挂窗口根的前景不会跟着走，会「壁纸已出、组件还在」地残留到桌面（实测）。
         // 通知栈仍在窗口根，展开通知时它自然盖在锁屏根之上。
         root.addView(foreground, sceneParams);
-        // 调试 stay_awake：前景层可见期间屏幕不熄（只影响我们自己这层，不碰系统视图状态）。
-        foreground.setKeepScreenOn(stayAwake);
 
         // 全屏封面（模糊背景）的 z 序是本项目最容易翻车的地方，两条约束都是从真机踩出来的：
         //   ① 必须在**原生锁屏壁纸** `keyguard_background_layer` 之上 —— 否则原生壁纸一重显就盖住我们
@@ -926,10 +927,10 @@ final class LockScreenOverlay {
         hideShortcuts = elem(elements, Config.HIDE_SHORTCUTS) != 0;
         notifyCardTint = elem(elements, Config.NOTIFY_CARD_TINT) != 0;
         stayAwake = elem(elements, Config.STAY_AWAKE) != 0;
-        // keepScreenOn 挂在我们自己的前景层上（场景显示期间屏幕不熄）。
-        // 之前挂过 SystemUI 的锁屏根：那是系统视图，HyperOS 的 AOD/超级壁纸盯着它的
-        // 窗口状态，挂上去之后真机出现「亮屏慢 + 滑动时原生壁纸闪烁」。
-        if (stayAwake) Log.i(TAG, "Debug stay-awake ON (via overlay foreground)");
+        // keepScreenOn 挂前景层只是辅助；真正管住 HyperOS 锁屏息屏的是下面的 wakelock。
+        foreground.setKeepScreenOn(stayAwake);
+        updateStayAwakeLock();
+        if (stayAwake) Log.i(TAG, "Debug stay-awake ON (wakelock + foreground keepScreenOn)");
         Log.i(TAG, "Fx: button=" + fxButtonFeedback + " smooth=" + fxSmoothProgress
                 + " pop=" + fxCoverPop + " cardPop=" + fxPlayerCardPop + " songFade=" + songFadeEnabled
                 + " hideShortcuts=" + hideShortcuts + " notifyTint=" + notifyCardTint);
@@ -1027,6 +1028,23 @@ final class LockScreenOverlay {
         // 底部快捷栏要等一次布局才量得到坐标，排到下一帧再对齐；拿不到就沿用 dp(10)。
         foreground.post(this::alignEntryWithShortcutRow);
         return true;
+    }
+
+    /** 调试常亮锁的取放：开关开=持有 SCREEN_BRIGHT_WAKE_LOCK，场景销毁/开关关=释放。 */
+    private void updateStayAwakeLock() {
+        if (stayAwake && stayAwakeLock == null) {
+            android.os.PowerManager pm = (android.os.PowerManager)
+                    context.getSystemService(android.content.Context.POWER_SERVICE);
+            if (pm != null) {
+                stayAwakeLock = pm.newWakeLock(android.os.PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "MeloLock:debugStayAwake");
+                stayAwakeLock.setReferenceCounted(false);
+                stayAwakeLock.acquire();
+            }
+        } else if (!stayAwake && stayAwakeLock != null) {
+            stayAwakeLock.release();
+            stayAwakeLock = null;
+            Log.i(TAG, "Debug stay-awake lock released");
+        }
     }
 
     private static int elem(Map<String, Integer> elements, String key) {
@@ -1933,6 +1951,10 @@ final class LockScreenOverlay {
         if (foreground != null || background != null || shown != null) Log.i(TAG, "restore reason=" + reason + " " + state());
         applyNotificationTint(false);   // 染过就要复原：原生通知栈要带着原始 scrim 回锁屏
         savedCardTints.clear();
+        savedBgDrawables.clear();
+        mediaTintLayers.clear();
+        // 场景整场销毁：调试常亮锁必须还回去（下次 create 按配置重取）。
+        if (stayAwakeLock != null) { stayAwakeLock.release(); stayAwakeLock = null; Log.i(TAG, "Debug stay-awake lock released (restore)"); }
         // stay_awake 挂在前景层上，前景层随场景一起销毁，无需额外清理。
         main.removeCallbacks(progressTicker); main.removeCallbacks(finishSuspend);
         cancelSwatchAnimation();   // 整场销毁：配色渐变停掉，别继续在孤儿视图上刷颜色
@@ -2810,12 +2832,8 @@ final class LockScreenOverlay {
                     + " hostSize=" + header.getWidth() + "x" + header.getHeight());
         }
         GradientDrawable gd = (GradientDrawable) layer.getBackground();
-        gd.setColor(color != null ? 0xFFFF00FF : Color.TRANSPARENT);   // 【临时探针】品红自查
+        gd.setColor(color != null ? color : Color.TRANSPARENT);
         layer.setVisibility(color != null ? View.VISIBLE : View.GONE);
-        if (color != null && layer.getWidth() == 0) {
-            Log.i(TAG, "Media tint layer zero-sized: " + layer.getWidth() + "x" + layer.getHeight()
-                    + " lp=" + (layer.getLayoutParams() != null ? layer.getLayoutParams().toString() : "null"));
-        }
     }
 
     /**
