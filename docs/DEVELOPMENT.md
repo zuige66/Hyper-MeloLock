@@ -1517,3 +1517,24 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
       **未定位到与回退前代码的因果关系**；如后续 release 也慢才是真回归，再深挖。
     - 装机链路复盘：debug↔debug 可 `install -r` 直接覆盖；本轮多次装包均按
       「install → `am crash com.android.systemui` ×2 → 查 rev= 行」闭环执行。
+
+54. 2026-10-11 **通知页染色 v5（终版）：通知卡 setTint + 媒体卡卡内色层；stay_awake 改 wakelock**：
+
+    - **通知卡（backgroundnormal/dimmed，NotificationBackgroundView）**：不用 View background
+      （getBackground()==null），背景 drawable 在内部字段、onDraw 自绘。**公开的 `setTint(int)`
+      是正路**（真机验证有效），染色前反射读 `mTintColor` 存原始值，复原时 setTint 回去。
+    - **媒体卡（MiuiMediaHeaderView，直接挂在通知栈下、不是通知行）**：黑底是 **onDraw 手绘**
+      （无 Drawable 字段、media_bg 常态 src=null，亮/暗模式跟主题变白变黑——两轮普查实证），
+      任何染色 API 都碰不到。方案：**卡内 index 0 插一块静止圆角纯色层**（显式 MATCH_PARENT
+      LayoutParams，自定义 ViewGroup 默认参数会把无固有尺寸的 View 量成 0x0）+ **media_bg 自己的
+      View background 也染色**（普查时对 ImageView 只打了 src 漏查了 background，它铺满整卡、
+      排在色层之上，最后一轮才暴露）。两处同色 90% 封面主色，视觉合成一张卡。
+    - **失败的路线（别再试）**：scrim_notifications 染色（ScrimController 每帧接管写回）；
+      通知栈后插整页色层（zuige 否决——要的是卡片变色不是背景变色）；按类名找媒体头
+      （主进程类名路径不可靠，改从 media_bg 向上爬到栈的直接子级）。
+    - **重挂时机**：系统 rebind 行视图（滚动/主题切换/新通知）会换掉 drawable 实例，
+      展开期间按 500ms 节流浅扫重挂（深度 ≤6）；收起/解锁 restore 时复原（savedCardTints/
+      savedBgDrawables 按视图存原始态）。
+    - **stay_awake 终版**：View 级 keepScreenOn（锁屏根/前景层都试过）管不住 HyperOS 锁屏的
+      AOD 倒计时息屏；改为 **SCREEN_BRIGHT_WAKE_LOCK**（SystemUI uid=1000 有 WAKE_LOCK 权限），
+      create() 按配置取、restore() 必还。锁屏根挂 keepScreenOn 会导致亮屏慢+壁纸闪烁的坑见 #53。
