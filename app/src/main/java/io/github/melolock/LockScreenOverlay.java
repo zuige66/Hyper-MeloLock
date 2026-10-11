@@ -2743,9 +2743,8 @@ final class LockScreenOverlay {
                 count++;
                 if (tintOn) tintProbeDetails.append(" [media ").append(child.getWidth()).append("x").append(child.getHeight()).append("]");
             } else if (isCardBg) {
-                Drawable bg = child.getBackground();
-                if (bg != null) bg.mutate().setColorFilter(filter);
                 count++;
+                Drawable bg = tintInternalBackground(child, filter);
                 if (tintOn) tintProbeDetails.append(" [").append(id).append(" ")
                         .append(child.getClass().getSimpleName()).append(" ")
                         .append(child.getWidth()).append("x").append(child.getHeight())
@@ -2755,6 +2754,35 @@ final class LockScreenOverlay {
             if (child instanceof ViewGroup) count += applyTintShallow((ViewGroup) child, filter, depth + 1);
         }
         return count;
+    }
+
+    /**
+     * 给 NotificationBackgroundView / NotificationShelfBackgroundView 染色。
+     * 这两个类**不用 View 的 background 属性**（getBackground() 返回 null，真机普查实测），
+     * 背景 drawable 存在内部字段里由 onDraw 自绘。优先走公开的 setTint(int)（AOSP 同名方法，
+     * HyperOS 保留），失败则反射取内部 drawable 挂滤镜。返回实际拿到的 drawable 供日志。
+     */
+    private Drawable tintInternalBackground(View card, PorterDuffColorFilter filter) {
+        // 途径一：setTint(int)（滤镜路径拿不到 int 色，探针阶段不走这条）
+        try {
+            java.lang.reflect.Method m = card.getClass().getMethod("setTint", int.class);
+            Object result = m.invoke(card, Integer.valueOf(0xFFFF00FF));
+            if (result == null) { /* void 返回，视为成功 */ }
+        } catch (Throwable t) {
+            // 途径二：反射内部 drawable 字段
+            for (String fieldName : new String[]{"mBackground", "mCustomBackground"}) {
+                try {
+                    java.lang.reflect.Field f = card.getClass().getDeclaredField(fieldName);
+                    f.setAccessible(true);
+                    Object val = f.get(card);
+                    if (val instanceof Drawable) {
+                        ((Drawable) val).mutate().setColorFilter(filter);
+                        return (Drawable) val;
+                    }
+                } catch (Throwable ignored) { }
+            }
+        }
+        return null;
     }
 
     private void hideNativeWallpaperLayers(View view) {
