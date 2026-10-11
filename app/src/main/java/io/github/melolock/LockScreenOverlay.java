@@ -441,6 +441,8 @@ final class LockScreenOverlay {
     /** media_bg 每视图的「已应用色」：快速切页会重建 media_bg 实例（新视图带原始黑底），
      *  单标量守卫会误判「已应用」而跳过写入 → 媒体卡卡死黑底（2026-10-11 真机踩）。 */
     private final java.util.HashMap<View, Integer> mediaBgApplied = new java.util.HashMap<>();
+    /** media_bg 的圆角背景实例（按视图存）：系统重设背景后靠实例身份比对重新铺上。 */
+    private final java.util.HashMap<View, GradientDrawable> mediaBgDrawables = new java.util.HashMap<>();
     /**
      * 全程统一染色（2026-10-11 zuige）：通知栈不只在我们通知页染——锁屏 shade、桌面 shade
      * 只要是同一个栈视图在绘制，就统一染主色（此前桌面 shade 是系统原生混色：会话卡彩色、
@@ -2991,9 +2993,20 @@ final class LockScreenOverlay {
             int views = applyTintShallow(stackAnchor, base, filter, 0);
             if (views != lastSweepViews || base != lastSweepColor) {
                 Log.i(TAG, "Stack tint sweep(" + reason + ") views=" + views
-                        + " color=0x" + Integer.toHexString(base));
+                        + " color=0x" + Integer.toHexString(base) + " media=" + sweepSawMedia);
                 lastSweepViews = views;
                 lastSweepColor = base;
+            }
+            // 媒体卡未命中诊断：黑卡问题（2026-10-11）需要知道栈里实际有什么——
+            // 没摸到媒体卡时打子类清单（15s 节流，避免刷屏）。
+            if (!sweepSawMedia && android.os.SystemClock.elapsedRealtime() - lastMediaMissLogAt > 15000) {
+                lastMediaMissLogAt = android.os.SystemClock.elapsedRealtime();
+                StringBuilder names = new StringBuilder();
+                for (int i = 0; i < stackAnchor.getChildCount() && i < 12; i++) {
+                    if (i > 0) names.append(", ");
+                    names.append(stackAnchor.getChildAt(i).getClass().getSimpleName());
+                }
+                Log.i(TAG, "Stack children(miss " + stackAnchor.getChildCount() + "): " + names);
             }
         } catch (Throwable error) {
             Log.w(TAG, "Stack tint sweep failed", error);   // 失败关闭：染色出错最多回原生色，绝不影响锁屏
@@ -3013,8 +3026,12 @@ final class LockScreenOverlay {
     }
 
     /** 浅扫（深度 ≤6）：只摸每张卡的直接背景视图，成本约等于一层子视图遍历。 */
+    private boolean sweepSawMedia;
+    private long lastMediaMissLogAt;
+    private final java.util.HashSet<View> censusedHeaders = new java.util.HashSet<>();
     private int applyTintShallow(ViewGroup group, Integer cardColor, PorterDuffColorFilter mediaFilter, int depth) {
         if (group == null || depth > 12) return 0;
+        if (depth == 0) sweepSawMedia = false;   // 顶层调用重置：本次扫描是否摸到过媒体卡
         int count = 0;
         for (int i = 0; i < group.getChildCount(); i++) {
             View child = group.getChildAt(i);
@@ -3023,6 +3040,7 @@ final class LockScreenOverlay {
             boolean isMediaBg = id.equals("media_bg");
             boolean isCardBg = id.equals("backgroundnormal") || id.equals("backgrounddimmed");
             if (isMediaBg && child instanceof ImageView) {
+                sweepSawMedia = true;
                 ((ImageView) child).setColorFilter(mediaFilter);
                 count++;
                 // media_bg 是铺满整卡的 ImageView（1002x509）：更可疑的是**它自己的 View background**
@@ -3035,14 +3053,31 @@ final class LockScreenOverlay {
                             + " size=" + child.getWidth() + "x" + child.getHeight());
                 }
                 if (cardColor != null) {
-                    // cardColor 是 Integer，必须 equals 值比较；!= 会变成引用比较（每帧误判重写）。
+                    // **背景按 drawable 实例身份比对，不能只比记录色**（2026-10-11 媒体卡黑底根因）：
+                    // 系统每次刷新媒体信息都会把 media_bg 的背景重设回自己的 GradientDrawable（黑），
+                    // 而只比记录色的话守卫会认为「已染过」直接跳过 → 卡面永远退回黑底。
+                    GradientDrawable bg = mediaBgDrawables.get(child);
+                    if (bg == null) {
+                        bg = new GradientDrawable();
+                        bg.setCornerRadius(28f * context.getResources().getDisplayMetrics().density);
+                        mediaBgDrawables.put(child, bg);
+                    }
+                    if (child.getBackground() != bg) {
+                        child.setBackground(bg);
+                        mediaBgApplied.remove(child);   // 换了实例就要重写色，不能信旧记录
+                    }
                     Integer applied = mediaBgApplied.get(child);
                     if (applied == null || applied.intValue() != cardColor.intValue()) {
-                        child.setBackgroundColor(cardColor);
+                        bg.setColor(cardColor);
                         mediaBgApplied.put(child, cardColor);
                     }
                 } else {
                     mediaBgApplied.remove(child);
+                    GradientDrawable bg = mediaBgDrawables.remove(child);
+                    if (bg != null && child.getBackground() == bg) {
+                        Drawable saved = savedBgDrawables.get(child);
+                        child.setBackground(saved);
+                    }
                     if (savedBgDrawables.get(child) != null) child.setBackground(savedBgDrawables.get(child));
                     else child.setBackgroundColor(Color.TRANSPARENT);
                 }
@@ -3063,6 +3098,7 @@ final class LockScreenOverlay {
                 applyInkToContent(child);   // 墨色只在「染上」时铺；复原走 restoreInk()
             }
             if (child instanceof ViewGroup && child.getClass().getSimpleName().contains("MiuiMediaHeaderView")) {
+                sweepSawMedia = true;
                 tintMediaHeader((ViewGroup) child, cardColor);
                 count++;
             }
@@ -3108,6 +3144,81 @@ final class LockScreenOverlay {
         inkedIcons.clear();
     }
 
+    /** mi_media_controls 的圆角背景（按色缓存单实例；swatch 渐变期间逐帧变色也不新建对象）。 */
+    private GradientDrawable mediaControlsBg;
+    private int mediaControlsBgColor;
+    private GradientDrawable mediaControlsBg(int color) {
+        if (mediaControlsBg == null) {
+            mediaControlsBg = new GradientDrawable();
+            mediaControlsBg.setCornerRadius(28f * context.getResources().getDisplayMetrics().density);
+            mediaControlsBgColor = -1;
+        }
+        if (mediaControlsBgColor != color) {
+            mediaControlsBg.setColor(color);
+            mediaControlsBgColor = color;
+        }
+        return mediaControlsBg;
+    }
+
+    /**
+     * 媒体卡普查（每宿主实例一次）：子视图清单（类/id/可见性/尺寸/alpha/背景）+ 向上 4 级父链。
+     * 背景：色层插入成功但卡面显示黑——需要知道黑是谁画的（宿主 onDraw 之外是否有
+     * 不透明兄弟/父层）。一次性成本，不随帧跑。
+     */
+    private void logMediaHeaderCensus(ViewGroup header) {
+        try {
+            StringBuilder sb = new StringBuilder("MediaHeader census host=" + header.getClass().getSimpleName()
+                    + " bg=" + bgName(header) + " vis=" + header.getVisibility() + " alpha=" + header.getAlpha());
+            for (int i = 0; i < header.getChildCount(); i++) {
+                View c = header.getChildAt(i);
+                sb.append(" | [").append(i).append("] ").append(c.getClass().getSimpleName())
+                        .append(" id=").append(resourceName(c))
+                        .append(" vis=").append(c.getVisibility())
+                        .append(" ").append(c.getWidth()).append("x").append(c.getHeight())
+                        .append(" a=").append(c.getAlpha())
+                        .append(" bg=").append(bgName(c));
+                if (c instanceof ImageView) {
+                    Drawable src = ((ImageView) c).getDrawable();
+                    sb.append(" src=").append(src == null ? "null" : src.getClass().getSimpleName());
+                }
+                if (c instanceof ViewGroup) sb.append(" grandChildren=").append(((ViewGroup) c).getChildCount());
+            }
+            View p = header.getParent() instanceof View ? (View) header.getParent() : null;
+            for (int level = 1; p != null && level <= 4; level++) {
+                sb.append(" || P").append(level).append("=").append(p.getClass().getSimpleName())
+                        .append(" bg=").append(bgName(p)).append(" vis=").append(p.getVisibility());
+                p = p.getParent() instanceof View ? (View) p.getParent() : null;
+            }
+            Log.i(TAG, sb.toString());
+            // 二级普查：mi_media_controls 的 14 个子视图——黑底极可能是其中某个铺满整卡的孩子
+            //（画在我们设的背景之上、文字之下），找到它就能直接改它的背景。
+            for (int i = 0; i < header.getChildCount(); i++) {
+                View c = header.getChildAt(i);
+                if (!(c instanceof ViewGroup)) continue;
+                ViewGroup inner = (ViewGroup) c;
+                if (inner.getChildCount() == 0 || inner.getChildCount() > 20) continue;
+                StringBuilder sb2 = new StringBuilder("MediaHeader inner[" + i + "] "
+                        + inner.getClass().getSimpleName() + " id=" + resourceName(inner) + ":");
+                for (int j = 0; j < inner.getChildCount(); j++) {
+                    View g = inner.getChildAt(j);
+                    sb2.append(" [").append(j).append("]").append(g.getClass().getSimpleName())
+                            .append(" id=").append(resourceName(g))
+                            .append(" vis=").append(g.getVisibility())
+                            .append(" ").append(g.getWidth()).append("x").append(g.getHeight())
+                            .append(" bg=").append(bgName(g));
+                }
+                Log.i(TAG, sb2.toString());
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "MediaHeader census failed", error);
+        }
+    }
+
+    private static String bgName(View view) {
+        Drawable bg = view.getBackground();
+        return bg == null ? "null" : bg.getClass().getSimpleName();
+    }
+
     /**
      * 媒体卡染色（MiuiMediaHeaderView，2026-10-11 两轮普查实证：黑底是它 onDraw 手绘的，
      * 无 Drawable 字段、media_bg 常态无位图，亮/暗模式跟主题变白变黑，任何染色 API 都碰不到）。
@@ -3116,6 +3227,36 @@ final class LockScreenOverlay {
      * 颜色 90% 封面主色；off 时 GONE 复原。宿主 rebind 后是新实例，按 host 分开管理。
      */
     private void tintMediaHeader(ViewGroup header, Integer color) {
+        // 2026-10-11 晚普查实证（MediaHeader census）：往 MiuiMediaHeaderView 里插层**无效**——
+        // 它的自定义 onMeasure 把陌生子视图量成 0x0（显式 MATCH_PARENT 也逃不掉），层永远画
+        // 不出来，卡面始终是手绘黑底。改为给卡内容容器 **mi_media_controls**（普通
+        // ConstraintLayout，census 实证 1002x509、bg=null）设圆角背景：背景画在内容之下、
+        // 宿主手绘黑底之上，零布局参与。id 对不上（换 ROM）才退回旧的插层路径兜底。
+        ViewGroup target = null;
+        for (int i = 0; i < header.getChildCount(); i++) {
+            View c = header.getChildAt(i);
+            if (c instanceof ViewGroup && resourceName(c).equals("mi_media_controls")) { target = (ViewGroup) c; break; }
+        }
+        if (target != null) {
+            if (!savedBgDrawables.containsKey(target)) {
+                savedBgDrawables.put(target, target.getBackground());
+                Log.i(TAG, "Media controls bg path: " + target.getClass().getSimpleName()
+                        + " " + target.getWidth() + "x" + target.getHeight());
+                if (censusedHeaders.add(header)) logMediaHeaderCensus(header);
+            }
+            if (color != null) {
+                Integer applied = mediaBgApplied.get(target);
+                if (applied == null || applied.intValue() != color.intValue()) {
+                    target.setBackground(mediaControlsBg(color));
+                    mediaBgApplied.put(target, color);
+                }
+            } else {
+                target.setBackground(savedBgDrawables.get(target));   // null = 恢复无背景
+                mediaBgApplied.remove(target);
+                savedBgDrawables.remove(target);
+            }
+            return;
+        }
         View layer = mediaTintLayers.get(header);
         if (layer == null) {
             layer = new View(context);
@@ -3134,6 +3275,7 @@ final class LockScreenOverlay {
             Log.i(TAG, "Media tint layer added into " + header.getClass().getSimpleName()
                     + " children=" + header.getChildCount()
                     + " hostSize=" + header.getWidth() + "x" + header.getHeight());
+            logMediaHeaderCensus(header);   // 「色层在卡里却显示黑」的取证：子视图清单+父链（每宿主一次）
         }
         GradientDrawable gd = (GradientDrawable) layer.getBackground();
         // 已应用色记在 layer 自己的 tag 上（不用标量：宿主重建会新建 layer+GradientDrawable，
