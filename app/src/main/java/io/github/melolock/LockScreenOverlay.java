@@ -411,7 +411,9 @@ final class LockScreenOverlay {
      */
     private PorterDuffColorFilter cachedMediaFilter;
     private int cachedMediaFilterColor;
-    private int lastMediaBgColor;
+    /** media_bg 每视图的「已应用色」：快速切页会重建 media_bg 实例（新视图带原始黑底），
+     *  单标量守卫会误判「已应用」而跳过写入 → 媒体卡卡死黑底（2026-10-11 真机踩）。 */
+    private final java.util.HashMap<View, Integer> mediaBgApplied = new java.util.HashMap<>();
     private int lastLayerColor;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
@@ -1984,6 +1986,7 @@ final class LockScreenOverlay {
         savedCardTints.clear();
         savedBgDrawables.clear();
         mediaTintLayers.clear();
+        mediaBgApplied.clear();
         // 场景整场销毁：调试常亮锁必须还回去（下次 create 按配置重取）。
         if (stayAwakeLock != null) { stayAwakeLock.release(); stayAwakeLock = null; Log.i(TAG, "Debug stay-awake lock released (restore)"); }
         // stay_awake 挂在前景层上，前景层随场景一起销毁，无需额外清理。
@@ -2827,12 +2830,16 @@ final class LockScreenOverlay {
                             + " size=" + child.getWidth() + "x" + child.getHeight());
                 }
                 if (cardColor != null) {
-                    if (lastMediaBgColor != cardColor) {
+                    Integer applied = mediaBgApplied.get(child);
+                    if (applied == null || applied != cardColor) {
                         child.setBackgroundColor(cardColor);
-                        lastMediaBgColor = cardColor;
+                        mediaBgApplied.put(child, cardColor);
                     }
-                } else if (savedBgDrawables.get(child) != null) child.setBackground(savedBgDrawables.get(child));
-                else child.setBackgroundColor(Color.TRANSPARENT);
+                } else {
+                    mediaBgApplied.remove(child);
+                    if (savedBgDrawables.get(child) != null) child.setBackground(savedBgDrawables.get(child));
+                    else child.setBackgroundColor(Color.TRANSPARENT);
+                }
                 View host = child;
                 for (int k = 0; k < 4; k++) {
                     View p = host.getParent() instanceof View ? (View) host.getParent() : null;
