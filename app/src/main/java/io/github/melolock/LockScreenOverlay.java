@@ -867,6 +867,8 @@ final class LockScreenOverlay {
         // 挂窗口根的前景不会跟着走，会「壁纸已出、组件还在」地残留到桌面（实测）。
         // 通知栈仍在窗口根，展开通知时它自然盖在锁屏根之上。
         root.addView(foreground, sceneParams);
+        // 调试 stay_awake：前景层可见期间屏幕不熄（只影响我们自己这层，不碰系统视图状态）。
+        foreground.setKeepScreenOn(stayAwake);
 
         // 全屏封面（模糊背景）的 z 序是本项目最容易翻车的地方，两条约束都是从真机踩出来的：
         //   ① 必须在**原生锁屏壁纸** `keyguard_background_layer` 之上 —— 否则原生壁纸一重显就盖住我们
@@ -910,8 +912,10 @@ final class LockScreenOverlay {
         hideShortcuts = elem(elements, Config.HIDE_SHORTCUTS) != 0;
         notifyCardTint = elem(elements, Config.NOTIFY_CARD_TINT) != 0;
         stayAwake = elem(elements, Config.STAY_AWAKE) != 0;
-        if (root != null) root.setKeepScreenOn(stayAwake);   // 调试：锁屏下永不息屏（restore 会撤掉）
-        if (stayAwake) Log.i(TAG, "Debug stay-awake ON: keyguard will not time out");
+        // keepScreenOn 挂在我们自己的前景层上（场景显示期间屏幕不熄）。
+        // 之前挂过 SystemUI 的锁屏根：那是系统视图，HyperOS 的 AOD/超级壁纸盯着它的
+        // 窗口状态，挂上去之后真机出现「亮屏慢 + 滑动时原生壁纸闪烁」。
+        if (stayAwake) Log.i(TAG, "Debug stay-awake ON (via overlay foreground)");
         // 重置染色记账：create() 会复用同一实例（config-changed 重建），残留的
         // lastTintSwatch/tintLogged 会让新场景第一次 applyNotificationTint 被跳过。
         tintLogged = false;
@@ -1918,7 +1922,7 @@ final class LockScreenOverlay {
     /** 撤层。reason 只用于诊断日志，用来定位「上滑露壁纸 / 亮屏先见原生锁屏」由哪条路径触发。 */
     private void restore(String reason) {
         if (foreground != null || background != null || shown != null) Log.i(TAG, "restore reason=" + reason + " " + state());
-        if (root != null && stayAwake) { root.setKeepScreenOn(false); Log.i(TAG, "Debug stay-awake OFF (restore " + reason + ")"); }
+        // stay_awake 挂在前景层上，前景层随场景一起销毁，无需额外清理。
         main.removeCallbacks(progressTicker); main.removeCallbacks(finishSuspend);
         cancelSwatchAnimation();   // 整场销毁：配色渐变停掉，别继续在孤儿视图上刷颜色
         if (progressAnimator != null) { progressAnimator.cancel(); progressAnimator = null; }   // 进度平滑动画同理
