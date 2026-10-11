@@ -390,7 +390,14 @@ final class LockScreenOverlay {
      */
     private final java.util.HashMap<View, View> mediaTintLayers = new java.util.HashMap<>();
     /** 媒体卡 background 原始 drawable（按视图存），复原用。 */
+    /** 媒体卡 background 原始 drawable（按视图存），复原用。 */
     private final java.util.HashMap<View, Drawable> savedBgDrawables = new java.util.HashMap<>();
+    /** 通知行内容墨色化：文本原始颜色（复原用）与已染矢量图标的集合。 */
+    private final java.util.HashMap<View, Integer> savedTextColors = new java.util.HashMap<>();
+    private final java.util.HashSet<View> inkedIcons = new java.util.HashSet<>();
+    /** 与沉浸式播放器卡同一套「浅底墨字」配色（applyCardColors 浅底分支）。 */
+    private static final int INK_TITLE = 0xFF1C1C1E;
+    private static final int INK_SUB = 0xFF6C6C70;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -2741,6 +2748,7 @@ final class LockScreenOverlay {
             if (!tintOn) return;
             tintOn = false;
             applyTintShallow(notifications, null, null, 0);
+            restoreInk();
             Log.i(TAG, "Notification tint off");
             return;
         }
@@ -2758,7 +2766,7 @@ final class LockScreenOverlay {
 
     /** 浅扫（深度 ≤6）：只摸每张卡的直接背景视图，成本约等于一层子视图遍历。 */
     private int applyTintShallow(ViewGroup group, Integer cardColor, PorterDuffColorFilter mediaFilter, int depth) {
-        if (group == null || depth > 6) return 0;
+        if (group == null || depth > 12) return 0;
         int count = 0;
         for (int i = 0; i < group.getChildCount(); i++) {
             View child = group.getChildAt(i);
@@ -2794,6 +2802,8 @@ final class LockScreenOverlay {
             } else if (isCardBg) {
                 tintCardInternal(child, cardColor);
                 count++;
+            } else if (cardColor != null) {
+                applyInkToContent(child);   // 墨色只在「染上」时铺；复原走 restoreInk()
             }
             if (child instanceof ViewGroup && child.getClass().getSimpleName().contains("MiuiMediaHeaderView")) {
                 tintMediaHeader((ViewGroup) child, cardColor);
@@ -2802,6 +2812,41 @@ final class LockScreenOverlay {
             if (child instanceof ViewGroup) count += applyTintShallow((ViewGroup) child, cardColor, mediaFilter, depth + 1);
         }
         return count;
+    }
+
+    /**
+     * 行内容墨色化（与沉浸式播放器卡同款，zuige 2026-10-11：白字配浅底难看）：
+     * 文本按系统原色的 alpha 分主/次（系统副标题是带 alpha 的白），图标只染矢量 drawable，
+     * **位图（专辑图/应用图标）绝不碰**；ProgressBar 一并转深灰。原始文本色存 savedTextColors 供复原。
+     */
+    private void applyInkToContent(View child) {
+        if (child instanceof TextView) {
+            TextView tv = (TextView) child;
+            if (!savedTextColors.containsKey(child)) savedTextColors.put(child, tv.getCurrentTextColor());
+            int original = savedTextColors.get(child);
+            tv.setTextColor(Color.alpha(original) >= 0xFF ? INK_TITLE : INK_SUB);
+        } else if (child instanceof ImageView) {
+            Drawable src = ((ImageView) child).getDrawable();
+            if (src == null) return;
+            String cls = src.getClass().getSimpleName();
+            if (cls.contains("Bitmap") || cls.contains("BitmapDrawable") || cls.contains("Icon")) return;
+            ((ImageView) child).setColorFilter(INK_TITLE);
+            inkedIcons.add(child);
+        } else if (child instanceof ProgressBar) {
+            ((ProgressBar) child).setProgressTintList(android.content.res.ColorStateList.valueOf(0xFF3C3C40));
+        }
+    }
+
+    /** 复原墨色化：文本回原始色，图标滤镜清空。 */
+    private void restoreInk() {
+        for (java.util.Map.Entry<View, Integer> e : savedTextColors.entrySet()) {
+            if (e.getKey() instanceof TextView) ((TextView) e.getKey()).setTextColor(e.getValue());
+        }
+        for (View icon : inkedIcons) {
+            if (icon instanceof ImageView) ((ImageView) icon).setColorFilter(null);
+        }
+        savedTextColors.clear();
+        inkedIcons.clear();
     }
 
     /**
