@@ -395,9 +395,14 @@ final class LockScreenOverlay {
     /** 通知行内容墨色化：文本原始颜色（复原用）与已染矢量图标的集合。 */
     private final java.util.HashMap<View, Integer> savedTextColors = new java.util.HashMap<>();
     private final java.util.HashSet<View> inkedIcons = new java.util.HashSet<>();
-    /** 与沉浸式播放器卡同一套「浅底墨字」配色（applyCardColors 浅底分支）。 */
+    /** 与沉浸式播放器卡同一套「按底色亮度联动」的字色（applyCardColors 的亮/暗两档）。 */
     private static final int INK_TITLE = 0xFF1C1C1E;
     private static final int INK_SUB = 0xFF6C6C70;
+    private static final int INK_TITLE_ON_DARK = Color.WHITE;
+    private static final int INK_SUB_ON_DARK = 0xFF9E9EA3;
+    /** 当前生效的墨色（每次染色 pass 按底色亮度重算，与播放器卡 isLightColor 规则一致）。 */
+    private int inkTitleColor = INK_TITLE;
+    private int inkSubColor = INK_SUB;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -2759,6 +2764,10 @@ final class LockScreenOverlay {
         lastCardTintMs = now;
         int base = displayedSwatch != 0 ? containerFromSwatch(displayedSwatch) : 0xFF181818;
         int tintColor = (base & 0x00FFFFFF) | 0xE6000000;   // 90% 不透明
+        // 字色随底色亮度联动（与 applyCardColors 同一条规则）：亮底墨字、深/艳底白字。
+        boolean lightCard = isLightColor(base);
+        inkTitleColor = lightCard ? INK_TITLE : INK_TITLE_ON_DARK;
+        inkSubColor = lightCard ? INK_SUB : INK_SUB_ON_DARK;
         PorterDuffColorFilter mediaFilter = new PorterDuffColorFilter(tintColor, PorterDuff.Mode.SRC_ATOP);
         int views = applyTintShallow(notifications, tintColor, mediaFilter, 0);
         Log.i(TAG, "Notification tint on views=" + views + " swatch=0x" + Integer.toHexString(displayedSwatch));
@@ -2824,16 +2833,16 @@ final class LockScreenOverlay {
             TextView tv = (TextView) child;
             if (!savedTextColors.containsKey(child)) savedTextColors.put(child, tv.getCurrentTextColor());
             int original = savedTextColors.get(child);
-            tv.setTextColor(Color.alpha(original) >= 0xFF ? INK_TITLE : INK_SUB);
+            tv.setTextColor(Color.alpha(original) >= 0xFF ? inkTitleColor : inkSubColor);
         } else if (child instanceof ImageView) {
             Drawable src = ((ImageView) child).getDrawable();
             if (src == null) return;
             String cls = src.getClass().getSimpleName();
             if (cls.contains("Bitmap") || cls.contains("BitmapDrawable") || cls.contains("Icon")) return;
-            ((ImageView) child).setColorFilter(INK_TITLE);
+            ((ImageView) child).setColorFilter(inkTitleColor);
             inkedIcons.add(child);
         } else if (child instanceof ProgressBar) {
-            ((ProgressBar) child).setProgressTintList(android.content.res.ColorStateList.valueOf(0xFF3C3C40));
+            ((ProgressBar) child).setProgressTintList(android.content.res.ColorStateList.valueOf(inkTitleColor));
         }
     }
 
