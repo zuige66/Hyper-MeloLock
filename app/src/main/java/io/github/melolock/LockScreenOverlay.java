@@ -2742,15 +2742,26 @@ final class LockScreenOverlay {
             String id = resourceName(child);   // 全小写：真机普查确认实际 id 是 backgroundnormal/dimmed
             boolean isMediaBg = id.equals("media_bg");
             boolean isCardBg = id.equals("backgroundnormal") || id.equals("backgrounddimmed");
-            boolean isMediaHeader = child.getClass().getSimpleName().contains("MiuiMediaHeaderView");
             if (isMediaBg && child instanceof ImageView) {
                 ((ImageView) child).setColorFilter(mediaFilter);
                 count++;
+                // 媒体卡宿主不按类名认（主进程与普查进程的类名可能不一致）：
+                // 从 media_bg 往上爬到通知栈的直接子级，那就是媒体头容器。
+                View host = child;
+                for (int k = 0; k < 4; k++) {
+                    View p = host.getParent() instanceof View ? (View) host.getParent() : null;
+                    if (p == null || p == group) break;
+                    host = p;
+                }
+                if (host != group && host instanceof ViewGroup) {
+                    tintMediaHeader((ViewGroup) host, cardColor);
+                    count++;
+                }
             } else if (isCardBg) {
                 tintCardInternal(child, cardColor);
                 count++;
             }
-            if (isMediaHeader && child instanceof ViewGroup) {
+            if (child instanceof ViewGroup && child.getClass().getSimpleName().contains("MiuiMediaHeaderView")) {
                 tintMediaHeader((ViewGroup) child, cardColor);
                 count++;
             }
@@ -2779,6 +2790,8 @@ final class LockScreenOverlay {
         if (layer.getParent() != header) {
             if (layer.getParent() instanceof ViewGroup) ((ViewGroup) layer.getParent()).removeView(layer);
             header.addView(layer, 0);
+            Log.i(TAG, "Media tint layer added into " + header.getClass().getName()
+                    + " children=" + header.getChildCount());
         }
         GradientDrawable gd = (GradientDrawable) layer.getBackground();
         gd.setColor(color != null ? color : Color.TRANSPARENT);
