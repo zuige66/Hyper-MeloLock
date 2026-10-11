@@ -492,10 +492,10 @@ internal fun LockAppearancePage() {
     }
 
     // 各分组的「恢复默认」键集（↺ 按钮）；背景组例外：三态存 SharedPreferences 非 elements。
-    // 2026-10-11 重排：动效组取消（归位到各组件）；左下拉归全局；通知页独立成组。
+    // 2026-10-11 重排：动效组取消（归位到各组件）；左下拉、永不息屏归全局；通知页独立成组。
     val sectionDefaultKeys: Map<String, List<String>> = mapOf(
-        "global" to listOf(Config.SWATCH_PICK, Config.SONG_FADE, Config.HIDE_SHORTCUTS, Config.BLOCK_LEFT_SHADE),
-        "notify" to listOf(Config.NOTIFY_CARD_TINT),
+        "global" to listOf(Config.SWATCH_PICK, Config.SONG_FADE, Config.HIDE_SHORTCUTS, Config.BLOCK_LEFT_SHADE, Config.STAY_AWAKE),
+        "notify" to listOf(Config.NOTIFY_CARD_TINT, Config.NOTIFY_CARD_BG, Config.NOTIFY_CARD_BG_PICK),
         "date" to listOf(Config.DATE_ENABLED, Config.DATE_SIZE, Config.DATE_WEIGHT, Config.DATE_COLOR, Config.DATE_SPACING),
         "sign" to listOf(Config.SIGN_ENABLED, Config.SIGN_SIZE, Config.SIGN_WEIGHT, Config.SIGN_COLOR, Config.SIGN_SPACING),
         "clock" to listOf(Config.CLOCK_SIZE, Config.CLOCK_SPACING, Config.CLOCK_WEIGHT, Config.CLOCK_COLOR, Config.CLOCK_ROUNDNESS, Config.CLOCK_STROKE),
@@ -526,7 +526,7 @@ internal fun LockAppearancePage() {
             CollapsibleSection("全局", "global", MiuixIcons.Settings, expandedSections, ::toggleSection, { resetSection("global") }) {
                 PreferenceDropdown(
                     title = "主色来源",
-                    summary = "全局取色时挑选专辑主色的方式",
+                    summary = "从封面取主色的方式",
                     icon = null,
                     items = listOf("最鲜艳优先", "占比优先（封面占比最大的色）", "色族占比（近似色归并，抗干扰）"),
                     selectedIndex = value(Config.SWATCH_PICK).coerceIn(0, 2),
@@ -534,24 +534,31 @@ internal fun LockAppearancePage() {
                 )
                 PreferenceSwitch(
                     title = "切歌淡出动效",
-                    summary = "换歌时封面、文字与配色平滑过渡；关闭后瞬时切换",
+                    summary = "换歌时配色平滑过渡",
                     icon = null,
                     checked = value(Config.SONG_FADE) != 0,
                     onCheckedChange = { update(Config.SONG_FADE, if (it) 1 else 0) },
                 )
                 PreferenceSwitch(
                     title = "隐藏相机 / 手电筒",
-                    summary = "隐藏锁屏底部那一排快捷图标（含触摸响应），锁屏更干净",
+                    summary = "隐藏底部快捷图标及触摸响应",
                     icon = null,
                     checked = value(Config.HIDE_SHORTCUTS) != 0,
                     onCheckedChange = { update(Config.HIDE_SHORTCUTS, if (it) 1 else 0) },
                 )
                 PreferenceSwitch(
                     title = "锁屏禁止左下拉",
-                    summary = "锁屏时禁用左侧下拉（全局行为，从播放器组迁入）",
+                    summary = "锁屏时禁用左侧下拉手势",
                     icon = null,
                     checked = value(Config.BLOCK_LEFT_SHADE) != 0,
                     onCheckedChange = { update(Config.BLOCK_LEFT_SHADE, if (it) 1 else 0) },
+                )
+                PreferenceSwitch(
+                    title = "永不息屏",
+                    summary = "锁屏常亮（欣赏/调试用），解锁后正常熄屏",
+                    icon = null,
+                    checked = value(Config.STAY_AWAKE) != 0,
+                    onCheckedChange = { update(Config.STAY_AWAKE, if (it) 1 else 0) },
                 )
             }
         }
@@ -565,17 +572,17 @@ internal fun LockAppearancePage() {
                     onCheckedChange = { update(Config.DATE_ENABLED, if (it) 1 else 0) },
                 )
                 if (value(Config.DATE_ENABLED) != 0) {
-                    DpSlider("字号", value(Config.DATE_SIZE), 12..48, onCommit = { update(Config.DATE_SIZE, it) })
-                    DpSlider("粗细", value(Config.DATE_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.DATE_WEIGHT, it) })
                     PreferenceDropdown(
                         title = "颜色",
-                        summary = "日期文字颜色，可选全局取色",
+                        summary = "可选全局取色",
                         icon = null,
                         items = TEXT_COLOR_LABELS,
                         selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.DATE_COLOR)).coerceAtLeast(0),
                         onSelectedIndexChange = { update(Config.DATE_COLOR, TEXT_COLOR_VALUES[it]) },
                     )
                     PickStyleDropdown(Config.DATE_COLOR, Config.DATE_PICK, ::value, ::update)
+                    DpSlider("字号", value(Config.DATE_SIZE), 12..48, onCommit = { update(Config.DATE_SIZE, it) })
+                    DpSlider("粗细", value(Config.DATE_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.DATE_WEIGHT, it) })
                     DpSlider("上间距", value(Config.DATE_SPACING), 0..160, onCommit = { update(Config.DATE_SPACING, it) })
                 }
             }
@@ -591,26 +598,32 @@ internal fun LockAppearancePage() {
                 )
                 if (value(Config.SIGN_ENABLED) != 0) {
                     SignatureInputField()
-                    DpSlider("字号", value(Config.SIGN_SIZE), 10..40, onCommit = { update(Config.SIGN_SIZE, it) })
-                    DpSlider("粗细", value(Config.SIGN_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.SIGN_WEIGHT, it) })
                     PreferenceDropdown(
                         title = "颜色",
-                        summary = "签名文字颜色，可选全局取色",
+                        summary = "可选全局取色",
                         icon = null,
                         items = TEXT_COLOR_LABELS,
                         selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.SIGN_COLOR)).coerceAtLeast(0),
                         onSelectedIndexChange = { update(Config.SIGN_COLOR, TEXT_COLOR_VALUES[it]) },
                     )
                     PickStyleDropdown(Config.SIGN_COLOR, Config.SIGN_PICK, ::value, ::update)
+                    DpSlider("字号", value(Config.SIGN_SIZE), 10..40, onCommit = { update(Config.SIGN_SIZE, it) })
+                    DpSlider("粗细", value(Config.SIGN_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.SIGN_WEIGHT, it) })
                     DpSlider("上间距", value(Config.SIGN_SPACING), 0..160, onCommit = { update(Config.SIGN_SPACING, it) })
                 }
             }
         }
         item {
             CollapsibleSection("时间", "clock", MiuixIcons.WorldClock, expandedSections, ::toggleSection, { resetSection("clock") }) {
-                DpSlider("字号", value(Config.CLOCK_SIZE), 20..120, onCommit = { update(Config.CLOCK_SIZE, it) })
-                DpSlider("粗细", value(Config.CLOCK_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.CLOCK_WEIGHT, it) })
-                DpSlider("描边加粗", value(Config.CLOCK_STROKE), 0..8, onCommit = { update(Config.CLOCK_STROKE, it) })
+                PreferenceDropdown(
+                    title = "颜色",
+                    summary = "可选全局取色",
+                    icon = null,
+                    items = TEXT_COLOR_LABELS,
+                    selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.CLOCK_COLOR)).coerceAtLeast(0),
+                    onSelectedIndexChange = { update(Config.CLOCK_COLOR, TEXT_COLOR_VALUES[it]) },
+                )
+                PickStyleDropdown(Config.CLOCK_COLOR, Config.CLOCK_PICK, ::value, ::update)
                 PreferenceDropdown(
                     title = "字体圆润",
                     summary = "圆体数字字体，只影响数字与冒号",
@@ -619,26 +632,27 @@ internal fun LockAppearancePage() {
                     selectedIndex = value(Config.CLOCK_ROUNDNESS).coerceIn(0, ROUNDNESS_LABELS.lastIndex),
                     onSelectedIndexChange = { update(Config.CLOCK_ROUNDNESS, it) },
                 )
-                PreferenceDropdown(
-                    title = "颜色",
-                    summary = "时间文字颜色，可选全局取色",
-                    icon = null,
-                    items = TEXT_COLOR_LABELS,
-                    selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.CLOCK_COLOR)).coerceAtLeast(0),
-                    onSelectedIndexChange = { update(Config.CLOCK_COLOR, TEXT_COLOR_VALUES[it]) },
-                )
-                PickStyleDropdown(Config.CLOCK_COLOR, Config.CLOCK_PICK, ::value, ::update)
+                DpSlider("字号", value(Config.CLOCK_SIZE), 20..120, onCommit = { update(Config.CLOCK_SIZE, it) })
+                DpSlider("粗细", value(Config.CLOCK_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.CLOCK_WEIGHT, it) })
+                DpSlider("描边加粗", value(Config.CLOCK_STROKE), 0..8, onCommit = { update(Config.CLOCK_STROKE, it) })
                 DpSlider("上间距", value(Config.CLOCK_SPACING), 0..160, onCommit = { update(Config.CLOCK_SPACING, it) })
             }
         }
         item {
             CollapsibleSection("专辑封面", "cover", MiuixIcons.Album, expandedSections, ::toggleSection, { resetSection("cover") }) {
+                PreferenceSwitch(
+                    title = "封面弹入",
+                    summary = "换歌时封面缩放弹入",
+                    icon = null,
+                    checked = value(Config.COVER_POP) != 0,
+                    onCheckedChange = { update(Config.COVER_POP, if (it) 1 else 0) },
+                )
                 DpSlider("缩放", value(Config.COVER_SCALE), 10..300, unit = "%", onCommit = { update(Config.COVER_SCALE, it) })
                 DpSlider("宽度 (0=自动)", value(Config.COVER_WIDTH), 0..600, onCommit = { update(Config.COVER_WIDTH, it) })
                 DpSlider("高度 (0=自动)", value(Config.COVER_HEIGHT), 0..600, onCommit = { update(Config.COVER_HEIGHT, it) })
                 PreferenceSlider(
                     title = "圆角",
-                    summary = "锁屏专辑封面的圆角半径",
+                    summary = "封面圆角半径",
                     icon = null,
                     value = radius,
                     valueText = "${radius.toInt()} dp",
@@ -649,60 +663,52 @@ internal fun LockAppearancePage() {
                     onValueChangeFinished = { Config.setCornerRadiusDp(context, radius.toInt()) },
                 )
                 DpSlider("上间距", value(Config.COVER_SPACING), 0..160, onCommit = { update(Config.COVER_SPACING, it) })
-                PreferenceSwitch(
-                    title = "封面弹入",
-                    summary = "换歌时大封面轻微缩放弹入",
-                    icon = null,
-                    checked = value(Config.COVER_POP) != 0,
-                    onCheckedChange = { update(Config.COVER_POP, if (it) 1 else 0) },
-                )
             }
         }
         item {
             CollapsibleSection("播放器", "card", MiuixIcons.Music, expandedSections, ::toggleSection, { resetSection("card") }) {
-                DpSlider("缩放", value(Config.CARD_SCALE), 10..300, unit = "%", onCommit = { update(Config.CARD_SCALE, it) })
-                DpSlider("宽度 (0=自动)", value(Config.CARD_WIDTH), 0..600, onCommit = { update(Config.CARD_WIDTH, it) })
-                DpSlider("高度 (0=自动)", value(Config.CARD_HEIGHT), 0..600, onCommit = { update(Config.CARD_HEIGHT, it) })
-                DpSlider("圆角", value(Config.CARD_RADIUS), 0..48, onCommit = { update(Config.CARD_RADIUS, it) })
-                DpSlider("上间距", value(Config.CARD_SPACING), 0..160, onCommit = { update(Config.CARD_SPACING, it) })
                 PreferenceDropdown(
                     title = "底色",
-                    summary = "卡片背景色，文字按亮度自动适配",
+                    summary = "文字按亮度自动黑白",
                     icon = null,
                     items = CARD_BG_LABELS,
                     selectedIndex = CARD_BG_VALUES.indexOf(value(Config.CARD_BG)).coerceAtLeast(0),
                     onSelectedIndexChange = { update(Config.CARD_BG, CARD_BG_VALUES[it]) },
                 )
                 PickStyleDropdown(Config.CARD_BG, Config.CARD_BG_PICK, ::value, ::update)
-                // 动效归位（2026-10-11 重排）：这几个都是播放器页自己的动效，从「动效」组迁来。
                 PreferenceSwitch(
                     title = "按钮反馈",
-                    summary = "控制按钮按压缩放回弹，播放/暂停切换弹跳",
+                    summary = "按压缩放回弹与切键弹跳",
                     icon = null,
                     checked = value(Config.BUTTON_FEEDBACK) != 0,
                     onCheckedChange = { update(Config.BUTTON_FEEDBACK, if (it) 1 else 0) },
                 )
                 PreferenceSwitch(
                     title = "进度条平滑",
-                    summary = "播放进度连续推进，而不是每秒跳一格",
+                    summary = "进度连续推进不跳格",
                     icon = null,
                     checked = value(Config.SMOOTH_PROGRESS) != 0,
                     onCheckedChange = { update(Config.SMOOTH_PROGRESS, if (it) 1 else 0) },
                 )
                 PreferenceSwitch(
                     title = "卡片弹入",
-                    summary = "换歌时播放器卡片与大封面同款弹入",
+                    summary = "换歌时卡片缩放弹入",
                     icon = null,
                     checked = value(Config.PLAYER_CARD_POP) != 0,
                     onCheckedChange = { update(Config.PLAYER_CARD_POP, if (it) 1 else 0) },
                 )
                 PreferenceSwitch(
                     title = "圆润图标",
-                    summary = "播放键用矢量圆润图标；关闭后回退旧版字符播放键",
+                    summary = "矢量圆润播放键图标",
                     icon = null,
                     checked = value(Config.PLAYER_VECTOR_ICONS) != 0,
                     onCheckedChange = { update(Config.PLAYER_VECTOR_ICONS, if (it) 1 else 0) },
                 )
+                DpSlider("缩放", value(Config.CARD_SCALE), 10..300, unit = "%", onCommit = { update(Config.CARD_SCALE, it) })
+                DpSlider("宽度 (0=自动)", value(Config.CARD_WIDTH), 0..600, onCommit = { update(Config.CARD_WIDTH, it) })
+                DpSlider("高度 (0=自动)", value(Config.CARD_HEIGHT), 0..600, onCommit = { update(Config.CARD_HEIGHT, it) })
+                DpSlider("圆角", value(Config.CARD_RADIUS), 0..48, onCommit = { update(Config.CARD_RADIUS, it) })
+                DpSlider("上间距", value(Config.CARD_SPACING), 0..160, onCommit = { update(Config.CARD_SPACING, it) })
             }
         }
         item {
@@ -710,7 +716,7 @@ internal fun LockAppearancePage() {
                 // 文字颜色档已删（2026-10-11 zuige）：文字永远按胶囊底色亮度算法黑白，无需手选。
                 PreferenceDropdown(
                     title = "胶囊背景",
-                    summary = "按钮胶囊的背景色，可选全局取色；文字按底色亮度自动墨/白",
+                    summary = "文字按底色亮度自动黑白",
                     icon = null,
                     items = CARD_BG_LABELS,
                     selectedIndex = CARD_BG_VALUES.indexOf(value(Config.ENTRY_BG)).coerceAtLeast(0),
@@ -722,12 +728,25 @@ internal fun LockAppearancePage() {
         item {
             CollapsibleSection("通知页", "notify", MiuixIcons.Notes, expandedSections, ::toggleSection, { resetSection("notify") }) {
                 PreferenceSwitch(
-                    title = "通知页全局取色",
-                    summary = "展开通知时整页底色与媒体卡按封面主色染色（与播放器卡同源同色），不再黑底白底突兀",
+                    title = "通知页染色",
+                    summary = "展开通知时染底色与媒体卡",
                     icon = null,
                     checked = value(Config.NOTIFY_CARD_TINT) != 0,
                     onCheckedChange = { update(Config.NOTIFY_CARD_TINT, if (it) 1 else 0) },
                 )
+                if (value(Config.NOTIFY_CARD_TINT) != 0) {
+                    // 底色独立于播放器卡（2026-10-11 zuige）：0=全局取色（自己的取色风格），
+                    // 其余手选档与播放器底色同表；想要同色两边设成一样即可。
+                    PreferenceDropdown(
+                        title = "底色",
+                        summary = "通知页与媒体卡底色",
+                        icon = null,
+                        items = CARD_BG_LABELS,
+                        selectedIndex = CARD_BG_VALUES.indexOf(value(Config.NOTIFY_CARD_BG)).coerceAtLeast(0),
+                        onSelectedIndexChange = { update(Config.NOTIFY_CARD_BG, CARD_BG_VALUES[it]) },
+                    )
+                    PickStyleDropdown(Config.NOTIFY_CARD_BG, Config.NOTIFY_CARD_BG_PICK, ::value, ::update)
+                }
             }
         }
         item {
@@ -766,17 +785,10 @@ internal fun LockAppearancePage() {
             CollapsibleSection("调试", "debug", MiuixIcons.Settings, expandedSections, ::toggleSection, { resetSection("debug") }) {
                 PreferenceSwitch(
                     title = "调试日志",
-                    summary = "锁屏侧输出周期性细节日志，排查问题时开启；平时关闭以免刷爆日志缓冲",
+                    summary = "输出细节日志用于排查",
                     icon = null,
                     checked = value(Config.DEBUG_LOG) != 0,
                     onCheckedChange = { update(Config.DEBUG_LOG, if (it) 1 else 0) },
-                )
-                PreferenceSwitch(
-                    title = "永不息屏（锁屏下）",
-                    summary = "调试用：锁屏状态下屏幕不再自动熄灭，方便盯着通知页反复验证；解锁后恢复正常熄屏",
-                    icon = null,
-                    checked = value(Config.STAY_AWAKE) != 0,
-                    onCheckedChange = { update(Config.STAY_AWAKE, if (it) 1 else 0) },
                 )
             }
         }
@@ -1543,7 +1555,7 @@ private fun PickStyleDropdown(
     if (value(colorKey) != 0) return   // 手选固定色时取色管线不跑，子选项无意义
     PreferenceDropdown(
         title = "取色风格",
-        summary = "全局取色时对主色的处理方式",
+        summary = "主色的处理方式",
         icon = null,
         items = PICK_STYLE_LABELS,
         selectedIndex = value(pickKey).coerceIn(0, PICK_STYLE_LABELS.lastIndex),

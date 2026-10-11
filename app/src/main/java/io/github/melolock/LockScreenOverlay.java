@@ -387,6 +387,9 @@ final class LockScreenOverlay {
      * 视图属性上，系统每 2 秒重设位图也不会丢，无需重扫。
      */
     private boolean notifyCardTint;
+    /** 通知页底色：0=全局取色（独立 *_pick 三档），其余=CARD_BG 同表手选色（不再强制与播放器同源）。 */
+    private int notifyBgConfig;
+    private int notifyBgPick;
     private View notificationsScrim;
     private boolean tintOn;
     private int lastCardTintSwatch = -1;
@@ -957,6 +960,8 @@ final class LockScreenOverlay {
         fxVectorIcons = elem(elements, Config.PLAYER_VECTOR_ICONS) != 0;
         hideShortcuts = elem(elements, Config.HIDE_SHORTCUTS) != 0;
         notifyCardTint = elem(elements, Config.NOTIFY_CARD_TINT) != 0;
+        notifyBgConfig = elem(elements, Config.NOTIFY_CARD_BG);
+        notifyBgPick = coercePick(elem(elements, Config.NOTIFY_CARD_BG_PICK));
         stayAwake = elem(elements, Config.STAY_AWAKE) != 0;
         // keepScreenOn 挂前景层只是辅助；真正管住 HyperOS 锁屏息屏的是下面的 wakelock。
         foreground.setKeepScreenOn(stayAwake);
@@ -2822,9 +2827,16 @@ final class LockScreenOverlay {
             Log.i(TAG, "Notification tint off");
             return;
         }
-        // 与播放器卡完全同源：cardBgConfig==0 时走 followCardBg()（含 cardBgPick 的 vivid/container 分支），
-        // 手选档直接用配置色；**不做透明度折扣**——zuige 2026-10-11：要一模一样的底色。
-        int base = cardBgConfig == 0 ? followCardBg() : cardBgConfig;
+        // 通知页底色独立（2026-10-11 zuige）：0=全局取色走自己的取色风格，手选档与 CARD_BG 同表；
+        // 不再强制与播放器卡同源——想要同色就把两边设成一样。
+        int base;
+        if (notifyBgConfig != 0) {
+            base = notifyBgConfig;
+        } else if (displayedSwatch == 0) {
+            base = 0xF2181818;
+        } else {
+            base = pickContainer(notifyBgPick, displayedSwatch);
+        }
         int tintColor = base;
         // 字色随底色亮度联动（与 applyCardColors 同一条规则）：亮底墨字、深/艳底白字。
         boolean lightCard = isLightColor(base);

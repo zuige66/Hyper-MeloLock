@@ -114,6 +114,8 @@ SELinux 拦 shell 写 app data（`run-as … cat >` 被拒），Provider 只实�
 | 媒体卡 | `MiuiMediaHeaderView`（直接挂通知栈，非通知行），底为 onDraw 手绘 | 卡内 index 0 插静止圆角色层（**必须显式 MATCH_PARENT**，否则量成 0x0）+ media_bg 的 View background 一并染 |
 
 - `resourceName()` 返回**全小写**，按驼峰匹配永不命中（踩过）；
+- 通知页底色已**独立于播放器卡**（`notify_card_bg`/`notify_card_bg_pick`，0=全局取色走自己的
+  取色风格）；想要跟播放器同色就把两边设成一样。总开关仍是「通知页染色」（notify_card_tint）；
 - ImageView 排查时要查 `getBackground()` **和** `getDrawable()` 两个（media_bg 靠 background 藏底，漏查多绕三轮）；
 - 系统滚动/换主题/新通知会 rebind 行视图冲掉滤镜 → 展开期间 500ms 节流浅扫（深度 ≤6）重挂；
 - **已证伪别再试**：染 `scrim_notifications`（ScrimController 每帧写回）；通知栈后插整页色层（zuige 否决——

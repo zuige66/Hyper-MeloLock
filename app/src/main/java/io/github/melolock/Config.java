@@ -208,6 +208,13 @@ public final class Config {
     public static final String STAY_AWAKE = "stay_awake";
     /** 通知卡跟随封面（notify_card_tint，默认开）：通知页 scrim + 媒体卡按封面主色染色。 */
     public static final String NOTIFY_CARD_TINT = "notify_card_tint";
+    /**
+     * 通知页底色（notify_card_bg / notify_card_bg_pick，2026-10-11 新增，默认 0/1）：
+     * 通知页染色不再强制与播放器卡同源——0＝全局取色（独立走 *_pick 三档取色风格），
+     * 其余值与 CARD_BG 手选档同表（0xF2 不透明 ARGB）。总开关仍是 notify_card_tint。
+     */
+    public static final String NOTIFY_CARD_BG = "notify_card_bg";
+    public static final String NOTIFY_CARD_BG_PICK = "notify_card_bg_pick";
 
     /** 字符串值元素：签名正文。走同一条 /elements 通道（value 列本来就是字符串形式），但不进整数解析。 */
     public static final String DATE_SIGNATURE = "date_signature";
@@ -268,6 +275,8 @@ public final class Config {
         ELEMENT_DEFAULTS.put(HIDE_SHORTCUTS, 0);
         ELEMENT_DEFAULTS.put(STAY_AWAKE, 0);
         ELEMENT_DEFAULTS.put(NOTIFY_CARD_TINT, 1);
+        ELEMENT_DEFAULTS.put(NOTIFY_CARD_BG, 0);
+        ELEMENT_DEFAULTS.put(NOTIFY_CARD_BG_PICK, 1);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */

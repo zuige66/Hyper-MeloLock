@@ -1561,3 +1561,15 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **通知页息屏复位修复**（17322d4）：息屏不走 suspend（那是解锁路径），场景带
       expanded=true 进 SCREEN_ON，兜底分支被 `!expanded` 拦掉 → 开屏停在通知页。
       改在 SCREEN_OFF 暗期 showMusic() 复位（守卫 !suspended），亮屏第一帧即沉浸式。
+
+56. 2026-10-11 **通知页独立底色；设置项排序与文案精简；永不息屏迁全局**：
+
+    - **通知页底色独立**（zuige：不用跟随播放器）：新键 `notify_card_bg`（默认 0=全局取色，
+      其余与 CARD_BG 同表手选色）+ `notify_card_bg_pick`（独立三档取色风格，默认 1）。
+      applyNotificationTint 的 base 从「播放器卡同源」改为通知页自己的底色链路；想要同色
+      两边设成一样。总开关 notify_card_tint 不变，App 端底色/取色风格条件显示在开关下。
+    - **组内排序统一**：多选（dropdown）→ 开关（switch）→ 滑条（slider）。例外：组级主开关
+      （显示日期/显示签名/通知页染色）留在组顶——它控制整组显隐，放中间会让下面的选项失义。
+    - **summary 全部精简到一行内**（≤17 汉字）。
+    - **永不息屏迁到全局分组**（zuige：有人喜欢一直欣赏沉浸式页面，不是纯调试功能）；
+      sectionDefaultKeys 同步（global += stay_awake；notify += 两个新键；debug 只剩 debug_log）。
