@@ -414,7 +414,6 @@ final class LockScreenOverlay {
     /** media_bg 每视图的「已应用色」：快速切页会重建 media_bg 实例（新视图带原始黑底），
      *  单标量守卫会误判「已应用」而跳过写入 → 媒体卡卡死黑底（2026-10-11 真机踩）。 */
     private final java.util.HashMap<View, Integer> mediaBgApplied = new java.util.HashMap<>();
-    private int lastLayerColor;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -2793,8 +2792,6 @@ final class LockScreenOverlay {
         if (tintColor != cachedMediaFilterColor || cachedMediaFilter == null) {
             mediaFilter = cachedMediaFilter = new PorterDuffColorFilter(tintColor, PorterDuff.Mode.SRC_ATOP);
             cachedMediaFilterColor = tintColor;
-            lastMediaBgColor = 0;   // 色变了，强制重写 media_bg 背景
-            lastLayerColor = 0;
             tintOn = true;
             Log.i(TAG, "Notification tint on swatch=0x" + Integer.toHexString(displayedSwatch));
         } else {
@@ -2830,8 +2827,9 @@ final class LockScreenOverlay {
                             + " size=" + child.getWidth() + "x" + child.getHeight());
                 }
                 if (cardColor != null) {
+                    // cardColor 是 Integer，必须 equals 值比较；!= 会变成引用比较（每帧误判重写）。
                     Integer applied = mediaBgApplied.get(child);
-                    if (applied == null || applied != cardColor) {
+                    if (applied == null || applied.intValue() != cardColor.intValue()) {
                         child.setBackgroundColor(cardColor);
                         mediaBgApplied.put(child, cardColor);
                     }
@@ -2930,9 +2928,14 @@ final class LockScreenOverlay {
                     + " hostSize=" + header.getWidth() + "x" + header.getHeight());
         }
         GradientDrawable gd = (GradientDrawable) layer.getBackground();
-        if (lastLayerColor != (color != null ? color : 0)) {
+        // 已应用色记在 layer 自己的 tag 上（不用标量：宿主重建会新建 layer+GradientDrawable，
+        // 新 drawable 是默认色，标量守卫会误判「已应用」跳过 setColor → 媒体卡卡黑，与
+        // media_bg 的 mediaBgApplied 同一批坑，2026-10-11）。
+        Object appliedTag = layer.getTag();
+        int appliedLayer = appliedTag instanceof Integer ? (Integer) appliedTag : -1;
+        if (appliedLayer != (color != null ? color : 0)) {
             gd.setColor(color != null ? color : Color.TRANSPARENT);
-            lastLayerColor = color != null ? color : 0;
+            layer.setTag(color != null ? color : 0);
         }
         int targetVis = color != null ? View.VISIBLE : View.GONE;
         if (layer.getVisibility() != targetVis) layer.setVisibility(targetVis);
