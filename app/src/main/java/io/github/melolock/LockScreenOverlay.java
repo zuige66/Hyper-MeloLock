@@ -380,6 +380,12 @@ final class LockScreenOverlay {
     private long lastCardTintMs;
     /** 染色前的原始 tint 色（按视图存），复原用。 */
     private final java.util.HashMap<View, Integer> savedCardTints = new java.util.HashMap<>();
+    /**
+     * 媒体卡（MiuiMediaHeaderView）内部的圆角色层：黑底是它 onDraw 手绘的（无 Drawable 字段、
+     * media_bg 无位图，2026-10-11 普查实证），滤镜/染色 API 碰不到，只能在卡内 index 0 插一块
+     * 静止圆角纯色层盖住手绘底。key=宿主头视图（rebind 后是新实例，按 host 区分）。
+     */
+    private final java.util.HashMap<View, View> mediaTintLayers = new java.util.HashMap<>();
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -2716,7 +2722,6 @@ final class LockScreenOverlay {
         }
         long now = android.os.SystemClock.uptimeMillis();
         if (tintOn && displayedSwatch == lastCardTintSwatch && now - lastCardTintMs < 500) return;
-        boolean firstPass = !tintOn;
         tintOn = true;
         lastCardTintSwatch = displayedSwatch;
         lastCardTintMs = now;
@@ -2725,84 +2730,6 @@ final class LockScreenOverlay {
         PorterDuffColorFilter mediaFilter = new PorterDuffColorFilter(tintColor, PorterDuff.Mode.SRC_ATOP);
         int views = applyTintShallow(notifications, tintColor, mediaFilter, 0);
         Log.i(TAG, "Notification tint on views=" + views + " swatch=0x" + Integer.toHexString(displayedSwatch));
-        if (firstPass) logMediaRowCensus();
-    }
-
-    /**
-     * 【临时探针】媒体卡普查：媒体行的黑底不是 NotificationBackgroundView（setTint 对它无效）。
-     * 把 media_bg 所在行的整棵子树（每视图的 id/类/可见性/背景/图片）打出来，定位真正的绘制者。
-     * 结论拿到即删。
-     */
-    private void logMediaRowCensus() {
-        View mediaBg = findViewIdRecursive(notifications, "media_bg");
-        if (mediaBg == null) { Log.i(TAG, "Media row census: no media_bg"); return; }
-        View row = mediaBg;
-        while (row != null && !row.getClass().getSimpleName().contains("MiuiMediaHeaderView")
-                && !row.getClass().getSimpleName().contains("ExpandableNotificationRow")) {
-            row = row.getParent() instanceof View ? (View) row.getParent() : null;
-        }
-        if (row == null) row = notifications;
-        Log.i(TAG, "Media row census root=" + row.getClass().getSimpleName() + " id=" + resourceName(row));
-        // 【临时】把 MiuiMediaHeaderView 自身与父类的所有 Drawable 字段打出来，找黑底的藏身处
-        dumpDrawableFields(row, "mediaHeader");
-        censusSubtree(row, 0);
-    }
-
-    private void dumpDrawableFields(View view, String tag) {
-        Class<?> c = view.getClass();
-        while (c != null && c != Object.class) {
-            for (java.lang.reflect.Field f : c.getDeclaredFields()) {
-                try {
-                    f.setAccessible(true);
-                    Object val = f.get(view);
-                    if (val instanceof Drawable) {
-                        Drawable d = (Drawable) val;
-                        Log.i(TAG, "FieldDump[" + tag + "] " + c.getSimpleName() + "#" + f.getName()
-                                + " = " + d.getClass().getName() + " " + d.getIntrinsicWidth() + "x" + d.getIntrinsicHeight()
-                                + " alpha=" + d.getAlpha());
-                    } else if (val instanceof Integer && (f.getName().toLowerCase().contains("tint") || f.getName().toLowerCase().contains("color"))) {
-                        Log.i(TAG, "FieldDump[" + tag + "] " + c.getSimpleName() + "#" + f.getName()
-                                + " = 0x" + Integer.toHexString((Integer) val));
-                    }
-                } catch (Throwable ignored) { }
-            }
-            c = c.getSuperclass();
-        }
-        Log.i(TAG, "FieldDump[" + tag + "] foreground=" + (view.getForeground() != null ? view.getForeground().getClass().getName() : "null"));
-    }
-
-    private void censusSubtree(View view, int depth) {
-        if (view == null || depth > 20) return;
-        String id = resourceName(view);
-        String cls = view.getClass().getSimpleName();
-        String bgDesc = "-";
-        Drawable bg = view.getBackground();
-        if (bg != null) bgDesc = bg.getClass().getSimpleName();
-        if (view instanceof ImageView) {
-            Drawable src = ((ImageView) view).getDrawable();
-            bgDesc = "src=" + (src != null ? src.getClass().getSimpleName() + " " + src.getIntrinsicWidth() + "x" + src.getIntrinsicHeight() : "null");
-        }
-        Log.i(TAG, "MediaCensus d=" + depth + (id.isEmpty() ? "" : " id=" + id) + " cls=" + cls
-                + " vis=" + (view.getVisibility() == View.VISIBLE) + " a=" + String.format(java.util.Locale.US, "%.1f", view.getAlpha())
-                + " " + view.getWidth() + "x" + view.getHeight() + " bg=" + bgDesc);
-        if (view instanceof ViewGroup) {
-            ViewGroup g = (ViewGroup) view;
-            for (int i = 0; i < g.getChildCount(); i++) censusSubtree(g.getChildAt(i), depth + 1);
-        }
-    }
-
-    private View findViewIdRecursive(ViewGroup group, String idName) {
-        if (group == null) return null;
-        for (int i = 0; i < group.getChildCount(); i++) {
-            View child = group.getChildAt(i);
-            if (child == null) continue;
-            if (resourceName(child).equals(idName)) return child;
-            if (child instanceof ViewGroup) {
-                View hit = findViewIdRecursive((ViewGroup) child, idName);
-                if (hit != null) return hit;
-            }
-        }
-        return null;
     }
 
     /** 浅扫（深度 ≤6）：只摸每张卡的直接背景视图，成本约等于一层子视图遍历。 */
@@ -2815,6 +2742,7 @@ final class LockScreenOverlay {
             String id = resourceName(child);   // 全小写：真机普查确认实际 id 是 backgroundnormal/dimmed
             boolean isMediaBg = id.equals("media_bg");
             boolean isCardBg = id.equals("backgroundnormal") || id.equals("backgrounddimmed");
+            boolean isMediaHeader = child.getClass().getSimpleName().contains("MiuiMediaHeaderView");
             if (isMediaBg && child instanceof ImageView) {
                 ((ImageView) child).setColorFilter(mediaFilter);
                 count++;
@@ -2822,9 +2750,39 @@ final class LockScreenOverlay {
                 tintCardInternal(child, cardColor);
                 count++;
             }
+            if (isMediaHeader && child instanceof ViewGroup) {
+                tintMediaHeader((ViewGroup) child, cardColor);
+                count++;
+            }
             if (child instanceof ViewGroup) count += applyTintShallow((ViewGroup) child, cardColor, mediaFilter, depth + 1);
         }
         return count;
+    }
+
+    /**
+     * 媒体卡染色（MiuiMediaHeaderView，2026-10-11 两轮普查实证：黑底是它 onDraw 手绘的，
+     * 无 Drawable 字段、media_bg 常态无位图，亮/暗模式跟主题变白变黑，任何染色 API 都碰不到）。
+     * 唯一可行路径：卡内插一块**静止圆角纯色层**盖在手绘底上（例外于「别插视图」红线的说明：
+     * 此处没有可改的既有图层，且这块视图静止、面积=卡面，无每帧重画成本）。圆角取 28dp 卡片圆角，
+     * 颜色 90% 封面主色；off 时 GONE 复原。宿主 rebind 后是新实例，按 host 分开管理。
+     */
+    private void tintMediaHeader(ViewGroup header, Integer color) {
+        View layer = mediaTintLayers.get(header);
+        if (layer == null) {
+            layer = new View(context);
+            float radius = 28f * context.getResources().getDisplayMetrics().density;
+            GradientDrawable gd = new GradientDrawable();
+            gd.setCornerRadius(radius);
+            layer.setBackground(gd);
+            mediaTintLayers.put(header, layer);
+        }
+        if (layer.getParent() != header) {
+            if (layer.getParent() instanceof ViewGroup) ((ViewGroup) layer.getParent()).removeView(layer);
+            header.addView(layer, 0);
+        }
+        GradientDrawable gd = (GradientDrawable) layer.getBackground();
+        gd.setColor(color != null ? color : Color.TRANSPARENT);
+        layer.setVisibility(color != null ? View.VISIBLE : View.GONE);
     }
 
     /**
