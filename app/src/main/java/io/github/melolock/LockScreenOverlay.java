@@ -386,6 +386,8 @@ final class LockScreenOverlay {
      * 静止圆角纯色层盖住手绘底。key=宿主头视图（rebind 后是新实例，按 host 区分）。
      */
     private final java.util.HashMap<View, View> mediaTintLayers = new java.util.HashMap<>();
+    /** 媒体卡 background 原始 drawable（按视图存），复原用。 */
+    private final java.util.HashMap<View, Drawable> savedBgDrawables = new java.util.HashMap<>();
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -2745,8 +2747,18 @@ final class LockScreenOverlay {
             if (isMediaBg && child instanceof ImageView) {
                 ((ImageView) child).setColorFilter(mediaFilter);
                 count++;
-                // 媒体卡宿主不按类名认（主进程与普查进程的类名可能不一致）：
-                // 从 media_bg 往上爬到通知栈的直接子级，那就是媒体头容器。
+                // media_bg 是铺满整卡的 ImageView（1002x509）：更可疑的是**它自己的 View background**
+                // （普查时对 ImageView 只打了 src，没查 background，把它漏了）。
+                Drawable b = child.getBackground();
+                if (!savedCardTints.containsKey(child)) {
+                    savedBgDrawables.put(child, b);
+                    savedCardTints.put(child, b != null ? 1 : 0);
+                    Log.i(TAG, "media_bg background=" + (b != null ? b.getClass().getSimpleName() : "null")
+                            + " size=" + child.getWidth() + "x" + child.getHeight());
+                }
+                if (cardColor != null) child.setBackgroundColor(cardColor);
+                else if (savedBgDrawables.get(child) != null) child.setBackground(savedBgDrawables.get(child));
+                else child.setBackgroundColor(Color.TRANSPARENT);
                 View host = child;
                 for (int k = 0; k < 4; k++) {
                     View p = host.getParent() instanceof View ? (View) host.getParent() : null;
