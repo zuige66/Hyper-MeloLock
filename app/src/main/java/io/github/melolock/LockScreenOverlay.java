@@ -397,12 +397,14 @@ final class LockScreenOverlay {
     private final java.util.HashSet<View> inkedIcons = new java.util.HashSet<>();
     /** 与沉浸式播放器卡同一套「按底色亮度联动」的字色（applyCardColors 的亮/暗两档）。 */
     private static final int INK_TITLE = 0xFF1C1C1E;
-    private static final int INK_SUB = 0xFF6C6C70;
+    private static final int INK_SUB = 0xFF4A4A4E;   // 比播放器 6C 更深一档：通知行副文字不能看着像没染上
     private static final int INK_TITLE_ON_DARK = Color.WHITE;
     private static final int INK_SUB_ON_DARK = 0xFF9E9EA3;
     /** 当前生效的墨色（每次染色 pass 按底色亮度重算，与播放器卡 isLightColor 规则一致）。 */
     private int inkTitleColor = INK_TITLE;
     private int inkSubColor = INK_SUB;
+    /** 展开时刻：前 1 秒用 120ms 节流压住「系统先画白字→我们再染」的黑白闪烁，之后回 500ms。 */
+    private long expandedAtMs;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -2754,11 +2756,16 @@ final class LockScreenOverlay {
             tintOn = false;
             applyTintShallow(notifications, null, null, 0);
             restoreInk();
+            // 入口按钮颜色还原成「跟随封面」档（展开期间被切成墨色了）。
+            if (notificationButton != null) notificationButton.setTextColor(followText(entryColorPick, true));
             Log.i(TAG, "Notification tint off");
             return;
         }
         long now = android.os.SystemClock.uptimeMillis();
-        if (tintOn && displayedSwatch == lastCardTintSwatch && now - lastCardTintMs < 500) return;
+        if (!tintOn) expandedAtMs = now;
+        long sinceExpand = now - expandedAtMs;
+        long throttleMs = sinceExpand < 1000 ? 120 : 500;
+        if (tintOn && displayedSwatch == lastCardTintSwatch && now - lastCardTintMs < throttleMs) return;
         tintOn = true;
         lastCardTintSwatch = displayedSwatch;
         lastCardTintMs = now;
@@ -2772,6 +2779,8 @@ final class LockScreenOverlay {
         inkSubColor = lightCard ? INK_SUB : INK_SUB_ON_DARK;
         PorterDuffColorFilter mediaFilter = new PorterDuffColorFilter(tintColor, PorterDuff.Mode.SRC_ATOP);
         int views = applyTintShallow(notifications, tintColor, mediaFilter, 0);
+        // 「返回播放器」入口是我们自己的视图（不在通知栈子树里），展开时同步切成墨色。
+        if (notificationButton != null) notificationButton.setTextColor(inkTitleColor);
         Log.i(TAG, "Notification tint on views=" + views + " swatch=0x" + Integer.toHexString(displayedSwatch));
     }
 
@@ -2835,7 +2844,8 @@ final class LockScreenOverlay {
             TextView tv = (TextView) child;
             if (!savedTextColors.containsKey(child)) savedTextColors.put(child, tv.getCurrentTextColor());
             int original = savedTextColors.get(child);
-            tv.setTextColor(Color.alpha(original) >= 0xFF ? inkTitleColor : inkSubColor);
+            // 阈值 0xB3：MIUI 标题常带 ~90% 透明白，按旧阈值(FF)会被误归成「次要」染浅灰。
+            tv.setTextColor(Color.alpha(original) >= 0xB3 ? inkTitleColor : inkSubColor);
         } else if (child instanceof ImageView) {
             Drawable src = ((ImageView) child).getDrawable();
             if (src == null) return;
