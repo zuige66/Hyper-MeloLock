@@ -1538,3 +1538,26 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **stay_awake 终版**：View 级 keepScreenOn（锁屏根/前景层都试过）管不住 HyperOS 锁屏的
       AOD 倒计时息屏；改为 **SCREEN_BRIGHT_WAKE_LOCK**（SystemUI uid=1000 有 WAKE_LOCK 权限），
       create() 按配置取、restore() 必还。锁屏根挂 keepScreenOn 会导致亮屏慢+壁纸闪烁的坑见 #53。
+
+55. 2026-10-11 **设置页重排 + 取色三档 + 入口算法黑白；通知页息屏复位修复**：
+
+    - **设置页重排**（zuige 逐项拍板）：「动效」组取消，四项归位——封面弹入→专辑封面、
+      按钮反馈/进度条平滑/卡片弹入→播放器；「锁屏禁止左下拉」从播放器迁到全局；
+      「通知卡跟随封面」从全局迁出，新开「通知页」分组（图标 Notes）。
+    - **取色三档**：各组件「取色风格」从 2 档扩为 **0=低饱和磨砂 / 1=原色 / 2=更鲜艳**
+      （新增 vividPlusContainer/vividPlusText：饱和度 ×1.3+0.05 拉满；文字在原色档
+      vividText 结果上再拉）。**值语义与旧配置兼容**（旧 0/1 不变），老用户零迁移；
+      覆盖层 pick 字段 boolean→int，加 coercePick 钳位。6 个可取色组件各挂一份。
+    - **「跟随封面」改名「全局取色」**：所有颜色下拉首项 + 相关 summary 文案；
+      全局「主色来源」仍是唯一取色源头。
+    - **通知入口文字固定算法黑白**：ENTRY_COLOR/ENTRY_COLOR_PICK 档删除（键保留在
+      ELEMENT_DEFAULTS 防旧配置读取异常，App UI 与覆盖层均不再使用）；文字永远按
+      胶囊底色 isLightColor 取墨/白（entryInkColor()，create/applyFollowColors/
+      applyNotificationTint 三处统一）。
+    - **踩坑（Kotlin 独有）**：**块注释支持嵌套**——往 KDoc 中间插了一行 `/**`
+      导致注释深度 2，后面的 `*/` 只关一层，吞掉文件尾部全部声明，编译器报 88 个
+      Unresolved + `1591:1 Unclosed comment`。修法：合并为单一 KDoc。图标扩展属性
+      （MiuixIcons.Notes）要单独 `import top.yukonga.miuix.kmp.icon.extended.Notes`。
+    - **通知页息屏复位修复**（17322d4）：息屏不走 suspend（那是解锁路径），场景带
+      expanded=true 进 SCREEN_ON，兜底分支被 `!expanded` 拦掉 → 开屏停在通知页。
+      改在 SCREEN_OFF 暗期 showMusic() 复位（守卫 !suspended），亮屏第一帧即沉浸式。

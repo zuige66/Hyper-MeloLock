@@ -117,6 +117,7 @@ import top.yukonga.miuix.kmp.icon.extended.Link
 import top.yukonga.miuix.kmp.icon.extended.Messages
 import top.yukonga.miuix.kmp.icon.extended.Months
 import top.yukonga.miuix.kmp.icon.extended.Music
+import top.yukonga.miuix.kmp.icon.extended.Notes
 import top.yukonga.miuix.kmp.icon.extended.Play
 import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.icon.extended.Settings
@@ -491,15 +492,16 @@ internal fun LockAppearancePage() {
     }
 
     // 各分组的「恢复默认」键集（↺ 按钮）；背景组例外：三态存 SharedPreferences 非 elements。
+    // 2026-10-11 重排：动效组取消（归位到各组件）；左下拉归全局；通知页独立成组。
     val sectionDefaultKeys: Map<String, List<String>> = mapOf(
-        "global" to listOf(Config.SWATCH_PICK, Config.SONG_FADE, Config.HIDE_SHORTCUTS, Config.NOTIFY_CARD_TINT),
-        "fx" to listOf(Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.COVER_POP, Config.PLAYER_CARD_POP),
+        "global" to listOf(Config.SWATCH_PICK, Config.SONG_FADE, Config.HIDE_SHORTCUTS, Config.BLOCK_LEFT_SHADE),
+        "notify" to listOf(Config.NOTIFY_CARD_TINT),
         "date" to listOf(Config.DATE_ENABLED, Config.DATE_SIZE, Config.DATE_WEIGHT, Config.DATE_COLOR, Config.DATE_SPACING),
         "sign" to listOf(Config.SIGN_ENABLED, Config.SIGN_SIZE, Config.SIGN_WEIGHT, Config.SIGN_COLOR, Config.SIGN_SPACING),
         "clock" to listOf(Config.CLOCK_SIZE, Config.CLOCK_SPACING, Config.CLOCK_WEIGHT, Config.CLOCK_COLOR, Config.CLOCK_ROUNDNESS, Config.CLOCK_STROKE),
-        "cover" to listOf(Config.COVER_SCALE, Config.COVER_WIDTH, Config.COVER_HEIGHT, Config.COVER_SPACING),
-        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.BLOCK_LEFT_SHADE, Config.PLAYER_VECTOR_ICONS),
-        "entry" to listOf(Config.ENTRY_COLOR, Config.ENTRY_COLOR_PICK, Config.ENTRY_BG, Config.ENTRY_BG_PICK),
+        "cover" to listOf(Config.COVER_SCALE, Config.COVER_WIDTH, Config.COVER_HEIGHT, Config.COVER_SPACING, Config.COVER_POP),
+        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.PLAYER_CARD_POP, Config.PLAYER_VECTOR_ICONS),
+        "entry" to listOf(Config.ENTRY_BG, Config.ENTRY_BG_PICK),
         "debug" to listOf(Config.DEBUG_LOG),
     )
     fun resetSection(key: String) {
@@ -524,7 +526,7 @@ internal fun LockAppearancePage() {
             CollapsibleSection("全局", "global", MiuixIcons.Settings, expandedSections, ::toggleSection, { resetSection("global") }) {
                 PreferenceDropdown(
                     title = "主色来源",
-                    summary = "跟随封面时挑选专辑主色的方式",
+                    summary = "全局取色时挑选专辑主色的方式",
                     icon = null,
                     items = listOf("最鲜艳优先", "占比优先（封面占比最大的色）", "色族占比（近似色归并，抗干扰）"),
                     selectedIndex = value(Config.SWATCH_PICK).coerceIn(0, 2),
@@ -545,43 +547,11 @@ internal fun LockAppearancePage() {
                     onCheckedChange = { update(Config.HIDE_SHORTCUTS, if (it) 1 else 0) },
                 )
                 PreferenceSwitch(
-                    title = "通知卡跟随封面",
-                    summary = "展开通知时整页底色与媒体卡按封面主色染色，不再黑底白底突兀",
+                    title = "锁屏禁止左下拉",
+                    summary = "锁屏时禁用左侧下拉（全局行为，从播放器组迁入）",
                     icon = null,
-                    checked = value(Config.NOTIFY_CARD_TINT) != 0,
-                    onCheckedChange = { update(Config.NOTIFY_CARD_TINT, if (it) 1 else 0) },
-                )
-            }
-        }
-        item {
-            CollapsibleSection("动效", "fx", MiuixIcons.Play, expandedSections, ::toggleSection, { resetSection("fx") }) {
-                PreferenceSwitch(
-                    title = "按钮反馈",
-                    summary = "控制按钮按压缩放回弹，播放/暂停切换弹跳",
-                    icon = null,
-                    checked = value(Config.BUTTON_FEEDBACK) != 0,
-                    onCheckedChange = { update(Config.BUTTON_FEEDBACK, if (it) 1 else 0) },
-                )
-                PreferenceSwitch(
-                    title = "进度条平滑",
-                    summary = "播放进度连续推进，而不是每秒跳一格",
-                    icon = null,
-                    checked = value(Config.SMOOTH_PROGRESS) != 0,
-                    onCheckedChange = { update(Config.SMOOTH_PROGRESS, if (it) 1 else 0) },
-                )
-                PreferenceSwitch(
-                    title = "封面弹入",
-                    summary = "换歌时大封面轻微缩放弹入",
-                    icon = null,
-                    checked = value(Config.COVER_POP) != 0,
-                    onCheckedChange = { update(Config.COVER_POP, if (it) 1 else 0) },
-                )
-                PreferenceSwitch(
-                    title = "卡片弹入",
-                    summary = "换歌时播放器卡片与大封面同款弹入",
-                    icon = null,
-                    checked = value(Config.PLAYER_CARD_POP) != 0,
-                    onCheckedChange = { update(Config.PLAYER_CARD_POP, if (it) 1 else 0) },
+                    checked = value(Config.BLOCK_LEFT_SHADE) != 0,
+                    onCheckedChange = { update(Config.BLOCK_LEFT_SHADE, if (it) 1 else 0) },
                 )
             }
         }
@@ -599,7 +569,7 @@ internal fun LockAppearancePage() {
                     DpSlider("粗细", value(Config.DATE_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.DATE_WEIGHT, it) })
                     PreferenceDropdown(
                         title = "颜色",
-                        summary = "日期文字颜色，可选跟随封面",
+                        summary = "日期文字颜色，可选全局取色",
                         icon = null,
                         items = TEXT_COLOR_LABELS,
                         selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.DATE_COLOR)).coerceAtLeast(0),
@@ -625,7 +595,7 @@ internal fun LockAppearancePage() {
                     DpSlider("粗细", value(Config.SIGN_WEIGHT), 100..900, unit = "", step = 10, onCommit = { update(Config.SIGN_WEIGHT, it) })
                     PreferenceDropdown(
                         title = "颜色",
-                        summary = "签名文字颜色，可选跟随封面",
+                        summary = "签名文字颜色，可选全局取色",
                         icon = null,
                         items = TEXT_COLOR_LABELS,
                         selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.SIGN_COLOR)).coerceAtLeast(0),
@@ -651,7 +621,7 @@ internal fun LockAppearancePage() {
                 )
                 PreferenceDropdown(
                     title = "颜色",
-                    summary = "时间文字颜色，可选跟随封面",
+                    summary = "时间文字颜色，可选全局取色",
                     icon = null,
                     items = TEXT_COLOR_LABELS,
                     selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.CLOCK_COLOR)).coerceAtLeast(0),
@@ -679,6 +649,13 @@ internal fun LockAppearancePage() {
                     onValueChangeFinished = { Config.setCornerRadiusDp(context, radius.toInt()) },
                 )
                 DpSlider("上间距", value(Config.COVER_SPACING), 0..160, onCommit = { update(Config.COVER_SPACING, it) })
+                PreferenceSwitch(
+                    title = "封面弹入",
+                    summary = "换歌时大封面轻微缩放弹入",
+                    icon = null,
+                    checked = value(Config.COVER_POP) != 0,
+                    onCheckedChange = { update(Config.COVER_POP, if (it) 1 else 0) },
+                )
             }
         }
         item {
@@ -697,12 +674,27 @@ internal fun LockAppearancePage() {
                     onSelectedIndexChange = { update(Config.CARD_BG, CARD_BG_VALUES[it]) },
                 )
                 PickStyleDropdown(Config.CARD_BG, Config.CARD_BG_PICK, ::value, ::update)
+                // 动效归位（2026-10-11 重排）：这几个都是播放器页自己的动效，从「动效」组迁来。
                 PreferenceSwitch(
-                    title = "锁屏禁止左下拉",
-                    summary = "锁屏时禁用左侧下拉；左半屏上滑解锁随之失效",
+                    title = "按钮反馈",
+                    summary = "控制按钮按压缩放回弹，播放/暂停切换弹跳",
                     icon = null,
-                    checked = value(Config.BLOCK_LEFT_SHADE) != 0,
-                    onCheckedChange = { update(Config.BLOCK_LEFT_SHADE, if (it) 1 else 0) },
+                    checked = value(Config.BUTTON_FEEDBACK) != 0,
+                    onCheckedChange = { update(Config.BUTTON_FEEDBACK, if (it) 1 else 0) },
+                )
+                PreferenceSwitch(
+                    title = "进度条平滑",
+                    summary = "播放进度连续推进，而不是每秒跳一格",
+                    icon = null,
+                    checked = value(Config.SMOOTH_PROGRESS) != 0,
+                    onCheckedChange = { update(Config.SMOOTH_PROGRESS, if (it) 1 else 0) },
+                )
+                PreferenceSwitch(
+                    title = "卡片弹入",
+                    summary = "换歌时播放器卡片与大封面同款弹入",
+                    icon = null,
+                    checked = value(Config.PLAYER_CARD_POP) != 0,
+                    onCheckedChange = { update(Config.PLAYER_CARD_POP, if (it) 1 else 0) },
                 )
                 PreferenceSwitch(
                     title = "圆润图标",
@@ -715,24 +707,27 @@ internal fun LockAppearancePage() {
         }
         item {
             CollapsibleSection("通知入口", "entry", MiuixIcons.Messages, expandedSections, ::toggleSection, { resetSection("entry") }) {
-                PreferenceDropdown(
-                    title = "文字颜色",
-                    summary = "「展开通知」的文字颜色，可选跟随封面",
-                    icon = null,
-                    items = TEXT_COLOR_LABELS,
-                    selectedIndex = TEXT_COLOR_VALUES.indexOf(value(Config.ENTRY_COLOR)).coerceAtLeast(0),
-                    onSelectedIndexChange = { update(Config.ENTRY_COLOR, TEXT_COLOR_VALUES[it]) },
-                )
-                PickStyleDropdown(Config.ENTRY_COLOR, Config.ENTRY_COLOR_PICK, ::value, ::update)
+                // 文字颜色档已删（2026-10-11 zuige）：文字永远按胶囊底色亮度算法黑白，无需手选。
                 PreferenceDropdown(
                     title = "胶囊背景",
-                    summary = "按钮胶囊的背景色，可选跟随封面",
+                    summary = "按钮胶囊的背景色，可选全局取色；文字按底色亮度自动墨/白",
                     icon = null,
                     items = CARD_BG_LABELS,
                     selectedIndex = CARD_BG_VALUES.indexOf(value(Config.ENTRY_BG)).coerceAtLeast(0),
                     onSelectedIndexChange = { update(Config.ENTRY_BG, CARD_BG_VALUES[it]) },
                 )
                 PickStyleDropdown(Config.ENTRY_BG, Config.ENTRY_BG_PICK, ::value, ::update)
+            }
+        }
+        item {
+            CollapsibleSection("通知页", "notify", MiuixIcons.Notes, expandedSections, ::toggleSection, { resetSection("notify") }) {
+                PreferenceSwitch(
+                    title = "通知页全局取色",
+                    summary = "展开通知时整页底色与媒体卡按封面主色染色（与播放器卡同源同色），不再黑底白底突兀",
+                    icon = null,
+                    checked = value(Config.NOTIFY_CARD_TINT) != 0,
+                    onCheckedChange = { update(Config.NOTIFY_CARD_TINT, if (it) 1 else 0) },
+                )
             }
         }
         item {
@@ -1418,10 +1413,10 @@ private val PALETTE = intArrayOf(0xFF111827.toInt(), 0xFF253B80.toInt(), 0xFF5B2
  * 播放器卡片底色档位（M3 风格 tonal 配色）。值的顺序与标签一一对应。
  * 与覆盖层 `isLightColor` 的亮度联动判定相配：浅档必须足够亮（自动配深字），
  * 深档足够暗（自动配白字）。「深色」＝历史硬编码黑，老配置外观不变。
- * 「跟随封面」值 0＝覆盖层从专辑封面取主色调成低饱和容器色（异步，换歌时自动更新）。
+ * 「全局取色」值 0＝覆盖层从专辑封面取主色调成低饱和容器色（异步，换歌时自动更新）。
  */
 private val CARD_BG_VALUES = intArrayOf(
-    0, //                跟随封面：动态取色
+    0, //                全局取色：动态取色
     0xF2181818.toInt(), // 深色：原硬编码近黑
     0xF21E2A3C.toInt(), // 墨蓝：M3 深色容器调
     0xF2C7C7CC.toInt(), // 浅色：中性浅灰
@@ -1429,14 +1424,14 @@ private val CARD_BG_VALUES = intArrayOf(
     0xF2D8CEF4.toInt(), // 淡紫：M3 secondaryContainer 系
     0xF2F4CEDA.toInt(), // 淡粉：M3 tertiaryContainer 系
 )
-private val CARD_BG_LABELS = listOf("跟随封面", "深色", "墨蓝", "浅色", "蓝灰", "淡紫", "淡粉")
+private val CARD_BG_LABELS = listOf("全局取色", "深色", "墨蓝", "浅色", "蓝灰", "淡紫", "淡粉")
 
 /**
- * 文字颜色统一档位（时间/日期/签名/通知入口共用，与播放器「配色统一」）：
- * 「跟随封面」值 0＝文字颜色按取色容器亮度联动（主文字深/白，辅助文字灰阶）；其余为固定色。
+ * 文字颜色统一档位（时间/日期/签名共用；通知入口文字已固定算法黑白，不再用此表）：
+ * 「全局取色」值 0＝文字颜色按取色容器亮度联动（主文字深/白，辅助文字灰阶）；其余为固定色。
  */
 private val TEXT_COLOR_VALUES = intArrayOf(
-    0, //                跟随封面
+    0, //                全局取色
     0xFFFFFFFF.toInt(), // 白
     0xFF000000.toInt(), // 黑
     0xFFC7C7CC.toInt(), // 浅灰
@@ -1444,14 +1439,16 @@ private val TEXT_COLOR_VALUES = intArrayOf(
     0xFF7EC8FF.toInt(), // 天蓝
     0xFFFF9EAD.toInt(), // 粉
 )
-private val TEXT_COLOR_LABELS = listOf("跟随封面", "白", "黑", "浅灰", "暖黄", "天蓝", "粉")
+private val TEXT_COLOR_LABELS = listOf("全局取色", "白", "黑", "浅灰", "暖黄", "天蓝", "粉")
 
 /**
- * 「取色风格」子选项（每个可调颜色的项各一份，键 *_pick）：仅当对应颜色处于「跟随封面」档时显示。
- * 0＝低饱和磨砂（M3E，主色压饱和做容器/弱化做文字，默认）；1＝鲜艳原色（主色直出，只调亮度保证可读）。
+ * 「取色风格」子选项（每个可调颜色的项各一份，键 *_pick）：仅当对应颜色处于「全局取色」档时显示。
+ * 三档（2026-10-11 zuige 定）：0＝低饱和磨砂（主色压饱和做容器/弱化做文字）；
+ * 1＝原色（主色直出，文字只抬亮度保可读）；2＝更鲜艳（饱和度 ×1.3+0.05 拉满）。
+ * **值的语义与旧配置完全兼容**（旧 0=磨砂 1=鲜艳原色），只是新增了 2——老用户零迁移。
  * 值直接当selectedIndex用（与 PICK_STYLE_LABELS 顺序一致）。
  */
-private val PICK_STYLE_LABELS = listOf("低饱和磨砂 (M3E)", "鲜艳原色")
+private val PICK_STYLE_LABELS = listOf("低饱和磨砂", "原色", "更鲜艳")
 
 /**
  * 外观页分组（M3E 折叠卡）：**每组一张完整卡片**——标题是卡片头（可点、涟漪反馈，
@@ -1546,7 +1543,7 @@ private fun PickStyleDropdown(
     if (value(colorKey) != 0) return   // 手选固定色时取色管线不跑，子选项无意义
     PreferenceDropdown(
         title = "取色风格",
-        summary = "跟随封面时对主色的处理方式",
+        summary = "全局取色时对主色的处理方式",
         icon = null,
         items = PICK_STYLE_LABELS,
         selectedIndex = value(pickKey).coerceIn(0, PICK_STYLE_LABELS.lastIndex),

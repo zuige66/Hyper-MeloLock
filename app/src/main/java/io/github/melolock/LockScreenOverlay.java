@@ -349,9 +349,11 @@ final class LockScreenOverlay {
     /** 「展开通知」入口胶囊背景（可回填配色）。 */
     private GradientDrawable entryBackgroundDrawable;
     /** 各文字/入口颜色是否处于「跟随封面」档（create 时读定；配置变化走整场重建）。 */
-    private boolean clockColorFollow, dateColorFollow, signColorFollow, entryColorFollow, entryBgFollow;
+    private boolean clockColorFollow, dateColorFollow, signColorFollow, entryBgFollow;
     /** 各「跟随封面」档的取色风格（create 时读定）：false＝低饱和磨砂（M3E），true＝鲜艳原色直出。 */
-    private boolean cardBgPick, clockPick, datePick, signPick, entryColorPick, entryBgPick;
+    /** 取色风格三档（2026-10-11 重排）：0=低饱和磨砂（旧配置语义不变） 1=原色 2=更鲜艳。
+     *  入口文字色档（ENTRY_COLOR/ENTRY_COLOR_PICK）已删——文字永远按胶囊底色亮度算法黑白。 */
+    private int cardBgPick, clockPick, datePick, signPick, entryBgPick;
     /** 主色来源（全局，create 时读定）：false＝最鲜艳优先（鲜艳桶优先），true＝占比最高直取。 */
     private int swatchPickMode;   // 0=vibrant 1=dominant 2=family（色族占比）
     /** 切歌柔和过渡总开关（song_fade，默认开）：关＝封面/文字/配色全部瞬时切换（旧版行为）。 */
@@ -938,14 +940,12 @@ final class LockScreenOverlay {
         clockColorFollow = elem(elements, Config.CLOCK_COLOR) == 0;
         dateColorFollow = elem(elements, Config.DATE_COLOR) == 0;
         signColorFollow = elem(elements, Config.SIGN_COLOR) == 0;
-        entryColorFollow = elem(elements, Config.ENTRY_COLOR) == 0;
         entryBgFollow = elem(elements, Config.ENTRY_BG) == 0;
-        cardBgPick = elem(elements, Config.CARD_BG_PICK) != 0;
-        clockPick = elem(elements, Config.CLOCK_PICK) != 0;
-        datePick = elem(elements, Config.DATE_PICK) != 0;
-        signPick = elem(elements, Config.SIGN_PICK) != 0;
-        entryColorPick = elem(elements, Config.ENTRY_COLOR_PICK) != 0;
-        entryBgPick = elem(elements, Config.ENTRY_BG_PICK) != 0;
+        cardBgPick = coercePick(elem(elements, Config.CARD_BG_PICK));
+        clockPick = coercePick(elem(elements, Config.CLOCK_PICK));
+        datePick = coercePick(elem(elements, Config.DATE_PICK));
+        signPick = coercePick(elem(elements, Config.SIGN_PICK));
+        entryBgPick = coercePick(elem(elements, Config.ENTRY_BG_PICK));
         swatchPickMode = Math.max(0, Math.min(2, elem(elements, Config.SWATCH_PICK)));
         debugLog = elem(elements, Config.DEBUG_LOG) != 0;
         MediaSource.verboseLog = debugLog;
@@ -1023,7 +1023,8 @@ final class LockScreenOverlay {
         cardParams.topMargin = dp(elem(elements, Config.CARD_SPACING));
         content.addView(playerCard, cardParams);
         notificationButton = new Button(context); notificationButton.setText("展开通知");
-        notificationButton.setTextColor(elemOrFollow(elements, Config.ENTRY_COLOR, true, entryColorPick));
+        // 文字色固定算法黑白（2026-10-11：手动色档删除）——按胶囊底色亮度取墨/白。
+        notificationButton.setTextColor(entryInkColor());
         // 自绘胶囊替换系统默认背景：配色可配（含跟随封面）。默认半透明黑近似系统观感。
         entryBackgroundDrawable = new GradientDrawable();
         int entryBg = elem(elements, Config.ENTRY_BG);
@@ -1047,8 +1048,8 @@ final class LockScreenOverlay {
                 + elem(elements, Config.COVER_SPACING) + "/" + elem(elements, Config.CARD_SPACING)
                 + " | date=" + (elem(elements, Config.DATE_ENABLED) != 0) + "/" + elem(elements, Config.DATE_SIZE)
                 + "sp | sign=" + (elem(elements, Config.SIGN_ENABLED) != 0) + " len=" + signatureText.length()
-                + " | pick vivid: card" + cardBgPick + " clock" + clockPick + " date" + datePick
-                + " sign" + signPick + " entry" + entryColorPick + "/" + entryBgPick
+                + " | pick(0muted 1vivid 2vivid+): card" + cardBgPick + " clock" + clockPick + " date" + datePick
+                + " sign" + signPick + " entryBg" + entryBgPick
                 + " | swatch=" + (swatchPickMode == 2 ? "family" : swatchPickMode == 1 ? "dominant" : "vibrant"));
         Log.i(TAG, "Custom media card overlay created in " + createAttempts + " attempt(s)");
         createAttempts = 0;
@@ -1324,30 +1325,45 @@ final class LockScreenOverlay {
     }
 
     /** 「跟随封面」文字色的当前值：按该项取色风格从主色推导；未取到色时先用白/灰兜底（回填时更新）。 */
-    private int elemOrFollow(Map<String, Integer> elements, String key, boolean asMain, boolean vivid) {
+    private int elemOrFollow(Map<String, Integer> elements, String key, boolean asMain, int pickStyle) {
         int value = elem(elements, key);
         if (value != 0) return value;
-        return followText(vivid, asMain);
+        return followText(pickStyle, asMain);
     }
 
-    /** 「跟随封面」文字色：vivid＝鲜艳档（保留饱和度抬亮度），否则磨砂档（现行压饱和规则）。读展示值（渐变期间随动画移动）。 */
-    private int followText(boolean vivid, boolean asMain) {
+    /** 取色风格钳到 0~2：旧配置只有 0/1，读进来的脏值不能穿透到数组/分支。 */
+    private static int coercePick(int raw) { return Math.max(0, Math.min(2, raw)); }
+
+    /** 「跟随封面」文字色：0=磨砂（压饱和） 1=原色（保留饱和度抬亮度） 2=更鲜艳（原色再拉饱和）。读展示值（渐变期间随动画移动）。 */
+    private int followText(int style, boolean asMain) {
         if (displayedSwatch == 0) return asMain ? Color.WHITE : 0xFF9E9EA3;
-        if (vivid) return vividText(displayedSwatch, asMain);
+        if (style == 2) return vividPlusText(displayedSwatch, asMain);
+        if (style == 1) return vividText(displayedSwatch, asMain);
         int[] texts = textColorsFromSwatch(displayedSwatch);
         return asMain ? texts[0] : texts[1];
     }
 
-    /** 「跟随封面」播放器底色：鲜艳档主色直出，磨砂档低饱和容器。读展示值。 */
+    /** 「跟随封面」播放器底色：三档取色风格（见 cardBgPick 注释）。读展示值。 */
     private int followCardBg() {
         if (displayedSwatch == 0) return 0xF2181818;
-        return cardBgPick ? vividContainer(displayedSwatch) : containerFromSwatch(displayedSwatch);
+        return pickContainer(cardBgPick, displayedSwatch);
     }
 
     /** 「跟随封面」入口胶囊背景：与播放器底色同规则但独立取色风格。读展示值。 */
     private int followEntryBg() {
         if (displayedSwatch == 0) return 0x66101010;
-        return entryBgPick ? vividContainer(displayedSwatch) : containerFromSwatch(displayedSwatch);
+        return pickContainer(entryBgPick, displayedSwatch);
+    }
+
+    /** 底色三档分发：0=低饱和磨砂容器 1=原色直出 2=更鲜艳。 */
+    private static int pickContainer(int style, int swatchRgb) {
+        if (style == 2) return vividPlusContainer(swatchRgb);
+        return style == 1 ? vividContainer(swatchRgb) : containerFromSwatch(swatchRgb);
+    }
+
+    /** 入口胶囊文字：永远按胶囊底色亮度算法黑白（2026-10-11 zuige：手动色档删除，底色已全局取色）。 */
+    private int entryInkColor() {
+        return isLightColor(entryFollowColor()) ? INK_TITLE : INK_TITLE_ON_DARK;
     }
 
     /** 入口胶囊底色：zuige 2026-10-11 要求与卡片同色（手动档仍优先）。 */
@@ -1362,18 +1378,16 @@ final class LockScreenOverlay {
         if (clockColorFollow && immersiveClock != null) immersiveClock.setTextColor(followText(clockPick, true));
         if (dateColorFollow && dateLine != null) dateLine.setTextColor(followText(datePick, false));
         if (signColorFollow && signatureLine != null) signatureLine.setTextColor(followText(signPick, false));
-        // 入口胶囊：底=卡片同色，字=按底色亮度取墨/白（与卡片字色同一条规则）。
+        // 入口胶囊：底=卡片同色（独立取色风格），字=永远按底色亮度算法黑白。
         int entryCard = entryFollowColor();
         if (entryBgFollow && entryBackgroundDrawable != null) entryBackgroundDrawable.setColor(entryCard);
-        if (entryColorFollow && notificationButton != null) {
-            notificationButton.setTextColor(isLightColor(entryCard) ? INK_TITLE : INK_TITLE_ON_DARK);
-        }
+        if (notificationButton != null) notificationButton.setTextColor(entryInkColor());
     }
 
     /** 是否任一处处于「跟随封面」档：全部手选时取色管线完全不跑。 */
     private boolean anyFollow() {
         return cardBgConfig == 0 || clockColorFollow || dateColorFollow
-                || signColorFollow || entryColorFollow || entryBgFollow;
+                || signColorFollow || entryBgFollow;
     }
 
     /** 「跟随封面」模式：曲目变了才在后台取色（Palette 要几百 ms，绝不占主线程）；结果按曲目 key 缓存。 */
@@ -1532,6 +1546,26 @@ final class LockScreenOverlay {
     /** 「鲜艳」档容器：专辑主色原色直出，仅统一 0xF2 不透明（与手选档一致）。 */
     private static int vividContainer(int swatchRgb) {
         return (swatchRgb & 0x00FFFFFF) | 0xF2000000;
+    }
+
+    /** 「更鲜艳」档容器（2026-10-11 新增第三档）：主色饱和度 ×1.3+0.05 拉满、亮度色相保持原样；
+     *  文字可读性不在这里管——isLightColor 会按结果底色自动配墨/白。无彩封面回历史黑。 */
+    private static int vividPlusContainer(int swatchRgb) {
+        if (swatchRgb == 0) return 0xF2181818;
+        float[] hsv = new float[3];
+        Color.colorToHSV(swatchRgb, hsv);
+        if (hsv[1] < 0.12f) return 0xF2181818;
+        hsv[1] = Math.min(hsv[1] * 1.3f + 0.05f, 1f);
+        return Color.HSVToColor(0xF2, hsv);
+    }
+
+    /** 「更鲜艳」档文字：原色档（vividText）结果上再拉饱和；无彩封面 vividText 已回白/灰，饱和拉升对它无效。 */
+    private static int vividPlusText(int swatchRgb, boolean asMain) {
+        int base = vividText(swatchRgb, asMain);
+        float[] hsv = new float[3];
+        Color.colorToHSV(base, hsv);
+        hsv[1] = Math.min(hsv[1] * 1.3f + 0.05f, 1f);
+        return Color.HSVToColor(Color.alpha(base), hsv);
     }
 
     /**
@@ -2783,8 +2817,8 @@ final class LockScreenOverlay {
             tintOn = false;
             applyTintShallow(notifications, null, null, 0);
             restoreInk();
-            // 入口按钮颜色还原成「跟随封面」档（展开期间被切成墨色了）。
-            if (notificationButton != null) notificationButton.setTextColor(followText(entryColorPick, true));
+            // 入口按钮颜色还原成算法黑白（展开期间被切成通知页墨色了）。
+            if (notificationButton != null) notificationButton.setTextColor(entryInkColor());
             Log.i(TAG, "Notification tint off");
             return;
         }
