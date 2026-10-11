@@ -23,6 +23,8 @@
 
 ## 最近改动补充
 
+2026-10-11：修复「锁屏原生时钟只剩分钟、小时消失」的真机 bug。根因是 `hideNativeClockLayers()` 配合 `hide()` 的快照语义存在一个时序洞：首次藏时钟常发生在 `applyPreShow()` 的暗屏预显窗口里，那一刻系统正从 AOD 过渡回锁屏，小时层可能恰好处于 INVISIBLE/GONE 的**瞬态**——`hide()` 把它当成「原始状态」记进 `changedViews`；之后 `restore()` 回放快照就把瞬态**焊死**（分钟层回来了、小时层永久消失），且系统时钟控制器不会重新断言子视图可见性，自己永远不会好。真机取证：uiautomator dump 里 `miui_keyguard_clock_container` 子节点全空；日志时间线 17:26:01 暗屏预显 → 17:26:14 `restore(suspended-media-gone)` 后故障持续。修复：`hideNativeClockLayers()` 把主时钟容器（`KeyguardClockContainer`）子树内藏过的视图单独记进 `hiddenMainClockViews`，`restore()` 在快照回放之后调 `forceRestoreMainClock()` 强制置 `VISIBLE` + 无障碍 `AUTO`（策略还原，不回放快照）；`secondaryClock`（`miui_keyguard_foreground_clock_container`）系统会合法切换其可见性，保留快照语义。壁纸层同理有焊接风险但未踩中，本轮不动。取证技巧：uiautomator 的无障碍树会漏掉 INVISIBLE / `NO_HIDE_DESCENDANTS` 的节点，「时钟容器是空的」本身就是证据；`screencap` 全黑说明屏幕已灭，dump 必须在亮屏窗口内完成。另：同轮排查确认 17:20:16 `moe.ouom.coolmusic` 被 SwipeUpClean 杀掉导致覆盖层按失败关闭回退原生，属预期行为。
+
 2026-10-10：播放器控制栏改用用户提供的实心圆角图标样式。新增 `ic_media_previous_double`、`ic_media_next_double` 与 `ic_media_pause_block` 三个模块矢量资源，上一首/下一首为双三角，暂停为两根圆角竖条；播放态仍使用现有圆角播放图标。图标通过模块 `Resources` 解码后设置到 `ImageView`，避免把模块资源 ID 直接交给 SystemUI 宿主解析。待下一次 Debug APK 安装并重启 SystemUI 后真机验收尺寸、间距和点击区域。
 
 - **仓库**：<https://github.com/zuige66/Hyper-MeloLock>

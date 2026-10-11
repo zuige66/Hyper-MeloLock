@@ -287,6 +287,20 @@ final class LockScreenOverlay {
     private boolean expanded;
     private View clock, secondaryClock, nativeBackgroundLayer, nativeForegroundLayer;
     /**
+     * 被 [hideNativeClockLayers] 藏过的「主时钟容器（KeyguardClockContainer）子树内」视图。
+     *
+     * 为什么要单独记账（2026-10-11 真机 bug）：`hide()` 把「第一次见到时的可见性」快照进
+     * `changedViews`，而首次藏时钟常发生在 `applyPreShow()` 的**暗屏预显**窗口里——那一刻
+     * 系统正从 AOD 过渡回锁屏，小时层可能恰好是 INVISIBLE/GONE（瞬态）。之后 `restore()`
+     * 回放快照就把这个瞬态**焊死**：分钟层回来了、小时层永久消失，且系统的时钟控制器
+     * 不会重新断言子视图可见性，自己永远不会好。
+     *
+     * 修复策略：主时钟容器子树内的视图在 `restore()` 时**强制 VISIBLE**（原生时钟在锁屏上
+     * 没有任何「该恢复成隐藏」的合法场景）；子树外的（`secondaryClock` 等，系统会合法切换
+     * 其可见性）保留快照语义，不在此列。
+     */
+    private final java.util.Set<View> hiddenMainClockViews = new java.util.HashSet<>();
+    /**
      * 左侧通知栏的宿主视图（`NotificationPanelView#notification_panel`）。
      *
      * 真机视图树显示：`legacy_window_root` 的子节点顺序是
@@ -2045,6 +2059,8 @@ final class LockScreenOverlay {
         unregisterGuard(); shown = null; shownArtwork = null; shownArtSignature = null; shownPlayGlyph = null;
         pendingGlyph = null; main.removeCallbacks(glyphCommit);
         expanded = false; playerSceneVisible = false; restoreChangedViews();
+        // 快照回放可能把暗屏期采到的瞬态（小时层 INVISIBLE）焊回原生时钟，策略还原兜底纠正。
+        forceRestoreMainClock();
         if (foreground != null && foreground.getParent() == root) root.removeView(foreground);
         // background 挂在窗口根（见 create()），这里按实际父容器移除。
         if (background != null && background.getParent() instanceof ViewGroup) ((ViewGroup) background.getParent()).removeView(background);
@@ -2755,11 +2771,40 @@ final class LockScreenOverlay {
         if (view == null || view == foreground || view == background) return;
         String className = view.getClass().getName().toLowerCase(java.util.Locale.ROOT);
         String idName = resourceName(view);
-        if (className.contains("clock") || idName.contains("clock")) hide(view);
+        if (className.contains("clock") || idName.contains("clock")) {
+            hide(view);
+            // 主时钟容器子树内的视图走「策略还原」（见 hiddenMainClockViews 注释）：
+            // 快照可能采自暗屏/AOD 过渡期，回放会把瞬态焊死。
+            if (isWithinMainClock(view)) hiddenMainClockViews.add(view);
+        }
         if (view instanceof ViewGroup) {
             ViewGroup group = (ViewGroup) view;
             for (int i = 0; i < group.getChildCount(); i++) hideNativeClockLayers(group.getChildAt(i));
         }
+    }
+    /** True if view is the main clock container itself or one of its descendants. */
+    private boolean isWithinMainClock(View view) {
+        for (View v = view; v != null; v = v.getParent() instanceof View ? (View) v.getParent() : null) {
+            if (v == clock) return true;
+        }
+        return false;
+    }
+    /**
+     * 交还主时钟层：强制可见，不回放快照。
+     *
+     * 必须在 [restoreChangedViews] **之后**跑（快照回放会先把视图设回瞬态，这里再纠正）。
+     * 对已分离的旧视图设置可见性是无害 no-op；AOD 期间锁屏根整体被系统置 INVISIBLE，
+     * 强制 VISIBLE 不会让时钟漏到 AOD 上。
+     */
+    private void forceRestoreMainClock() {
+        if (hiddenMainClockViews.isEmpty()) return;
+        int count = hiddenMainClockViews.size();
+        for (View view : hiddenMainClockViews) {
+            view.setVisibility(View.VISIBLE);
+            view.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+        }
+        hiddenMainClockViews.clear();
+        Log.i(TAG, "Main-clock layers force-restored to VISIBLE (" + count + " views); snapshot state discarded");
     }
     /**
      * Keeps any stock wallpaper/background container hidden while media owns the keyguard.
