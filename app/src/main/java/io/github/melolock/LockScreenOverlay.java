@@ -441,6 +441,20 @@ final class LockScreenOverlay {
     /** media_bg 每视图的「已应用色」：快速切页会重建 media_bg 实例（新视图带原始黑底），
      *  单标量守卫会误判「已应用」而跳过写入 → 媒体卡卡死黑底（2026-10-11 真机踩）。 */
     private final java.util.HashMap<View, Integer> mediaBgApplied = new java.util.HashMap<>();
+    /**
+     * 全程统一染色（2026-10-11 zuige）：通知栈不只在我们通知页染——锁屏 shade、桌面 shade
+     * 只要是同一个栈视图在绘制，就统一染主色（此前桌面 shade 是系统原生混色：会话卡彩色、
+     * 普通卡黑）。锚点是栈视图本身（**restore() 不清空**，场景销毁后仍可染）；泵是栈的
+     * pre-draw 监听 + 500ms 节流浅扫：栈不画（AOD/静止）就零成本，一画就在该帧上屏前把色
+     * 补齐（pre-draw 时序保证看不到原生色闪帧）。取色沿用粘性 displayedSwatch（音乐停了
+     * 色不丢），从未取过色用暗色兜底。模块关闭走 fullTimeTintOff() 全量还原。
+     */
+    private ViewGroup stackAnchor;
+    private boolean stackPumpAttached;
+    private long lastStackSweepAt;
+    private int lastSweepViews = -1;
+    private int lastSweepColor;
+    private boolean stackChildrenLogged;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -611,7 +625,7 @@ final class LockScreenOverlay {
         boolean enabled = read;
         if (lastEnabled == null || lastEnabled != enabled) Log.i(TAG, "Module enabled=" + enabled + " " + state());
         lastEnabled = enabled;
-        if (enabled) media.start(); else { Log.i(TAG, "Module switched off; restoring " + state()); media.stop(); restore("switch-off"); }
+        if (enabled) media.start(); else { Log.i(TAG, "Module switched off; restoring " + state()); media.stop(); restore("switch-off"); fullTimeTintOff(); }
     }
 
     private boolean compatible() {
@@ -917,6 +931,7 @@ final class LockScreenOverlay {
         Log.i(TAG, "Native layers: clock=" + (clock != null) + " secondary=" + (secondaryClock != null)
                 + " background=" + (nativeBackgroundLayer != null)
                 + " foreground=" + (nativeForegroundLayer != null));
+        attachStackTintPump();   // 全程统一染色：栈实例换了就重挂，场景销毁也不撤
         // This layer is below SystemUI's shortcut row but above the stock wallpaper.
         // It fills the bottom area that the interaction scene deliberately leaves free.
         background = new FrameLayout(context);
@@ -2859,6 +2874,32 @@ final class LockScreenOverlay {
      * （深度 ≤6，只摸每张卡的直接背景，成本远低于旧版 24 层全栈深扫）；
      * 主色变了立即重扫。scrim_notifications 归系统 ScrimController 管，绝不碰。
      */
+    /** 通知染色底色的统一来源（通知页与全程泵共用）：手选档优先，否则取色主色；从未取到过封面色用暗色兜底。顺带按底色亮度定墨色。 */
+    private int resolveNotifyBaseColor() {
+        int base;
+        if (notifyBgConfig != 0) {
+            base = notifyBgConfig;
+        } else if (displayedSwatch == 0) {
+            base = 0xF2181818;
+        } else {
+            base = pickContainer(notifyBgPick, displayedSwatch);
+        }
+        // 字色随底色亮度联动（与 applyCardColors 同一条规则）：亮底墨字、深/艳底白字。
+        boolean lightCard = isLightColor(base);
+        inkTitleColor = lightCard ? INK_TITLE : INK_TITLE_ON_DARK;
+        inkSubColor = lightCard ? INK_SUB : INK_SUB_ON_DARK;
+        return base;
+    }
+    /** 滤镜按颜色缓存复用（ImageView 按对象身份去重，避免每帧无效 invalidate）。 */
+    private PorterDuffColorFilter obtainMediaFilter(int tintColor) {
+        if (tintColor != cachedMediaFilterColor || cachedMediaFilter == null) {
+            cachedMediaFilter = new PorterDuffColorFilter(tintColor, PorterDuff.Mode.SRC_ATOP);
+            cachedMediaFilterColor = tintColor;
+            Log.i(TAG, "Notification tint on swatch=0x" + Integer.toHexString(displayedSwatch));
+        }
+        return cachedMediaFilter;
+    }
+
     private void applyNotificationTint(boolean on) {
         if (notifications == null) return;
         if (on && !notifyCardTint) return;
@@ -2874,33 +2915,90 @@ final class LockScreenOverlay {
         }
         // 通知页底色独立（2026-10-11 zuige）：0=全局取色走自己的取色风格，手选档与 CARD_BG 同表；
         // 不再强制与播放器卡同源——想要同色就把两边设成一样。
-        int base;
-        if (notifyBgConfig != 0) {
-            base = notifyBgConfig;
-        } else if (displayedSwatch == 0) {
-            base = 0xF2181818;
-        } else {
-            base = pickContainer(notifyBgPick, displayedSwatch);
-        }
-        int tintColor = base;
-        // 字色随底色亮度联动（与 applyCardColors 同一条规则）：亮底墨字、深/艳底白字。
-        boolean lightCard = isLightColor(base);
-        inkTitleColor = lightCard ? INK_TITLE : INK_TITLE_ON_DARK;
-        inkSubColor = lightCard ? INK_SUB : INK_SUB_ON_DARK;
-        PorterDuffColorFilter mediaFilter;
-        if (tintColor != cachedMediaFilterColor || cachedMediaFilter == null) {
-            mediaFilter = cachedMediaFilter = new PorterDuffColorFilter(tintColor, PorterDuff.Mode.SRC_ATOP);
-            cachedMediaFilterColor = tintColor;
-            tintOn = true;
-            Log.i(TAG, "Notification tint on swatch=0x" + Integer.toHexString(displayedSwatch));
-        } else {
-            mediaFilter = cachedMediaFilter;   // 复用同一实例：ImageView 按对象身份去重，避免每帧无效 invalidate
-        }
+        int tintColor = resolveNotifyBaseColor();
+        PorterDuffColorFilter mediaFilter = obtainMediaFilter(tintColor);
+        tintOn = true;   // 同色复用滤镜时 obtainMediaFilter 不会重建，这里必须显式置位（off→on 门闩）
         int views = applyTintShallow(notifications, tintColor, mediaFilter, 0);
         // 「返回播放器」入口是我们自己的视图（不在通知栈子树里），展开时同步切成墨色。
         if (notificationButton != null && notificationButton.getCurrentTextColor() != inkTitleColor) {
             notificationButton.setTextColor(inkTitleColor);
         }
+    }
+
+    /**
+     * 全程统一染色的常驻泵（2026-10-11）：挂在栈视图的 attach 状态上，pre-draw 驱动节流浅扫。
+     * create() 每次进来都调用：栈实例被 SystemUI 重建时换锚点重挂；同一实例只挂一次。
+     * Listener 生命周期注意：pre-draw 监听挂在 attach 时的 ViewTreeObserver 上，detach 会失效，
+     * 所以每次 attach 都重新 add——重复 add 到同一 observer 也无害（扫描有 500ms 节流 + 幂等）。
+     */
+    private void attachStackTintPump() {
+        if (notifications == null) return;
+        if (notifications != stackAnchor) {
+            stackAnchor = notifications;
+            stackPumpAttached = false;
+            stackChildrenLogged = false;
+        }
+        if (stackPumpAttached) return;
+        stackPumpAttached = true;
+        stackAnchor.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(View v) {
+                v.getViewTreeObserver().addOnPreDrawListener(() -> {
+                    long now = android.os.SystemClock.elapsedRealtime();
+                    if (now - lastStackSweepAt >= 500) {
+                        lastStackSweepAt = now;
+                        sweepStackTint("stack");
+                    }
+                    return true;   // 永不拦截绘制；异常在 sweepStackTint 内部吃掉（失败关闭）
+                });
+                sweepStackTint("stack-attach");
+            }
+            @Override public void onViewDetachedFromWindow(View v) { }
+        });
+        if (stackAnchor.isAttachedToWindow()) sweepStackTint("stack-first");
+    }
+
+    /**
+     * 全程统一染色的一次浅扫：桌面 shade / 锁屏 shade / 我们的通知页共用一条路。
+     * 卡数或颜色变化才打日志（媒体卡挂没挂上靠既有的「Media tint layer added」行）。
+     * 首次扫描打一行栈直接子级的类名清单——媒体卡类名普查的唯一权威来源。
+     */
+    private void sweepStackTint(String reason) {
+        try {
+            if (!notifyCardTint || !Boolean.TRUE.equals(lastEnabled)) return;
+            if (stackAnchor == null || !stackAnchor.isAttachedToWindow()) return;
+            if (!stackChildrenLogged) {
+                StringBuilder names = new StringBuilder();
+                for (int i = 0; i < stackAnchor.getChildCount() && i < 12; i++) {
+                    if (i > 0) names.append(", ");
+                    names.append(stackAnchor.getChildAt(i).getClass().getSimpleName());
+                }
+                Log.i(TAG, "Stack children(" + stackAnchor.getChildCount() + "): " + names);
+                stackChildrenLogged = true;
+            }
+            int base = resolveNotifyBaseColor();
+            PorterDuffColorFilter filter = obtainMediaFilter(base);
+            int views = applyTintShallow(stackAnchor, base, filter, 0);
+            if (views != lastSweepViews || base != lastSweepColor) {
+                Log.i(TAG, "Stack tint sweep(" + reason + ") views=" + views
+                        + " color=0x" + Integer.toHexString(base));
+                lastSweepViews = views;
+                lastSweepColor = base;
+            }
+        } catch (Throwable error) {
+            Log.w(TAG, "Stack tint sweep failed", error);   // 失败关闭：染色出错最多回原生色，绝不影响锁屏
+        }
+    }
+
+    /** 模块关闭：把全程染色也一并撤掉（restore() 只管场景自己的那份）。 */
+    private void fullTimeTintOff() {
+        try {
+            if (stackAnchor != null) applyTintShallow(stackAnchor, null, null, 0);
+            restoreInk();
+        } catch (Throwable error) {
+            Log.w(TAG, "Full-time tint off failed", error);
+        }
+        lastSweepViews = -1;
+        lastSweepColor = 0;
     }
 
     /** 浅扫（深度 ≤6）：只摸每张卡的直接背景视图，成本约等于一层子视图遍历。 */
