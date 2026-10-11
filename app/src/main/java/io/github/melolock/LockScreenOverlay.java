@@ -22,6 +22,8 @@ import io.github.hyperisland.R;
 import androidx.palette.graphics.Palette;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.PorterDuff;
+import android.graphics.PorterDuffColorFilter;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.TransitionDrawable;
@@ -364,6 +366,17 @@ final class LockScreenOverlay {
     private int shortcutRowLookups;
     /** 调试用：锁屏状态下永不息屏（stay_awake，默认关）。 */
     private boolean stayAwake;
+    /**
+     * 通知卡跟随封面（notify_card_tint，默认开）。**事件驱动，零周期扫描**：
+     * 通知页整页底色来自通知栈后面的 `scrim_notifications`（深色主题=黑、浅色=白，
+     * 卡片本身近透明、色是 scrim 透出来的），所以主攻 scrim 一次染色；
+     * media_bg / 通知卡背景只做一次浅扫挂 SRC_ATOP 滤镜——ImageView 的滤镜挂在
+     * 视图属性上，系统每 2 秒重设位图也不会丢，无需重扫。
+     */
+    private boolean notifyCardTint;
+    private View notificationsScrim;
+    private android.graphics.drawable.Drawable savedScrimBackground;
+    private boolean tintApplied;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -826,6 +839,7 @@ final class LockScreenOverlay {
         notifications = stack instanceof ViewGroup ? (ViewGroup) stack : null;
         // 左侧通知栏宿主：它的可见性不是可靠信号，只用它来装手势拦截。
         leftShadePanel = findById(windowRoot, "notification_panel");
+        notificationsScrim = findByIdInAnyPackage(windowRoot, "scrim_notifications");
         installShadeBlock();
         secondaryClock = findById(root, "miui_keyguard_foreground_clock_container");
         nativeBackgroundLayer = findById(root, "keyguard_background_layer");
@@ -898,6 +912,7 @@ final class LockScreenOverlay {
         fxPlayerCardPop = elem(elements, Config.PLAYER_CARD_POP) != 0;
         fxVectorIcons = elem(elements, Config.PLAYER_VECTOR_ICONS) != 0;
         hideShortcuts = elem(elements, Config.HIDE_SHORTCUTS) != 0;
+        notifyCardTint = elem(elements, Config.NOTIFY_CARD_TINT) != 0;
         stayAwake = elem(elements, Config.STAY_AWAKE) != 0;
         // keepScreenOn 挂在我们自己的前景层上（场景显示期间屏幕不熄）。
         // 之前挂过 SystemUI 的锁屏根：那是系统视图，HyperOS 的 AOD/超级壁纸盯着它的
@@ -905,7 +920,7 @@ final class LockScreenOverlay {
         if (stayAwake) Log.i(TAG, "Debug stay-awake ON (via overlay foreground)");
         Log.i(TAG, "Fx: button=" + fxButtonFeedback + " smooth=" + fxSmoothProgress
                 + " pop=" + fxCoverPop + " cardPop=" + fxPlayerCardPop + " songFade=" + songFadeEnabled
-                + " hideShortcuts=" + hideShortcuts);
+                + " hideShortcuts=" + hideShortcuts + " notifyTint=" + notifyCardTint);
         signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
         boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
         boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
@@ -1616,6 +1631,7 @@ final class LockScreenOverlay {
             // 通知**直接收起**，不再淡出：淡出层正好盖在时钟区域上，那一层任何合成抖动
             // 看起来都是「时间闪一下」。播放器的滑入本身已经承接了「同一个控件」的观感。
             Log.i(TAG, "Page swap: back to player, shared offset=" + shared + "px");
+            applyNotificationTint(false);
             endNotificationsLayer();
             if (notifications != null) {
                 notifications.animate().cancel();
@@ -1742,7 +1758,7 @@ final class LockScreenOverlay {
         expanded = true; playerSceneVisible = false; main.removeCallbacks(progressTicker);
         // The album backdrop and the module clock remain visible. Only the native
         // notification stack is revealed; restoring all views would show wallpaper.
-        show(notifications); hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility();
+        show(notifications); hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility(); applyNotificationTint(true);
         immersiveClock.setVisibility(View.VISIBLE); immersiveClock.setAlpha(1f);
         foreground.animate().cancel(); cover.animate().cancel(); playerCard.animate().cancel();
         foreground.setVisibility(View.VISIBLE); foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f);
@@ -1903,6 +1919,7 @@ final class LockScreenOverlay {
     /** 撤层。reason 只用于诊断日志，用来定位「上滑露壁纸 / 亮屏先见原生锁屏」由哪条路径触发。 */
     private void restore(String reason) {
         if (foreground != null || background != null || shown != null) Log.i(TAG, "restore reason=" + reason + " " + state());
+        applyNotificationTint(false);   // 染过就要复原：原生通知栈要带着原始 scrim 回锁屏
         // stay_awake 挂在前景层上，前景层随场景一起销毁，无需额外清理。
         main.removeCallbacks(progressTicker); main.removeCallbacks(finishSuspend);
         cancelSwatchAnimation();   // 整场销毁：配色渐变停掉，别继续在孤儿视图上刷颜色
@@ -2673,6 +2690,57 @@ final class LockScreenOverlay {
             Log.i(TAG, "Shortcut row " + (hideShortcuts ? "hidden" : "restored")
                     + " id=" + resourceName(cachedShortcutRow));
         }
+    }
+
+    /**
+     * 通知页染色（事件驱动）：展开时一次施加、收起/恢复时一次复原，绝不做周期扫描。
+     * scrim 用 setBackgroundColor 直改（ScrimView 是全屏矩形，没有圆角要保）；
+     * 通知卡背景走 mutate + SRC_ATOP（圆角形状保留）。媒体卡的 ImageView 滤镜常驻。
+     */
+    private void applyNotificationTint(boolean on) {
+        if (notifications == null) return;
+        if (on && !notifyCardTint) return;
+        if (on == tintApplied) return;
+        tintApplied = on;
+        int base = displayedSwatch != 0 ? containerFromSwatch(displayedSwatch) : 0xFF181818;
+        int tint = (base & 0x00FFFFFF) | 0xE6000000;   // 90% 不透明
+        PorterDuffColorFilter filter = on ? new PorterDuffColorFilter(tint, PorterDuff.Mode.SRC_ATOP) : null;
+        if (notificationsScrim != null) {
+            if (on) {
+                if (savedScrimBackground == null) savedScrimBackground = notificationsScrim.getBackground();
+                notificationsScrim.setBackgroundColor(tint);
+            } else if (savedScrimBackground != null) {
+                notificationsScrim.setBackground(savedScrimBackground);
+                savedScrimBackground = null;
+            }
+        }
+        int views = applyTintShallow(notifications, filter, 0);
+        Log.i(TAG, "Notification tint " + (on ? "on" : "off")
+                + " scrim=" + (notificationsScrim != null) + " views=" + views
+                + " swatch=0x" + Integer.toHexString(displayedSwatch));
+    }
+
+    /** 浅扫（深度 ≤6）：只摸每张卡的直接背景视图，成本约等于一层子视图遍历。 */
+    private int applyTintShallow(ViewGroup group, PorterDuffColorFilter filter, int depth) {
+        if (group == null || depth > 6) return 0;
+        int count = 0;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child == null) continue;
+            String id = resourceName(child);   // 全小写：真机普查确认实际 id 是 backgroundnormal/dimmed
+            boolean isMediaBg = id.equals("media_bg");
+            boolean isCardBg = id.equals("backgroundnormal") || id.equals("backgrounddimmed");
+            if (isMediaBg && child instanceof ImageView) {
+                ((ImageView) child).setColorFilter(filter);
+                count++;
+            } else if (isCardBg) {
+                Drawable bg = child.getBackground();
+                if (bg != null) bg.mutate().setColorFilter(filter);
+                count++;
+            }
+            if (child instanceof ViewGroup) count += applyTintShallow((ViewGroup) child, filter, depth + 1);
+        }
+        return count;
     }
 
     private void hideNativeWallpaperLayers(View view) {

@@ -206,6 +206,8 @@ public final class Config {
      */
     /** 调试用：锁屏状态下永不息屏（root 挂 keepScreenOn），方便盯着通知页反复调试。 */
     public static final String STAY_AWAKE = "stay_awake";
+    /** 通知卡跟随封面（notify_card_tint，默认开）：通知页 scrim + 媒体卡按封面主色染色。 */
+    public static final String NOTIFY_CARD_TINT = "notify_card_tint";
 
     /** 字符串值元素：签名正文。走同一条 /elements 通道（value 列本来就是字符串形式），但不进整数解析。 */
     public static final String DATE_SIGNATURE = "date_signature";
@@ -265,6 +267,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(DEBUG_LOG, 0);
         ELEMENT_DEFAULTS.put(HIDE_SHORTCUTS, 0);
         ELEMENT_DEFAULTS.put(STAY_AWAKE, 0);
+        ELEMENT_DEFAULTS.put(NOTIFY_CARD_TINT, 1);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */
