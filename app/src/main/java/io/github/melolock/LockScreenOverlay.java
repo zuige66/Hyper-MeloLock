@@ -2789,13 +2789,21 @@ final class LockScreenOverlay {
         }
         if (layer.getParent() != header) {
             if (layer.getParent() instanceof ViewGroup) ((ViewGroup) layer.getParent()).removeView(layer);
-            header.addView(layer, 0);
-            Log.i(TAG, "Media tint layer added into " + header.getClass().getName()
-                    + " children=" + header.getChildCount());
+            // 必须显式给全屏 LayoutParams：宿主是自定义 ViewGroup 时 generateDefaultLayoutParams
+            // 可能返回 WRAP_CONTENT → 视图没有固有尺寸会被量成 0x0，色层看不见。
+            header.addView(layer, 0, new ViewGroup.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            Log.i(TAG, "Media tint layer added into " + header.getClass().getSimpleName()
+                    + " children=" + header.getChildCount()
+                    + " hostSize=" + header.getWidth() + "x" + header.getHeight());
         }
         GradientDrawable gd = (GradientDrawable) layer.getBackground();
         gd.setColor(color != null ? 0xFFFF00FF : Color.TRANSPARENT);   // 【临时探针】品红自查
         layer.setVisibility(color != null ? View.VISIBLE : View.GONE);
+        if (color != null && layer.getWidth() == 0) {
+            Log.i(TAG, "Media tint layer zero-sized: " + layer.getWidth() + "x" + layer.getHeight()
+                    + " lp=" + (layer.getLayoutParams() != null ? layer.getLayoutParams().toString() : "null"));
+        }
     }
 
     /**
