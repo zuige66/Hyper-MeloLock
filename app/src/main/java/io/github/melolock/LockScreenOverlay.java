@@ -2762,8 +2762,11 @@ final class LockScreenOverlay {
             View child = group.getChildAt(i);
             if (child == null) continue;
             String id = resourceName(child);
+            // resourceName() 返回全小写：真机普查（Tint census）确认通知卡背景的实际
+            // id 是 backgroundnormal / backgrounddimmed（NotificationBackgroundView），
+            // 按驼峰匹配永远不命中——这就是「染色只命中 1 个视图」的根因。
             boolean isMediaBg = id.equals("media_bg");
-            boolean isCardBg = id.equals("backgroundDimmed") || id.equals("backgroundNormal");
+            boolean isCardBg = id.equals("backgroundnormal") || id.equals("backgrounddimmed");
             if (isMediaBg && child instanceof ImageView) {
                 ((ImageView) child).setColorFilter(filter);
                 count++;
