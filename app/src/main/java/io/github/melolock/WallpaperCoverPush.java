@@ -23,7 +23,7 @@ import java.util.concurrent.Executors;
  */
 public final class WallpaperCoverPush {
     private static final String TAG = "MeloLock";
-    private static final String REV = "WCV-3";
+    private static final String REV = "WCV-4";
     /** 封面最长边：锁屏壁纸 cover-crop 后约 1440x3200，源图 1080 足够清晰且 JPEG 体积可控。 */
     private static final int MAX_EDGE = 1080;
 
@@ -55,12 +55,16 @@ public final class WallpaperCoverPush {
             // 2026-10-12：取消「每次亮屏重推」——亮屏本身不需要重推（壁纸进程缓存还在），
             // 重推就要重建 1440x3200 位图 + 重传 GL 纹理，重传间隙闪一帧原生壁纸＝「亮屏慢一拍」。
             // 改为壁纸进程重启时自己来要（ACTION_COVER_REQUEST）。
+            // 必须 EXPORTED：索要方是壁纸进程（独立 UID），NOT_EXPORTED 只允许同 UID/系统发送，
+            // 跨进程根本收不到。风险可控——别人发这条只会让壁纸重画一次当前封面。
             appContext.registerReceiver(new BroadcastReceiver() {
                 @Override public void onReceive(Context c, Intent intent) {
                     if (!Config.ACTION_COVER_REQUEST.equals(intent.getAction())) return;
+                    Log.i(TAG, "WCV cover request received; snapshot="
+                            + (lastSnapshot == null ? "none" : "cached"));
                     worker.execute(WallpaperCoverPush::resendCurrent);
                 }
-            }, new IntentFilter(Config.ACTION_COVER_REQUEST), Context.RECEIVER_NOT_EXPORTED);
+            }, new IntentFilter(Config.ACTION_COVER_REQUEST), Context.RECEIVER_EXPORTED);
         } catch (Throwable error) {
             Log.w(TAG, "WCV cover-request receiver unavailable", error);
         }
