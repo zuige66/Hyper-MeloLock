@@ -1494,3 +1494,26 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
       采样的是**壁纸窗口**（SystemUI View 树采不到，见 AGENTS.md 红线）——下一步要先看清现象再动手。
     - **注意**：`produceReleaseComposeMapping` 首跑可能因 maven central 网络抖动
       （asm 9.9.1 下载 TLS 握手失败）报错，重跑一次即可。
+
+53. 2026-10-11 **新增「永不息屏（锁屏下）」调试开关；通知染色做后又整体回退（v0.3.3 状态）**：
+
+    - **stay_awake（保留）**：调试用，锁屏场景显示期间屏幕不自动熄灭。`ELEMENT_DEFAULTS`
+      默认 0，UI 挂「调试」分组。实现：`create()` 时 `foreground.setKeepScreenOn(stayAwake)`——
+      **必须挂在模块自己的前景层上**。第一版挂在 SystemUI 锁屏根（`root.setKeepScreenOn`），
+      真机出现「亮屏慢 + 上下滑动原生壁纸闪烁」，根视图是系统 AOD/超级壁纸盯着的窗口状态，
+      外部组件不要去改它；改挂前景层后等用户回归。
+    - **notify_card_tint（已回退删除）**：目标是不让通知页的黑/白底通知卡突兀。今天做完
+      四轮迭代：① skip 条件把「每次 pre-draw 重施」短路掉 + config-changed 重建不重置记账
+      （修为 750ms 节流重扫 + create() 重置）；② 递归深度 14→24；③ 加一次性 `Tint census`
+      普查，**发现真凶：`resourceName()` 返回全小写，通知卡背景实际 id 是
+      `backgroundnormal` / `backgrounddimmed`（NotificationBackgroundView），驼峰匹配永不命中**
+      （media_bg 命中靠的是本身就全小写）；④ 改小写匹配后，zuige 真机反馈「上下滑动又卡原生壁纸、
+      开屏/解锁变慢」，决定整体回退（053 提交系：d73d1d1→f9c2f6d→小写修复→回退）。
+      保留的结论：真机通知栈里媒体卡背景 = `media_bg`（ImageView）、通知卡背景 =
+      `backgroundnormal`/`backgrounddimmed`、 shelf 背景也是 `backgroundnormal`
+      （NotificationShelfBackgroundView）——**将来若重做，`resourceName` 全小写这一条是红线**。
+    - **性能存疑项**：zuige 反馈 debug 包下开屏/解锁变慢。日志见媒体快照解码尖峰
+      （561/343/177ms，平时 10~30ms）+ debug 包 debuggable 无 AOT + debug_log 周期写入。
+      **未定位到与回退前代码的因果关系**；如后续 release 也慢才是真回归，再深挖。
+    - 装机链路复盘：debug↔debug 可 `install -r` 直接覆盖；本轮多次装包均按
+      「install → `am crash com.android.systemui` ×2 → 查 rev= 行」闭环执行。
