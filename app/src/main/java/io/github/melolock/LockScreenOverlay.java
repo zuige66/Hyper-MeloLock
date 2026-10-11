@@ -467,6 +467,12 @@ final class LockScreenOverlay {
     private ViewGroup stackAnchor;
     private boolean stackPumpAttached;
     private long lastStackSweepAt;
+    /**
+     * 展开期 pre-draw 重挂染色的节流间隔。系统 rebind 行视图会冲掉滤镜，所以需要「反复重挂」，
+     * 但重挂不必每帧做：与常驻泵的 500ms 同量级即可，人眼看不出延迟，省掉的是每帧一次全树浅扫。
+     */
+    private static final long NOTIFY_TINT_THROTTLE_MS = 400;
+    private long lastNotifyTintAtMs;
     private int lastSweepViews = -1;
     private int lastSweepColor;
     private boolean stackChildrenLogged;
@@ -587,7 +593,17 @@ final class LockScreenOverlay {
                     // 通知栈的显隐完全由 expanded 决定：展开时它自己在淡入（由 show() 保证可见），
                     // 收起时立即隐藏——不再做淡出（淡出层盖在时钟上，会让时间看起来闪一下）。
                     if (expanded) show(notifications); else hide(notifications);
-                    if (expanded) applyNotificationTint(true);   // 展开期间节流重挂：系统 rebind 行视图会冲掉滤镜
+                    // 展开期间重挂：系统 rebind 行视图会冲掉滤镜。**必须节流**（2026-10-12）：
+                    // 这行原本每个绘制帧跑一次全量浅扫（每视图一次 resourceName + 反射 setTint），
+                    // 而 stackAnchor 就是 notifications（见 attachStackTintPump），常驻泵已经在
+                    // 500ms 节流地扫同一棵树了——每帧再扫一遍纯属重复劳动，正是下拉卡顿的来源之一。
+                    if (expanded) {
+                        long nowMs = android.os.SystemClock.elapsedRealtime();
+                        if (nowMs - lastNotifyTintAtMs >= NOTIFY_TINT_THROTTLE_MS) {
+                            lastNotifyTintAtMs = nowMs;
+                            applyNotificationTint(true);
+                        }
+                    }
                     ensureOnTop(foreground);
                     ensureOnTop(notificationButton);
                 }
@@ -1450,7 +1466,13 @@ final class LockScreenOverlay {
         // **缓存 key 必须带上档位**：只比 mediaKey 的话，用户在「主色来源」换档后不换歌就永远
         // 复用旧档位算出来的色 —— 真机表现就是「明明选了占比优先，颜色还是鲜艳档那个」
         // （2026-10-09 zuige 反馈的根因）。
-        if (mediaKey != null && mediaKey.equals(autoMediaKey) && swatchPickMode == autoSwatchPick) {
+        // 缓存 key **优先用封面指纹**：Palette 只依赖像素，而 title 在部分播放器里被塞成滚动歌词
+        // （每 3~4 秒一行，WCV 封面重推踩过同一个坑），用 title 做 key 就会每隔几秒重算一次
+        // Palette + 重起一次主色渐变动画——同一张封面下纯属白烧。指纹取不到（HARDWARE 位图
+        // getPixel 抛异常）才退回曲目级 key，宁可多算也不能把 key 钉成常量导致永不更新。
+        String signature = artSignature(art);
+        final String key = (signature.isEmpty() || signature.startsWith("x,x,x,x,x,")) ? mediaKey : signature;
+        if (key != null && key.equals(autoMediaKey) && swatchPickMode == autoSwatchPick) {
             // 同曲同档位：只做「新视图补齐配色」的兜底，且不在渐变中途打断。
             if (autoSwatch != 0 && (swatchAnimator == null || !swatchAnimator.isRunning())) {
                 displayedSwatch = autoSwatch;
@@ -1480,10 +1502,10 @@ final class LockScreenOverlay {
             final int rgb = swatchRgb;
             final String picks = candidates;
             main.post(() -> {
-                autoMediaKey = mediaKey;
+                autoMediaKey = key;
                 autoSwatchPick = swatchPickMode;
                 animateSwatchTo(rgb);   // 渐变到新主色，动画每帧内刷新全套「跟随封面」档
-                if (debugLog) Log.i(TAG, "Card palette applied key=" + mediaKey + " swatch=" + Integer.toHexString(rgb)
+                if (debugLog) Log.i(TAG, "Card palette applied key=" + key + " swatch=" + Integer.toHexString(rgb)
                         + " pick[" + picks + "]");
             });
         });
@@ -3436,11 +3458,23 @@ final class LockScreenOverlay {
         }
     }
 
-    private String resourceName(View view) {        int id = view.getId();
+    private String resourceName(View view) {
+        int id = view.getId();
         if (id == View.NO_ID) return "";
-        try { return context.getResources().getResourceEntryName(id).toLowerCase(java.util.Locale.ROOT); }
-        catch (RuntimeException ignored) { return ""; }
+        // id → 名字在同一个资源表里是恒定的，但反查要走资源表（含异常兜底），成本不低：
+        // 染色浅扫对每个子视图调一次、原生层扫描对全树每个节点调一次，而这两条分别在
+        // 「每帧」和「每 TTL」上跑（2026-10-12：与 hideNativeClockLayers 全树递归同类的周期性重活）。
+        // 按 id 记忆化即可；实例级（非 static）——不同 Context 的资源表不同，进程级共享会串。
+        String cached = resourceNameCache.get(id);
+        if (cached != null) return cached;
+        String name;
+        try { name = context.getResources().getResourceEntryName(id).toLowerCase(java.util.Locale.ROOT); }
+        catch (RuntimeException ignored) { name = ""; }
+        resourceNameCache.put(id, name);
+        return name;
     }
+    /** {@link #resourceName} 的 id → 名字记忆表（实例级：资源表随 Context，不跨实例共享）。 */
+    private final java.util.HashMap<Integer, String> resourceNameCache = new java.util.HashMap<>();
     /** Reveals one stock view without forgetting its original state for final restore. */
     private void reveal(View view) {
         if (view == null) return;

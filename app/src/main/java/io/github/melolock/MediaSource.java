@@ -13,6 +13,7 @@ import android.net.Uri;
 import android.util.Log;
 import java.io.InputStream;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -64,6 +65,26 @@ final class MediaSource {
      */
     private static final long SESSION_GRACE_MS = 1500;
     private boolean graceScheduled;
+    /**
+     * 允许名单的 TTL 缓存（2026-10-12）。`Config.packageAllowed()` 一次要打**两次** ContentProvider
+     * 查询（readString + allowedPackages），而 refresh() 在**主线程**上对**每个**候选会话调一次——
+     * 每 2 秒的快照周期里这就是一串 binder + 读盘。名单本身几秒不变（用户改完有 120ms 防抖 +
+     * 整场重建兜底），缓存 2 秒完全够用。进程级共享：同一进程内的两个 MediaSource 实例一并受益。
+     */
+    private static final long ALLOWED_TTL_MS = 2000;
+    private static volatile Set<String> cachedAllowed;
+    private static volatile long cachedAllowedAtMs;
+
+    private static boolean packageAllowed(Context context, String packageName) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        Set<String> allowed = cachedAllowed;
+        if (allowed == null || now - cachedAllowedAtMs >= ALLOWED_TTL_MS) {
+            allowed = Config.allowedPackages(context);
+            cachedAllowed = allowed;
+            cachedAllowedAtMs = now;
+        }
+        return allowed.contains(packageName);
+    }
     // 用方法引用而不是 lambda 体：`listener` 在构造函数里赋值，直接在字段初始化器的 lambda 体里
     // 引用它会报「可能尚未初始化变量」。
     private final Runnable sessionLost = this::announceLost;
@@ -121,7 +142,7 @@ final class MediaSource {
         try {
             sessions = manager.getActiveSessions(null);
             for (MediaController candidate : sessions) {
-                if (!Config.packageAllowed(context, candidate.getPackageName())) continue;
+                if (!packageAllowed(context, candidate.getPackageName())) continue;
                 PlaybackState state = candidate.getPlaybackState();
                 MediaMetadata metadata = candidate.getMetadata();
                 if (state == null || metadata == null) continue;
@@ -157,7 +178,7 @@ final class MediaSource {
             // 「切歌瞬间掉回原生锁屏、要靠下一次会话列表变化才回来」。按包名重新挂上去继续监听。
             String previousPackage = lastReady.controller.getPackageName();
             for (MediaController candidate : sessions) {
-                if (previousPackage.equals(candidate.getPackageName()) && Config.packageAllowed(context, previousPackage)) {
+                if (previousPackage.equals(candidate.getPackageName()) && packageAllowed(context, previousPackage)) {
                     tracked = candidate;
                     Log.i(TAG, "Empty gap detected; keep tracking " + previousPackage + " for the next track");
                     break;
