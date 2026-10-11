@@ -524,14 +524,6 @@ internal fun LockAppearancePage() {
     CollapsingPage(title = "设置") {
         item {
             CollapsibleSection("全局", "global", MiuixIcons.Settings, expandedSections, ::toggleSection, { resetSection("global") }) {
-                PreferenceDropdown(
-                    title = "主色来源",
-                    summary = "从封面取主色的方式",
-                    icon = null,
-                    items = listOf("最鲜艳优先", "占比优先（封面占比最大的色）", "色族占比（近似色归并，抗干扰）"),
-                    selectedIndex = value(Config.SWATCH_PICK).coerceIn(0, 2),
-                    onSelectedIndexChange = { update(Config.SWATCH_PICK, it) },
-                )
                 PreferenceSwitch(
                     title = "切歌淡出动效",
                     summary = "换歌时配色平滑过渡",
@@ -559,6 +551,14 @@ internal fun LockAppearancePage() {
                     icon = null,
                     checked = value(Config.STAY_AWAKE) != 0,
                     onCheckedChange = { update(Config.STAY_AWAKE, if (it) 1 else 0) },
+                )
+                PreferenceDropdown(
+                    title = "主色来源",
+                    summary = "从封面取主色的方式",
+                    icon = null,
+                    items = listOf("最鲜艳优先", "占比优先（封面占比最大的色）", "色族占比（近似色归并，抗干扰）"),
+                    selectedIndex = value(Config.SWATCH_PICK).coerceIn(0, 2),
+                    onSelectedIndexChange = { update(Config.SWATCH_PICK, it) },
                 )
             }
         }
@@ -667,15 +667,6 @@ internal fun LockAppearancePage() {
         }
         item {
             CollapsibleSection("播放器", "card", MiuixIcons.Music, expandedSections, ::toggleSection, { resetSection("card") }) {
-                PreferenceDropdown(
-                    title = "底色",
-                    summary = "文字按亮度自动黑白",
-                    icon = null,
-                    items = CARD_BG_LABELS,
-                    selectedIndex = CARD_BG_VALUES.indexOf(value(Config.CARD_BG)).coerceAtLeast(0),
-                    onSelectedIndexChange = { update(Config.CARD_BG, CARD_BG_VALUES[it]) },
-                )
-                PickStyleDropdown(Config.CARD_BG, Config.CARD_BG_PICK, ::value, ::update)
                 PreferenceSwitch(
                     title = "按钮反馈",
                     summary = "按压缩放回弹与切键弹跳",
@@ -704,6 +695,15 @@ internal fun LockAppearancePage() {
                     checked = value(Config.PLAYER_VECTOR_ICONS) != 0,
                     onCheckedChange = { update(Config.PLAYER_VECTOR_ICONS, if (it) 1 else 0) },
                 )
+                PreferenceDropdown(
+                    title = "底色",
+                    summary = "文字按亮度自动黑白",
+                    icon = null,
+                    items = CARD_BG_LABELS,
+                    selectedIndex = CARD_BG_VALUES.indexOf(value(Config.CARD_BG)).coerceAtLeast(0),
+                    onSelectedIndexChange = { update(Config.CARD_BG, CARD_BG_VALUES[it]) },
+                )
+                PickStyleDropdown(Config.CARD_BG, Config.CARD_BG_PICK, ::value, ::update)
                 DpSlider("缩放", value(Config.CARD_SCALE), 10..300, unit = "%", onCommit = { update(Config.CARD_SCALE, it) })
                 DpSlider("宽度 (0=自动)", value(Config.CARD_WIDTH), 0..600, onCommit = { update(Config.CARD_WIDTH, it) })
                 DpSlider("高度 (0=自动)", value(Config.CARD_HEIGHT), 0..600, onCommit = { update(Config.CARD_HEIGHT, it) })
