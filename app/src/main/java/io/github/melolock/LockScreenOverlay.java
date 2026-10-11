@@ -375,7 +375,7 @@ final class LockScreenOverlay {
      */
     private boolean notifyCardTint;
     private View notificationsScrim;
-    private android.graphics.drawable.Drawable savedScrimBackground;
+    private View notificationsTintLayer;
     private boolean tintApplied;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
@@ -2693,9 +2693,11 @@ final class LockScreenOverlay {
     }
 
     /**
-     * 通知页染色（事件驱动）：展开时一次施加、收起/恢复时一次复原，绝不做周期扫描。
-     * scrim 用 setBackgroundColor 直改（ScrimView 是全屏矩形，没有圆角要保）；
-     * 通知卡背景走 mutate + SRC_ATOP（圆角形状保留）。媒体卡的 ImageView 滤镜常驻。
+     * 通知页染色（事件驱动，v2）：**不跟 ScrimController 抢颜色**——scrim_notifications
+     * 的颜色由系统控制器每帧接管，setBackgroundColor 下一帧就被写回（真机 10:55 实测染了
+     * 但看不见）。改为在通知栈正下方插一块**我们自己的纯色层**（z 序：栈后、我们的背景之上），
+     * 系统管不着；展开时设色+显示，收起/恢复时 GONE。卡片滤镜一次浅扫常驻（ImageView
+     * 的滤镜挂在视图属性上，重设位图不丢）。
      */
     private void applyNotificationTint(boolean on) {
         if (notifications == null) return;
@@ -2705,18 +2707,21 @@ final class LockScreenOverlay {
         int base = displayedSwatch != 0 ? containerFromSwatch(displayedSwatch) : 0xFF181818;
         int tint = (base & 0x00FFFFFF) | 0xE6000000;   // 90% 不透明
         PorterDuffColorFilter filter = on ? new PorterDuffColorFilter(tint, PorterDuff.Mode.SRC_ATOP) : null;
-        if (notificationsScrim != null) {
-            if (on) {
-                if (savedScrimBackground == null) savedScrimBackground = notificationsScrim.getBackground();
-                notificationsScrim.setBackgroundColor(tint);
-            } else if (savedScrimBackground != null) {
-                notificationsScrim.setBackground(savedScrimBackground);
-                savedScrimBackground = null;
-            }
+        ViewGroup parent = notifications.getParent() instanceof ViewGroup ? (ViewGroup) notifications.getParent() : null;
+        if (parent != null && notificationsTintLayer == null) {
+            notificationsTintLayer = new View(context);
+            parent.addView(notificationsTintLayer, parent.indexOfChild(notifications),
+                    notifications.getLayoutParams());
+            Log.i(TAG, "Notification tint layer inserted idx=" + parent.indexOfChild(notificationsTintLayer)
+                    + "/" + (parent.getChildCount() - 1) + " parent=" + parent.getClass().getSimpleName());
+        }
+        if (notificationsTintLayer != null) {
+            notificationsTintLayer.setBackgroundColor(tint);
+            notificationsTintLayer.setVisibility(on ? View.VISIBLE : View.GONE);
         }
         int views = applyTintShallow(notifications, filter, 0);
         Log.i(TAG, "Notification tint " + (on ? "on" : "off")
-                + " scrim=" + (notificationsScrim != null) + " views=" + views
+                + " layer=" + (notificationsTintLayer != null) + " views=" + views
                 + " swatch=0x" + Integer.toHexString(displayedSwatch));
     }
 
