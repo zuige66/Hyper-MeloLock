@@ -378,6 +378,8 @@ final class LockScreenOverlay {
     private boolean tintOn;
     private int lastCardTintSwatch = -1;
     private long lastCardTintMs;
+    /** 染色前的原始 tint 色（按视图存），复原用。 */
+    private final java.util.HashMap<View, Integer> savedCardTints = new java.util.HashMap<>();
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -1922,6 +1924,7 @@ final class LockScreenOverlay {
     private void restore(String reason) {
         if (foreground != null || background != null || shown != null) Log.i(TAG, "restore reason=" + reason + " " + state());
         applyNotificationTint(false);   // 染过就要复原：原生通知栈要带着原始 scrim 回锁屏
+        savedCardTints.clear();
         // stay_awake 挂在前景层上，前景层随场景一起销毁，无需额外清理。
         main.removeCallbacks(progressTicker); main.removeCallbacks(finishSuspend);
         cancelSwatchAnimation();   // 整场销毁：配色渐变停掉，别继续在孤儿视图上刷颜色
@@ -2707,7 +2710,7 @@ final class LockScreenOverlay {
         if (!on) {
             if (!tintOn) return;
             tintOn = false;
-            applyTintShallow(notifications, null, 0);
+            applyTintShallow(notifications, null, null, 0);
             Log.i(TAG, "Notification tint off");
             return;
         }
@@ -2717,19 +2720,67 @@ final class LockScreenOverlay {
         tintOn = true;
         lastCardTintSwatch = displayedSwatch;
         lastCardTintMs = now;
-        // 【临时探针】诊断「滤镜挂上了但卡还是黑」：用纯品红做 unmistakable 颜色，
-        // 并把每个命中视图的 id/类/背景打出来，对照前景截图定位真正的绘制者。结论拿到即删。
-        PorterDuffColorFilter filter = new PorterDuffColorFilter(0xFFFF00FF, PorterDuff.Mode.SRC_ATOP);
-        tintProbeDetails.setLength(0);
-        int views = applyTintShallow(notifications, filter, 0);
-        Log.i(TAG, "Notification tint probe views=" + views + " swatch=0x" + Integer.toHexString(displayedSwatch)
-                + (firstPass ? " " + tintProbeDetails : ""));
+        int base = displayedSwatch != 0 ? containerFromSwatch(displayedSwatch) : 0xFF181818;
+        int tintColor = (base & 0x00FFFFFF) | 0xE6000000;   // 90% 不透明
+        PorterDuffColorFilter mediaFilter = new PorterDuffColorFilter(tintColor, PorterDuff.Mode.SRC_ATOP);
+        int views = applyTintShallow(notifications, tintColor, mediaFilter, 0);
+        Log.i(TAG, "Notification tint on views=" + views + " swatch=0x" + Integer.toHexString(displayedSwatch));
+        if (firstPass) logMediaRowCensus();
     }
 
-    private final StringBuilder tintProbeDetails = new StringBuilder();
+    /**
+     * 【临时探针】媒体卡普查：媒体行的黑底不是 NotificationBackgroundView（setTint 对它无效）。
+     * 把 media_bg 所在行的整棵子树（每视图的 id/类/可见性/背景/图片）打出来，定位真正的绘制者。
+     * 结论拿到即删。
+     */
+    private void logMediaRowCensus() {
+        View mediaBg = findViewIdRecursive(notifications, "media_bg");
+        if (mediaBg == null) { Log.i(TAG, "Media row census: no media_bg"); return; }
+        View row = mediaBg;
+        while (row != null && !row.getClass().getSimpleName().contains("ExpandableNotificationRow")) {
+            row = row.getParent() instanceof View ? (View) row.getParent() : null;
+        }
+        if (row == null) row = notifications;
+        Log.i(TAG, "Media row census root=" + row.getClass().getSimpleName() + " id=" + resourceName(row));
+        censusSubtree(row, 0);
+    }
+
+    private void censusSubtree(View view, int depth) {
+        if (view == null || depth > 20) return;
+        String id = resourceName(view);
+        String cls = view.getClass().getSimpleName();
+        String bgDesc = "-";
+        Drawable bg = view.getBackground();
+        if (bg != null) bgDesc = bg.getClass().getSimpleName();
+        if (view instanceof ImageView) {
+            Drawable src = ((ImageView) view).getDrawable();
+            bgDesc = "src=" + (src != null ? src.getClass().getSimpleName() + " " + src.getIntrinsicWidth() + "x" + src.getIntrinsicHeight() : "null");
+        }
+        Log.i(TAG, "MediaCensus d=" + depth + (id.isEmpty() ? "" : " id=" + id) + " cls=" + cls
+                + " vis=" + (view.getVisibility() == View.VISIBLE) + " a=" + String.format(java.util.Locale.US, "%.1f", view.getAlpha())
+                + " " + view.getWidth() + "x" + view.getHeight() + " bg=" + bgDesc);
+        if (view instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) view;
+            for (int i = 0; i < g.getChildCount(); i++) censusSubtree(g.getChildAt(i), depth + 1);
+        }
+    }
+
+    private View findViewIdRecursive(ViewGroup group, String idName) {
+        if (group == null) return null;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child == null) continue;
+            if (resourceName(child).equals(idName)) return child;
+            if (child instanceof ViewGroup) {
+                View hit = findViewIdRecursive((ViewGroup) child, idName);
+                if (hit != null) return hit;
+            }
+        }
+        return null;
+    }
 
     /** 浅扫（深度 ≤6）：只摸每张卡的直接背景视图，成本约等于一层子视图遍历。 */
-    private int applyTintShallow(ViewGroup group, PorterDuffColorFilter filter, int depth) {
+    private int applyTintShallow(ViewGroup group, Integer cardColor, PorterDuffColorFilter mediaFilter, int depth) {
         if (group == null || depth > 6) return 0;
         int count = 0;
         for (int i = 0; i < group.getChildCount(); i++) {
@@ -2739,50 +2790,52 @@ final class LockScreenOverlay {
             boolean isMediaBg = id.equals("media_bg");
             boolean isCardBg = id.equals("backgroundnormal") || id.equals("backgrounddimmed");
             if (isMediaBg && child instanceof ImageView) {
-                ((ImageView) child).setColorFilter(filter);
+                ((ImageView) child).setColorFilter(mediaFilter);
                 count++;
-                if (tintOn) tintProbeDetails.append(" [media ").append(child.getWidth()).append("x").append(child.getHeight()).append("]");
             } else if (isCardBg) {
+                tintCardInternal(child, cardColor);
                 count++;
-                Drawable bg = tintInternalBackground(child, filter);
-                if (tintOn) tintProbeDetails.append(" [").append(id).append(" ")
-                        .append(child.getClass().getSimpleName()).append(" ")
-                        .append(child.getWidth()).append("x").append(child.getHeight())
-                        .append(" vis=").append(child.getVisibility() == View.VISIBLE)
-                        .append(bg != null ? " " + bg.getClass().getSimpleName() : " noBg").append("]");
             }
-            if (child instanceof ViewGroup) count += applyTintShallow((ViewGroup) child, filter, depth + 1);
+            if (child instanceof ViewGroup) count += applyTintShallow((ViewGroup) child, cardColor, mediaFilter, depth + 1);
         }
         return count;
     }
 
     /**
-     * 给 NotificationBackgroundView / NotificationShelfBackgroundView 染色。
-     * 这两个类**不用 View 的 background 属性**（getBackground() 返回 null，真机普查实测），
-     * 背景 drawable 存在内部字段里由 onDraw 自绘。优先走公开的 setTint(int)（AOSP 同名方法，
-     * HyperOS 保留），失败则反射取内部 drawable 挂滤镜。返回实际拿到的 drawable 供日志。
+     * 给 NotificationBackgroundView / NotificationShelfBackgroundView 染色（2026-10-11 真机验证有效）。
+     * 这两个类**不用 View 的 background 属性**（getBackground() 返回 null），背景 drawable 存在
+     * 内部字段、由 onDraw 自绘；公开的 setTint(int) 是正路。先记下原始 mTintColor 供复原。
+     * color==null 表示复原。
      */
-    private Drawable tintInternalBackground(View card, PorterDuffColorFilter filter) {
-        // 途径一：setTint(int)（滤镜路径拿不到 int 色，探针阶段不走这条）
-        try {
-            java.lang.reflect.Method m = card.getClass().getMethod("setTint", int.class);
-            Object result = m.invoke(card, Integer.valueOf(0xFFFF00FF));
-            if (result == null) { /* void 返回，视为成功 */ }
-        } catch (Throwable t) {
-            // 途径二：反射内部 drawable 字段
-            for (String fieldName : new String[]{"mBackground", "mCustomBackground"}) {
-                try {
-                    java.lang.reflect.Field f = card.getClass().getDeclaredField(fieldName);
-                    f.setAccessible(true);
-                    Object val = f.get(card);
-                    if (val instanceof Drawable) {
-                        ((Drawable) val).mutate().setColorFilter(filter);
-                        return (Drawable) val;
-                    }
-                } catch (Throwable ignored) { }
-            }
+    private void tintCardInternal(View card, Integer color) {
+        if (!savedCardTints.containsKey(card)) {
+            Integer original = 0;
+            try {
+                java.lang.reflect.Field f = card.getClass().getDeclaredField("mTintColor");
+                f.setAccessible(true);
+                original = f.getInt(card);
+            } catch (Throwable ignored) { }
+            savedCardTints.put(card, original);
         }
-        return null;
+        try {
+            card.getClass().getMethod("setTint", int.class)
+                    .invoke(card, Integer.valueOf(color != null ? color : savedCardTints.get(card)));
+            return;
+        } catch (Throwable ignored) { }
+        // 兜底：反射内部 drawable 挂滤镜
+        PorterDuffColorFilter filter = color != null
+                ? new PorterDuffColorFilter(color, PorterDuff.Mode.SRC_ATOP) : null;
+        for (String fieldName : new String[]{"mBackground", "mCustomBackground"}) {
+            try {
+                java.lang.reflect.Field f = card.getClass().getDeclaredField(fieldName);
+                f.setAccessible(true);
+                Object val = f.get(card);
+                if (val instanceof Drawable) {
+                    ((Drawable) val).mutate().setColorFilter(filter);
+                    return;
+                }
+            } catch (Throwable ignored) { }
+        }
     }
 
     private void hideNativeWallpaperLayers(View view) {
