@@ -15,8 +15,6 @@ import android.database.ContentObserver;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
-import android.graphics.PorterDuff;
-import android.graphics.PorterDuffColorFilter;
 import android.graphics.RenderEffect;
 import android.graphics.Shader;
 import android.graphics.Typeface;
@@ -364,17 +362,8 @@ final class LockScreenOverlay {
     /** 快捷栏容器缓存（见 applyShortcutRowVisibility）：避免每个 pre-draw 周期都全树按 id 找。 */
     private View cachedShortcutRow;
     private int shortcutRowLookups;
-    /** 通知卡跟随封面（notify_card_tint，默认开）：媒体卡/通知卡背景按封面主色染色。 */
-    private boolean notifyCardTint;
     /** 调试用：锁屏状态下永不息屏（stay_awake，默认关）。 */
     private boolean stayAwake;
-    /** 上次施加记录（开关状态 + 主色）：都没变就跳过遍历，控制 pre-draw 成本。 */
-    private boolean lastTintOn = true;
-    private int lastTintSwatch = -1;
-    private int lastTintColor;
-    private boolean tintLogged;
-    /** 上次全栈重扫时间（expanded 期间按 750ms 节流周期重施染色，防系统 rebound 冲掉滤镜）。 */
-    private long lastTintPassMs;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -489,7 +478,6 @@ final class LockScreenOverlay {
                     // 通知栈的显隐完全由 expanded 决定：展开时它自己在淡入（由 show() 保证可见），
                     // 收起时立即隐藏——不再做淡出（淡出层盖在时钟上，会让时间看起来闪一下）。
                     if (expanded) show(notifications); else hide(notifications);
-                    if (expanded) applyNotificationTint();
                     ensureOnTop(foreground);
                     ensureOnTop(notificationButton);
                 }
@@ -910,21 +898,14 @@ final class LockScreenOverlay {
         fxPlayerCardPop = elem(elements, Config.PLAYER_CARD_POP) != 0;
         fxVectorIcons = elem(elements, Config.PLAYER_VECTOR_ICONS) != 0;
         hideShortcuts = elem(elements, Config.HIDE_SHORTCUTS) != 0;
-        notifyCardTint = elem(elements, Config.NOTIFY_CARD_TINT) != 0;
         stayAwake = elem(elements, Config.STAY_AWAKE) != 0;
         // keepScreenOn 挂在我们自己的前景层上（场景显示期间屏幕不熄）。
         // 之前挂过 SystemUI 的锁屏根：那是系统视图，HyperOS 的 AOD/超级壁纸盯着它的
         // 窗口状态，挂上去之后真机出现「亮屏慢 + 滑动时原生壁纸闪烁」。
         if (stayAwake) Log.i(TAG, "Debug stay-awake ON (via overlay foreground)");
-        // 重置染色记账：create() 会复用同一实例（config-changed 重建），残留的
-        // lastTintSwatch/tintLogged 会让新场景第一次 applyNotificationTint 被跳过。
-        tintLogged = false;
-        lastTintOn = !notifyCardTint;
-        lastTintSwatch = -1;
-        lastTintPassMs = 0;
         Log.i(TAG, "Fx: button=" + fxButtonFeedback + " smooth=" + fxSmoothProgress
                 + " pop=" + fxCoverPop + " cardPop=" + fxPlayerCardPop + " songFade=" + songFadeEnabled
-                + " hideShortcuts=" + hideShortcuts + " notifyTint=" + notifyCardTint);
+                + " hideShortcuts=" + hideShortcuts);
         signatureText = Config.elementText(context, Config.DATE_SIGNATURE);
         boolean signOn = elem(elements, Config.SIGN_ENABLED) != 0 && !signatureText.isEmpty();
         boolean dateOn = elem(elements, Config.DATE_ENABLED) != 0;
@@ -1761,7 +1742,7 @@ final class LockScreenOverlay {
         expanded = true; playerSceneVisible = false; main.removeCallbacks(progressTicker);
         // The album backdrop and the module clock remain visible. Only the native
         // notification stack is revealed; restoring all views would show wallpaper.
-        show(notifications); hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility(); applyNotificationTint();
+        show(notifications); hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility();
         immersiveClock.setVisibility(View.VISIBLE); immersiveClock.setAlpha(1f);
         foreground.animate().cancel(); cover.animate().cancel(); playerCard.animate().cancel();
         foreground.setVisibility(View.VISIBLE); foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f);
@@ -2692,96 +2673,6 @@ final class LockScreenOverlay {
             Log.i(TAG, "Shortcut row " + (hideShortcuts ? "hidden" : "restored")
                     + " id=" + resourceName(cachedShortcutRow));
         }
-    }
-
-    /**
-     * 通知卡跟随封面（notify_card_tint，默认开）。
-     *
-     * 展开通知时看到的原生通知卡（黑底/白底）与沉浸背景不搭。真机普查（2026-10-11 dump）：
-     * 媒体卡的背景是 `media_bg`（ImageView，铺满整卡）；普通通知卡是 `backgroundNormal` /
-     * `backgroundDimmed`（锁屏上显示 dimmed）。上色方式：**SRC_ATOP 染色**——媒体卡染它的
-     * 图像内容，通知卡染它原有的圆角背景 drawable（mutate 后 setColorFilter，圆角形状保留，
-     * 不用 setBackgroundColor 砸掉圆角）。系统媒体更新会重设 media_bg 的位图，所以
-     * expanded 期间每次 pre-draw 都要重新施加；用「主色没变就跳过遍历」控制成本。
-     * 关开关＝对同样的视图 clearColorFilter 复原。
-     */
-    private void applyNotificationTint() {
-        if (notifications == null) return;
-        long now = android.os.SystemClock.uptimeMillis();
-        // 不能按「swatch 没变」完全短路：expanded 期间系统会 rebound 通知卡（换新的背景
-        // drawable，滤镜丢失）并重设 media_bg 位图，必须周期性重施。这里按 750ms 节流
-        // 全栈重扫；swatch 变化立即扫，不等节流窗口。
-        boolean swatchChanged = displayedSwatch != lastTintSwatch;
-        if (!swatchChanged && notifyCardTint == lastTintOn && now - lastTintPassMs < 750) return;
-        lastTintOn = notifyCardTint;
-        lastTintSwatch = displayedSwatch;
-        lastTintPassMs = now;
-        int base = displayedSwatch != 0 ? containerFromSwatch(displayedSwatch) : 0xFF181818;
-        int tint = (base & 0x00FFFFFF) | 0xE6000000;   // 90% 不透明，透一点沉浸背景
-        PorterDuffColorFilter filter = notifyCardTint ? new PorterDuffColorFilter(tint, PorterDuff.Mode.SRC_ATOP) : null;
-        lastTintColor = tint;
-        int views = applyTintRecursive(notifications, filter, 0);
-        if (!tintLogged) {
-            tintLogged = true;
-            Log.i(TAG, "Notification tint " + (notifyCardTint ? "applied" : "cleared")
-                    + ": views=" + views + " swatch=0x" + Integer.toHexString(displayedSwatch));
-            logTintCensus(notifications, 0);
-        }
-    }
-
-    /**
-     * 一次性诊断普查：把通知栈子树里有 id 或关键类名的视图打出来（每视图一行，封顶 40 行）。
-     * 用途：定位染色 views=N 偏低时到底漏了哪些背景视图（背景视图可能不叫
-     * backgroundNormal/Dimmed，或挂在 depth 上限之外）。
-     */
-    private void logTintCensus(ViewGroup group, int depth) {
-        if (group == null || depth > 24) return;
-        for (int i = 0; i < group.getChildCount(); i++) {
-            View child = group.getChildAt(i);
-            if (child == null) continue;
-            String id = resourceName(child);
-            String cls = child.getClass().getSimpleName();
-            boolean interesting = !id.isEmpty() || cls.contains("Notif") || cls.contains("Media")
-                    || cls.toLowerCase(java.util.Locale.ROOT).contains("background");
-            if (interesting) {
-                Drawable bg = child.getBackground();
-                Log.i(TAG, "Tint census d=" + depth + (id.isEmpty() ? "" : " id=" + id)
-                        + " cls=" + cls + (bg != null ? " bg=" + bg.getClass().getSimpleName() : ""));
-            }
-            if (child instanceof ViewGroup) logTintCensus((ViewGroup) child, depth + 1);
-        }
-    }
-
-    /** 递归给通知栈里的媒体卡背景与通知卡背景染色；返回命中视图数。 */
-    private int applyTintRecursive(ViewGroup group, PorterDuffColorFilter filter, int depth) {
-        // 深度 24：HyperOS 媒体卡的 media_bg 挂在很深的 MediaControl 视图层级里，
-        // 14 层截不到（真机实测 views=1 只命中通知卡背景）。
-        if (group == null || depth > 24) return 0;
-        int count = 0;
-        for (int i = 0; i < group.getChildCount(); i++) {
-            View child = group.getChildAt(i);
-            if (child == null) continue;
-            String id = resourceName(child);
-            // resourceName() 返回全小写：真机普查（Tint census）确认通知卡背景的实际
-            // id 是 backgroundnormal / backgrounddimmed（NotificationBackgroundView），
-            // 按驼峰匹配永远不命中——这就是「染色只命中 1 个视图」的根因。
-            boolean isMediaBg = id.equals("media_bg");
-            boolean isCardBg = id.equals("backgroundnormal") || id.equals("backgrounddimmed");
-            if (isMediaBg && child instanceof ImageView) {
-                ((ImageView) child).setColorFilter(filter);
-                count++;
-            } else if (isCardBg) {
-                Drawable bg = child.getBackground();
-                if (bg != null) {
-                    bg.mutate().setColorFilter(filter);
-                } else {
-                    child.setBackgroundColor(filter == null ? Color.TRANSPARENT : lastTintColor);
-                }
-                count++;
-            }
-            if (child instanceof ViewGroup) count += applyTintRecursive((ViewGroup) child, filter, depth + 1);
-        }
-        return count;
     }
 
     private void hideNativeWallpaperLayers(View view) {
