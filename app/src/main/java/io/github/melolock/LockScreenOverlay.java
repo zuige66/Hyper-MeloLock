@@ -366,6 +366,8 @@ final class LockScreenOverlay {
     private int shortcutRowLookups;
     /** 通知卡跟随封面（notify_card_tint，默认开）：媒体卡/通知卡背景按封面主色染色。 */
     private boolean notifyCardTint;
+    /** 调试用：锁屏状态下永不息屏（stay_awake，默认关）。 */
+    private boolean stayAwake;
     /** 上次施加记录（开关状态 + 主色）：都没变就跳过遍历，控制 pre-draw 成本。 */
     private boolean lastTintOn = true;
     private int lastTintSwatch = -1;
@@ -907,6 +909,9 @@ final class LockScreenOverlay {
         fxVectorIcons = elem(elements, Config.PLAYER_VECTOR_ICONS) != 0;
         hideShortcuts = elem(elements, Config.HIDE_SHORTCUTS) != 0;
         notifyCardTint = elem(elements, Config.NOTIFY_CARD_TINT) != 0;
+        stayAwake = elem(elements, Config.STAY_AWAKE) != 0;
+        if (root != null) root.setKeepScreenOn(stayAwake);   // 调试：锁屏下永不息屏（restore 会撤掉）
+        if (stayAwake) Log.i(TAG, "Debug stay-awake ON: keyguard will not time out");
         // 重置染色记账：create() 会复用同一实例（config-changed 重建），残留的
         // lastTintSwatch/tintLogged 会让新场景第一次 applyNotificationTint 被跳过。
         tintLogged = false;
@@ -1913,6 +1918,7 @@ final class LockScreenOverlay {
     /** 撤层。reason 只用于诊断日志，用来定位「上滑露壁纸 / 亮屏先见原生锁屏」由哪条路径触发。 */
     private void restore(String reason) {
         if (foreground != null || background != null || shown != null) Log.i(TAG, "restore reason=" + reason + " " + state());
+        if (root != null && stayAwake) { root.setKeepScreenOn(false); Log.i(TAG, "Debug stay-awake OFF (restore " + reason + ")"); }
         main.removeCallbacks(progressTicker); main.removeCallbacks(finishSuspend);
         cancelSwatchAnimation();   // 整场销毁：配色渐变停掉，别继续在孤儿视图上刷颜色
         if (progressAnimator != null) { progressAnimator.cancel(); progressAnimator = null; }   // 进度平滑动画同理
@@ -2715,6 +2721,30 @@ final class LockScreenOverlay {
             tintLogged = true;
             Log.i(TAG, "Notification tint " + (notifyCardTint ? "applied" : "cleared")
                     + ": views=" + views + " swatch=0x" + Integer.toHexString(displayedSwatch));
+            logTintCensus(notifications, 0);
+        }
+    }
+
+    /**
+     * 一次性诊断普查：把通知栈子树里有 id 或关键类名的视图打出来（每视图一行，封顶 40 行）。
+     * 用途：定位染色 views=N 偏低时到底漏了哪些背景视图（背景视图可能不叫
+     * backgroundNormal/Dimmed，或挂在 depth 上限之外）。
+     */
+    private void logTintCensus(ViewGroup group, int depth) {
+        if (group == null || depth > 24) return;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View child = group.getChildAt(i);
+            if (child == null) continue;
+            String id = resourceName(child);
+            String cls = child.getClass().getSimpleName();
+            boolean interesting = !id.isEmpty() || cls.contains("Notif") || cls.contains("Media")
+                    || cls.toLowerCase(java.util.Locale.ROOT).contains("background");
+            if (interesting) {
+                Drawable bg = child.getBackground();
+                Log.i(TAG, "Tint census d=" + depth + (id.isEmpty() ? "" : " id=" + id)
+                        + " cls=" + cls + (bg != null ? " bg=" + bg.getClass().getSimpleName() : ""));
+            }
+            if (child instanceof ViewGroup) logTintCensus((ViewGroup) child, depth + 1);
         }
     }
 

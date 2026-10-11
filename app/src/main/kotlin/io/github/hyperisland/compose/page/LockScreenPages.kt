@@ -776,6 +776,13 @@ internal fun LockAppearancePage() {
                     checked = value(Config.DEBUG_LOG) != 0,
                     onCheckedChange = { update(Config.DEBUG_LOG, if (it) 1 else 0) },
                 )
+                PreferenceSwitch(
+                    title = "永不息屏（锁屏下）",
+                    summary = "调试用：锁屏状态下屏幕不再自动熄灭，方便盯着通知页反复验证；解锁后恢复正常熄屏",
+                    icon = null,
+                    checked = value(Config.STAY_AWAKE) != 0,
+                    onCheckedChange = { update(Config.STAY_AWAKE, if (it) 1 else 0) },
+                )
             }
         }
         item {
