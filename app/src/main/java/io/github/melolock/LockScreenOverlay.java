@@ -403,8 +403,16 @@ final class LockScreenOverlay {
     /** 当前生效的墨色（每次染色 pass 按底色亮度重算，与播放器卡 isLightColor 规则一致）。 */
     private int inkTitleColor = INK_TITLE;
     private int inkSubColor = INK_SUB;
-    /** 展开时刻：前 1 秒用 120ms 节流压住「系统先画白字→我们再染」的黑白闪烁，之后回 500ms。 */
-    private long expandedAtMs;
+    /**
+     * 闪烁根治（2026-10-11）：系统 rebind 随时可能把行文字重置回白色，定时补染永远慢一拍。
+     * 改为 expanded 期间**每个 pre-draw 帧都跑**墨色 pass，但所有写入先做「当前值≠目标值」
+     * 对比，没变化就不写——稳定态每帧只剩一次树遍历，代价与既有 shortcut 可见性扫描同量级；
+     * rebind 后最迟下一帧（≤16ms）纠正，肉眼不可见。
+     */
+    private PorterDuffColorFilter cachedMediaFilter;
+    private int cachedMediaFilterColor;
+    private int lastMediaBgColor;
+    private int lastLayerColor;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -1010,7 +1018,7 @@ final class LockScreenOverlay {
         // 自绘胶囊替换系统默认背景：配色可配（含跟随封面）。默认半透明黑近似系统观感。
         entryBackgroundDrawable = new GradientDrawable();
         int entryBg = elem(elements, Config.ENTRY_BG);
-        entryBackgroundDrawable.setColor(entryBg == 0 ? followEntryBg() : entryBg);
+        entryBackgroundDrawable.setColor(entryBg == 0 ? entryFollowColor() : entryBg);
         entryBackgroundDrawable.setCornerRadius(dp(24));
         notificationButton.setBackground(entryBackgroundDrawable);
         notificationButton.setAllCaps(false);
@@ -1333,6 +1341,11 @@ final class LockScreenOverlay {
         return entryBgPick ? vividContainer(displayedSwatch) : containerFromSwatch(displayedSwatch);
     }
 
+    /** 入口胶囊底色：zuige 2026-10-11 要求与卡片同色（手动档仍优先）。 */
+    private int entryFollowColor() {
+        return cardBgConfig == 0 ? followCardBg() : cardBgConfig;
+    }
+
     /** 取色回填时统一刷新所有「跟随封面」档（卡片底 + 文字 + 入口）的配色（主线程调用）。 */
     private void applyFollowColors() {
         if (autoSwatch == 0) return;
@@ -1340,8 +1353,12 @@ final class LockScreenOverlay {
         if (clockColorFollow && immersiveClock != null) immersiveClock.setTextColor(followText(clockPick, true));
         if (dateColorFollow && dateLine != null) dateLine.setTextColor(followText(datePick, false));
         if (signColorFollow && signatureLine != null) signatureLine.setTextColor(followText(signPick, false));
-        if (entryColorFollow && notificationButton != null) notificationButton.setTextColor(followText(entryColorPick, true));
-        if (entryBgFollow && entryBackgroundDrawable != null) entryBackgroundDrawable.setColor(followEntryBg());
+        // 入口胶囊：底=卡片同色，字=按底色亮度取墨/白（与卡片字色同一条规则）。
+        int entryCard = entryFollowColor();
+        if (entryBgFollow && entryBackgroundDrawable != null) entryBackgroundDrawable.setColor(entryCard);
+        if (entryColorFollow && notificationButton != null) {
+            notificationButton.setTextColor(isLightColor(entryCard) ? INK_TITLE : INK_TITLE_ON_DARK);
+        }
     }
 
     /** 是否任一处处于「跟随封面」档：全部手选时取色管线完全不跑。 */
@@ -2761,14 +2778,6 @@ final class LockScreenOverlay {
             Log.i(TAG, "Notification tint off");
             return;
         }
-        long now = android.os.SystemClock.uptimeMillis();
-        if (!tintOn) expandedAtMs = now;
-        long sinceExpand = now - expandedAtMs;
-        long throttleMs = sinceExpand < 1000 ? 120 : 500;
-        if (tintOn && displayedSwatch == lastCardTintSwatch && now - lastCardTintMs < throttleMs) return;
-        tintOn = true;
-        lastCardTintSwatch = displayedSwatch;
-        lastCardTintMs = now;
         // 与播放器卡完全同源：cardBgConfig==0 时走 followCardBg()（含 cardBgPick 的 vivid/container 分支），
         // 手选档直接用配置色；**不做透明度折扣**——zuige 2026-10-11：要一模一样的底色。
         int base = cardBgConfig == 0 ? followCardBg() : cardBgConfig;
@@ -2777,11 +2786,22 @@ final class LockScreenOverlay {
         boolean lightCard = isLightColor(base);
         inkTitleColor = lightCard ? INK_TITLE : INK_TITLE_ON_DARK;
         inkSubColor = lightCard ? INK_SUB : INK_SUB_ON_DARK;
-        PorterDuffColorFilter mediaFilter = new PorterDuffColorFilter(tintColor, PorterDuff.Mode.SRC_ATOP);
+        PorterDuffColorFilter mediaFilter;
+        if (tintColor != cachedMediaFilterColor || cachedMediaFilter == null) {
+            mediaFilter = cachedMediaFilter = new PorterDuffColorFilter(tintColor, PorterDuff.Mode.SRC_ATOP);
+            cachedMediaFilterColor = tintColor;
+            lastMediaBgColor = 0;   // 色变了，强制重写 media_bg 背景
+            lastLayerColor = 0;
+            tintOn = true;
+            Log.i(TAG, "Notification tint on swatch=0x" + Integer.toHexString(displayedSwatch));
+        } else {
+            mediaFilter = cachedMediaFilter;   // 复用同一实例：ImageView 按对象身份去重，避免每帧无效 invalidate
+        }
         int views = applyTintShallow(notifications, tintColor, mediaFilter, 0);
         // 「返回播放器」入口是我们自己的视图（不在通知栈子树里），展开时同步切成墨色。
-        if (notificationButton != null) notificationButton.setTextColor(inkTitleColor);
-        Log.i(TAG, "Notification tint on views=" + views + " swatch=0x" + Integer.toHexString(displayedSwatch));
+        if (notificationButton != null && notificationButton.getCurrentTextColor() != inkTitleColor) {
+            notificationButton.setTextColor(inkTitleColor);
+        }
     }
 
     /** 浅扫（深度 ≤6）：只摸每张卡的直接背景视图，成本约等于一层子视图遍历。 */
@@ -2806,8 +2826,12 @@ final class LockScreenOverlay {
                     Log.i(TAG, "media_bg background=" + (b != null ? b.getClass().getSimpleName() : "null")
                             + " size=" + child.getWidth() + "x" + child.getHeight());
                 }
-                if (cardColor != null) child.setBackgroundColor(cardColor);
-                else if (savedBgDrawables.get(child) != null) child.setBackground(savedBgDrawables.get(child));
+                if (cardColor != null) {
+                    if (lastMediaBgColor != cardColor) {
+                        child.setBackgroundColor(cardColor);
+                        lastMediaBgColor = cardColor;
+                    }
+                } else if (savedBgDrawables.get(child) != null) child.setBackground(savedBgDrawables.get(child));
                 else child.setBackgroundColor(Color.TRANSPARENT);
                 View host = child;
                 for (int k = 0; k < 4; k++) {
@@ -2845,7 +2869,8 @@ final class LockScreenOverlay {
             if (!savedTextColors.containsKey(child)) savedTextColors.put(child, tv.getCurrentTextColor());
             int original = savedTextColors.get(child);
             // 阈值 0xB3：MIUI 标题常带 ~90% 透明白，按旧阈值(FF)会被误归成「次要」染浅灰。
-            tv.setTextColor(Color.alpha(original) >= 0xB3 ? inkTitleColor : inkSubColor);
+            int desired = Color.alpha(original) >= 0xB3 ? inkTitleColor : inkSubColor;
+            if (tv.getCurrentTextColor() != desired) tv.setTextColor(desired);   // 每帧跑，值不变不写
         } else if (child instanceof ImageView) {
             Drawable src = ((ImageView) child).getDrawable();
             if (src == null) return;
@@ -2898,8 +2923,12 @@ final class LockScreenOverlay {
                     + " hostSize=" + header.getWidth() + "x" + header.getHeight());
         }
         GradientDrawable gd = (GradientDrawable) layer.getBackground();
-        gd.setColor(color != null ? color : Color.TRANSPARENT);
-        layer.setVisibility(color != null ? View.VISIBLE : View.GONE);
+        if (lastLayerColor != (color != null ? color : 0)) {
+            gd.setColor(color != null ? color : Color.TRANSPARENT);
+            lastLayerColor = color != null ? color : 0;
+        }
+        int targetVis = color != null ? View.VISIBLE : View.GONE;
+        if (layer.getVisibility() != targetVis) layer.setVisibility(targetVis);
     }
 
     /**
