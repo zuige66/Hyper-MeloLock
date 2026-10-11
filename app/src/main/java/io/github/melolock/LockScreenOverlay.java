@@ -371,6 +371,8 @@ final class LockScreenOverlay {
     private int lastTintSwatch = -1;
     private int lastTintColor;
     private boolean tintLogged;
+    /** 上次全栈重扫时间（expanded 期间按 750ms 节流周期重施染色，防系统 rebound 冲掉滤镜）。 */
+    private long lastTintPassMs;
     /** 进度条平滑推进的进行中动画；新采样先取消再起新的，防两只动画打架。 */
     private ObjectAnimator progressAnimator;
     /** 上一次铺的播放/暂停图标；变了才弹跳（每 2 秒快照去重，与封面同思路）。 */
@@ -905,6 +907,12 @@ final class LockScreenOverlay {
         fxVectorIcons = elem(elements, Config.PLAYER_VECTOR_ICONS) != 0;
         hideShortcuts = elem(elements, Config.HIDE_SHORTCUTS) != 0;
         notifyCardTint = elem(elements, Config.NOTIFY_CARD_TINT) != 0;
+        // 重置染色记账：create() 会复用同一实例（config-changed 重建），残留的
+        // lastTintSwatch/tintLogged 会让新场景第一次 applyNotificationTint 被跳过。
+        tintLogged = false;
+        lastTintOn = !notifyCardTint;
+        lastTintSwatch = -1;
+        lastTintPassMs = 0;
         Log.i(TAG, "Fx: button=" + fxButtonFeedback + " smooth=" + fxSmoothProgress
                 + " pop=" + fxCoverPop + " cardPop=" + fxPlayerCardPop + " songFade=" + songFadeEnabled
                 + " hideShortcuts=" + hideShortcuts + " notifyTint=" + notifyCardTint);
@@ -2689,9 +2697,15 @@ final class LockScreenOverlay {
      */
     private void applyNotificationTint() {
         if (notifications == null) return;
-        if (notifyCardTint == lastTintOn && displayedSwatch == lastTintSwatch) return;
+        long now = android.os.SystemClock.uptimeMillis();
+        // 不能按「swatch 没变」完全短路：expanded 期间系统会 rebound 通知卡（换新的背景
+        // drawable，滤镜丢失）并重设 media_bg 位图，必须周期性重施。这里按 750ms 节流
+        // 全栈重扫；swatch 变化立即扫，不等节流窗口。
+        boolean swatchChanged = displayedSwatch != lastTintSwatch;
+        if (!swatchChanged && notifyCardTint == lastTintOn && now - lastTintPassMs < 750) return;
         lastTintOn = notifyCardTint;
         lastTintSwatch = displayedSwatch;
+        lastTintPassMs = now;
         int base = displayedSwatch != 0 ? containerFromSwatch(displayedSwatch) : 0xFF181818;
         int tint = (base & 0x00FFFFFF) | 0xE6000000;   // 90% 不透明，透一点沉浸背景
         PorterDuffColorFilter filter = notifyCardTint ? new PorterDuffColorFilter(tint, PorterDuff.Mode.SRC_ATOP) : null;
@@ -2706,7 +2720,9 @@ final class LockScreenOverlay {
 
     /** 递归给通知栈里的媒体卡背景与通知卡背景染色；返回命中视图数。 */
     private int applyTintRecursive(ViewGroup group, PorterDuffColorFilter filter, int depth) {
-        if (group == null || depth > 14) return 0;
+        // 深度 24：HyperOS 媒体卡的 media_bg 挂在很深的 MediaControl 视图层级里，
+        // 14 层截不到（真机实测 views=1 只命中通知卡背景）。
+        if (group == null || depth > 24) return 0;
         int count = 0;
         for (int i = 0; i < group.getChildCount(); i++) {
             View child = group.getChildAt(i);
