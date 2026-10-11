@@ -73,6 +73,15 @@ public final class Config {
      * extra 为空＝清除封面回退原生壁纸（fail closed）。
      */
     public static final String ACTION_WALLPAPER_COVER = "io.github.melolock.action.WALLPAPER_COVER";
+    /**
+     * 反向索要通道（2026-10-12）：壁纸进程**自己**在启动时向 SystemUI 要一次封面。
+     *
+     * 为什么需要它：原先靠 `ACTION_SCREEN_ON` 每次亮屏重推，壁纸进程每次都要重建 1440x3200
+     * 位图并重传 GL 纹理，重传间隙会闪一帧原生壁纸——用户感知就是「亮屏慢一拍」。
+     * 亮屏本身不需要重推（壁纸进程还活着、缓存还在），**只有壁纸进程重启丢缓存才需要**。
+     * 改成进程自己来要，亮屏零重推。
+     */
+    public static final String ACTION_COVER_REQUEST = "io.github.melolock.action.COVER_REQUEST";
     /** 封面 JPEG 字节数组的 extra 键；缺省该 extra 表示清除。 */
     public static final String EXTRA_COVER_JPEG = "art";
 

@@ -222,7 +222,9 @@ final class LockScreenOverlay {
                 // offForMs 能和用户的按键节奏对账：正常点一次是几百毫秒；「快按两下没亮起来」
                 // 的那次，这里会看到屏幕其实是被正常点亮的，而真正丢失的是第一次按键本身。
                 Log.i(TAG, "SCREEN_ON offFor=" + offMs + "ms " + state());
-                logWallpaperLikeViews();
+                // 只在调试开时跑：亮屏那一刻窗口根的全树遍历 + 同步写日志都会吃掉响应预算
+                // （2026-10-12「亮屏慢一拍」排查）。正常装机不需要这份普查。
+                if (debugLog) logWallpaperLikeViews();
                 screenOffAtMs = 0;
                 if (suspended && lockscreenCycle && keyguardLocked()) resume();
                 else if (suspended) {

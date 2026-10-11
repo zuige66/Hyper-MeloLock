@@ -52,14 +52,17 @@ public final class WallpaperCoverPush {
                 ? context.getApplicationContext() : context;
         Log.i(TAG, "WallpaperCoverPush rev=" + REV + " installed");
         try {
+            // 2026-10-12：取消「每次亮屏重推」——亮屏本身不需要重推（壁纸进程缓存还在），
+            // 重推就要重建 1440x3200 位图 + 重传 GL 纹理，重传间隙闪一帧原生壁纸＝「亮屏慢一拍」。
+            // 改为壁纸进程重启时自己来要（ACTION_COVER_REQUEST）。
             appContext.registerReceiver(new BroadcastReceiver() {
                 @Override public void onReceive(Context c, Intent intent) {
-                    if (!Intent.ACTION_SCREEN_ON.equals(intent.getAction())) return;
+                    if (!Config.ACTION_COVER_REQUEST.equals(intent.getAction())) return;
                     worker.execute(WallpaperCoverPush::resendCurrent);
                 }
-            }, new IntentFilter(Intent.ACTION_SCREEN_ON), Context.RECEIVER_NOT_EXPORTED);
+            }, new IntentFilter(Config.ACTION_COVER_REQUEST), Context.RECEIVER_NOT_EXPORTED);
         } catch (Throwable error) {
-            Log.w(TAG, "WCV push screen-on resend unavailable", error);
+            Log.w(TAG, "WCV cover-request receiver unavailable", error);
         }
         try {
             media = new MediaSource(appContext, snapshot -> {

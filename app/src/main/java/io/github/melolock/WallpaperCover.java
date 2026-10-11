@@ -57,6 +57,28 @@ public final class WallpaperCover implements IXposedHookLoadPackage {
         catch (Throwable error) { Log.w(TAG, "WCV renderer hook failed; 原生壁纸保留（失败关闭）", error); }
     }
 
+    /**
+     * 向 SystemUI 索要当前封面（2026-10-12）。壁纸进程活着时缓存一直在，只有重启丢缓存才需要
+     * 重发，所以由本进程启动时自己要，而不是让 SystemUI 每次亮屏重推（那会每次重建位图、
+     * 重传 GL 纹理，重传间隙闪一帧原生壁纸＝「亮屏慢一拍」）。
+     * 带两次重试：本进程往往比 SystemUI 的接收器先起来，首次广播可能落空。
+     */
+    private static void requestCover(Context context) {
+        worker.execute(() -> {
+            for (int attempt = 0; attempt < 3; attempt++) {
+                try {
+                    Intent intent = new Intent(Config.ACTION_COVER_REQUEST)
+                            .setPackage(Config.SYSTEMUI_PACKAGE);
+                    context.sendBroadcast(intent);
+                    Log.i(TAG, "WCV cover requested from SystemUI (attempt " + (attempt + 1) + ")");
+                } catch (Throwable error) {
+                    Log.w(TAG, "WCV cover request failed", error);
+                }
+                try { Thread.sleep(attempt == 0 ? 1500 : 3000); } catch (InterruptedException ignored) { }
+            }
+        });
+    }
+
     /** hook getBitmap：有缓存封面 → 返回缓存的壁纸尺寸位图；否则不动（原生壁纸）。 */
     private static void hookRenderer(ClassLoader loader) throws Throwable {
         Class<?> renderer = XposedHelpers.findClass(RENDERER_CLASS, loader);
@@ -93,6 +115,7 @@ public final class WallpaperCover implements IXposedHookLoadPackage {
                     IntentFilter filter = new IntentFilter();
                     filter.addAction(Config.ACTION_WALLPAPER_COVER);
                     filter.addAction(Config.ACTION_RESTART_WALLPAPER);
+                    requestCover(context);   // 进程刚起（可能丢过缓存）→ 主动向 SystemUI 要一次
                     context.registerReceiver(new BroadcastReceiver() {
                         @Override public void onReceive(Context c, Intent intent) {
                             String action = intent == null ? null : intent.getAction();
