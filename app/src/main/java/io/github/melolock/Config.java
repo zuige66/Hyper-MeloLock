@@ -197,6 +197,15 @@ public final class Config {
      */
     public static final String HIDE_SHORTCUTS = "hide_shortcuts";
 
+    /**
+     * 通知卡跟随封面（notify_card_tint，默认开）。
+     *
+     * 展开通知时原生媒体卡与通知卡是系统黑底/白底，和沉浸背景不搭。打开后按封面主色
+     * 给它们染色（SRC_ATOP，保留系统圆角与内容），关掉恢复原生。2026-10-11 真机普查：
+     * 媒体卡背景＝`media_bg`（ImageView），通知卡＝`backgroundNormal`/`backgroundDimmed`。
+     */
+    public static final String NOTIFY_CARD_TINT = "notify_card_tint";
+
     /** 字符串值元素：签名正文。走同一条 /elements 通道（value 列本来就是字符串形式），但不进整数解析。 */
     public static final String DATE_SIGNATURE = "date_signature";
 
@@ -254,6 +263,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(PLAYER_VECTOR_ICONS, 1);
         ELEMENT_DEFAULTS.put(DEBUG_LOG, 0);
         ELEMENT_DEFAULTS.put(HIDE_SHORTCUTS, 0);
+        ELEMENT_DEFAULTS.put(NOTIFY_CARD_TINT, 1);
     }
 
     /** 字符串值元素的默认值；{@link #elementKeys()} 会把这里面的键也导出到 /elements。 */
