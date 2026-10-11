@@ -192,6 +192,14 @@ final class LockScreenOverlay {
                 // only after SCREEN_ON is what caused the one-second stock-screen flash.
                 if (debugLog) Log.i(TAG, "SCREEN_OFF kept=" + state());
                 main.removeCallbacks(progressTicker);
+                // 通知页息屏：暗期就复位回播放器页（screen-on 兜底的 !expanded 会把复位跳掉，
+                // 开屏就停在通知页 —— 2026-10-11 zuige 报）。复位发生在灭屏期间，亮屏第一帧
+                // 直接是沉浸式；返回动画若因灭屏冻结，亮屏后补完也只是卡片淡入。
+                // 必须判 !suspended：解锁后 suspend 保留的场景不能在暗期被拉起来。
+                if (!suspended && foreground != null && shown != null && expanded) {
+                    Log.i(TAG, "SCREEN_OFF in notifications page; reset to player");
+                    showMusic();
+                }
                 // 暗期预显主触发已改到「系统唤醒信号」在面板还黑着时同步摆可见性（见 onSystemWakingUp）；
                 // 这里只留兜底：万一唤醒信号没来（极少见），仍按原延时摆回，亮屏第一帧还是我们的。
                 // 注意：不要再 removeCallbacks(preShowForWake) —— 快速开屏时 SCREEN_OFF 晚于唤醒信号到达，
