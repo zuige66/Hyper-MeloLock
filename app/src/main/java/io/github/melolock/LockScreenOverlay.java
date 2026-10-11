@@ -931,7 +931,6 @@ final class LockScreenOverlay {
         Log.i(TAG, "Native layers: clock=" + (clock != null) + " secondary=" + (secondaryClock != null)
                 + " background=" + (nativeBackgroundLayer != null)
                 + " foreground=" + (nativeForegroundLayer != null));
-        attachStackTintPump();   // 全程统一染色：栈实例换了就重挂，场景销毁也不撤
         // This layer is below SystemUI's shortcut row but above the stock wallpaper.
         // It fills the bottom area that the interaction scene deliberately leaves free.
         background = new FrameLayout(context);
@@ -1093,6 +1092,9 @@ final class LockScreenOverlay {
         elementSignature = currentElementSignature();
         // 底部快捷栏要等一次布局才量得到坐标，排到下一帧再对齐；拿不到就沿用 dp(10)。
         foreground.post(this::alignEntryWithShortcutRow);
+        // 全程统一染色泵**必须放在 create() 末尾**：notifyCardTint 在上面的配置段才赋值，
+        // 放前面的话泵的首次扫描会被自己的开关门闩拦掉（2026-10-11 真机踩：泵全程没跑过）。
+        attachStackTintPump();
         return true;
     }
 
@@ -2942,19 +2944,28 @@ final class LockScreenOverlay {
         stackPumpAttached = true;
         stackAnchor.addOnAttachStateChangeListener(new View.OnAttachStateChangeListener() {
             @Override public void onViewAttachedToWindow(View v) {
-                v.getViewTreeObserver().addOnPreDrawListener(() -> {
-                    long now = android.os.SystemClock.elapsedRealtime();
-                    if (now - lastStackSweepAt >= 500) {
-                        lastStackSweepAt = now;
-                        sweepStackTint("stack");
-                    }
-                    return true;   // 永不拦截绘制；异常在 sweepStackTint 内部吃掉（失败关闭）
-                });
+                installStackPreDraw(v);
                 sweepStackTint("stack-attach");
             }
             @Override public void onViewDetachedFromWindow(View v) { }
         });
-        if (stackAnchor.isAttachedToWindow()) sweepStackTint("stack-first");
+        if (stackAnchor.isAttachedToWindow()) {
+            // create() 发生在 root 挂上之后，栈通常**已经 attached**——onViewAttachedToWindow
+            // 不会再触发，必须就地装 pre-draw 监听，否则泵是死的（2026-10-11 真机踩：全程零 sweep）。
+            installStackPreDraw(stackAnchor);
+            sweepStackTint("stack-first");
+        }
+    }
+
+    private void installStackPreDraw(View stack) {
+        stack.getViewTreeObserver().addOnPreDrawListener(() -> {
+            long now = android.os.SystemClock.elapsedRealtime();
+            if (now - lastStackSweepAt >= 500) {
+                lastStackSweepAt = now;
+                sweepStackTint("stack");
+            }
+            return true;   // 永不拦截绘制；异常在 sweepStackTint 内部吃掉（失败关闭）
+        });
     }
 
     /**
