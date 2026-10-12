@@ -1,7 +1,7 @@
-# v0.3.4 发布物料（2026-10-12）
+# v0.3.4 发布物料（2026-10-12，已发布）
 
-- Release（待发布）：https://github.com/zuige66/Hyper-MeloLock/releases/tag/v0.3.4
-- 资产：`Hyper-MeloLock-v0.3.4.apk`（3,683,668 字节，正式签名 SHA-1 `2b73265bf50dba6576a7758c552340cdc54ec1f7`）
+- Release：https://github.com/zuige66/Hyper-MeloLock/releases/tag/v0.3.4
+- 资产：`Hyper-MeloLock-v0.3.4.apk`（3,683,668 字节，正式签名 SHA-1 `2b73265bf50dba6576a7758c552340cdc54ec1f7`，state=uploaded 已核验）
 - 版本号：`versionCode 14` / `versionName 0.3.4`，tag `v0.3.4`
 - 自 v0.3.3 共 **56 个提交**（`git log v0.3.3..HEAD` 逐条核对过）
 - 默认值已同步 zuige 真机（2026-10-12 第三次同步）：主色来源=色族占比、入口胶囊=低饱和、
