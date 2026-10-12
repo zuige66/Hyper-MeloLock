@@ -398,6 +398,28 @@ public final class Config {
      * 读失败则保持上一次的状态不动，并打日志。
      */
     public static Boolean enabledOrNull(Context context) {
+        // **TTL 缓存（2026-10-12）**：这个方法在 SystemUI 的**主线程**上被每个媒体回调调一次
+        // （两个 MediaSource 各一份 ≈ 每秒 1 次跨进程查询）。查询本身要打进配置端进程，而配置端
+        // 进程随时可能正忙（前台 UI / GC）或被 MIUI SmartPower 冻结在 idle（每次唤醒要 3 秒）——
+        // binder 同步等它，SystemUI 主线程就被拖住，主观表现正是「开屏卡一下」（12:55:28 实测：
+        // 配置端 GC 后 100ms 用户按电源，SystemUI 同帧掉 40 帧）。缓存 1 秒不损语义：
+        // 开关变化有 ContentObserver 推送（switchObserver.onChange 会先失效缓存再走 updateSwitch），
+        // render() 里重读本来只是对「漏推送」的兜底。
+        long now = android.os.SystemClock.elapsedRealtime();
+        Boolean cached = cachedEnabled;
+        if (cached != null && now - cachedEnabledAtMs < ENABLED_TTL_MS) return cached;
+        Boolean fresh = readEnabled(context);
+        cachedEnabled = fresh;
+        cachedEnabledAtMs = now;
+        return fresh;
+    }
+    /** 配置端进程随时可能忙/被冻结，跨进程读必须节制；见 {@link #enabledOrNull}。 */
+    private static final long ENABLED_TTL_MS = 1000;
+    private static volatile Boolean cachedEnabled;
+    private static volatile long cachedEnabledAtMs;
+
+    /** {@link #enabledOrNull} 的无缓存本体。 */
+    private static Boolean readEnabled(Context context) {
         if (PACKAGE.equals(context.getPackageName())) {
             return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY, false);
         }
@@ -405,10 +427,17 @@ public final class Config {
             return cursor != null && cursor.moveToFirst() && cursor.getInt(0) == 1;
         } catch (RuntimeException error) { return null; }
     }
+
+    /** 配置可能已变（ContentObserver 收到推送 / 配置端主动写盘）时调用：下下一次读走真查询。 */
+    public static void invalidateEnabledCache() {
+        cachedEnabled = null;
+        cachedEnabledAtMs = 0;
+    }
     public static boolean setEnabled(Context context, boolean enabled) {
         try {
             if (!context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
                     .putBoolean(KEY, enabled).commit()) return false;
+            invalidateEnabledCache();   // 同进程读也走缓存（App 端 UI），写完必须立即可见
             context.getContentResolver().notifyChange(URI, null);
             return true;
         } catch (RuntimeException error) { return false; }

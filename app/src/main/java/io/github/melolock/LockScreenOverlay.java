@@ -649,6 +649,7 @@ final class LockScreenOverlay {
     }
 
     private void updateSwitch() {
+        Config.invalidateEnabledCache();   // 推送触达即失效缓存：开关切换必须零延迟生效，1s TTL 只兜 render() 的重读
         Boolean read = Config.enabledOrNull(context);
         if (read == null) {
             // Provider 偶发查不到 ≠ 用户关了模块。旧代码把两者混为一谈，导致「改完设置
