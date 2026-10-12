@@ -16,8 +16,8 @@ android {
         applicationId = "io.github.melolock"
         minSdk = 36
         targetSdk = 37
-        versionCode = 13
-        versionName = "0.3.3"
+        versionCode = 14
+        versionName = "0.3.4"
         testInstrumentationRunner = "io.github.melolock.ToggleInstrumentation"
     }
 
