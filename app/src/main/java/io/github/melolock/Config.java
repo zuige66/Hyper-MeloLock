@@ -234,7 +234,7 @@ public final class Config {
      * 元素默认值＝真机（gauguinpro）调定的一套抄回（2026-10-12 第三次同步，v0.3.4）：
      * 时钟 80/900/跟随封面、封面缩放 125%、卡片 369x180/底色跟随封面（原色档）、
      * 日期 22/520/跟随封面/鲜艳取色/距顶 50、主色来源**色族占比**、
-     * 入口胶囊背景跟随封面（**低饱和**档）、通知页染色开（低饱和档）、
+     * 入口胶囊背景跟随封面（**原色**档）、通知页染色开（低饱和档）、
      * 播放器卡片弹入默认**关**。
      * 签名例外：默认**关闭且内容空白**（用户指定），不随真机。
      * debug_log 例外：真机为 1 属调试残留，发布默认仍为 0（不随真机）。
@@ -277,7 +277,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(DATE_PICK, 1);
         ELEMENT_DEFAULTS.put(SIGN_PICK, 1);
         ELEMENT_DEFAULTS.put(ENTRY_COLOR_PICK, 0);       // 已废弃，同上
-        ELEMENT_DEFAULTS.put(ENTRY_BG_PICK, 0);          // 低饱和磨砂（2026-10-12 真机同步）
+        ELEMENT_DEFAULTS.put(ENTRY_BG_PICK, 1);          // 原色（2026-10-12 定稿：与播放器卡一致，低饱和观感偏灰）
         ELEMENT_DEFAULTS.put(SWATCH_PICK, 2);            // 色族占比（2026-10-12 真机同步）
         ELEMENT_DEFAULTS.put(SONG_FADE, 1);
         ELEMENT_DEFAULTS.put(BUTTON_FEEDBACK, 1);
