@@ -344,6 +344,8 @@ final class LockScreenOverlay {
     private View iconWave, iconHeart, iconQueue;
     /** 卡片底色配置（create 时读一次）：0＝跟随封面，其余为手选 ARGB。 */
     private int cardBgConfig;
+    /** 入口胶囊底色配置（create 时读一次）：0＝跟随封面（用自己的 entry_bg_pick 风格），其余为手选 ARGB。 */
+    private int entryBgConfig;
     /** 「跟随封面」缓存（主线程读写）：按曲目 key（title|artist|尺寸）缓存取色结果——
      * 该设备的媒体源每 2 秒交一个新 Bitmap 实例，按引用缓存会每帧重跑 Palette。 */
     private String autoMediaKey;
@@ -1007,6 +1009,7 @@ final class LockScreenOverlay {
         dateColorFollow = elem(elements, Config.DATE_COLOR) == 0;
         signColorFollow = elem(elements, Config.SIGN_COLOR) == 0;
         entryBgFollow = elem(elements, Config.ENTRY_BG) == 0;
+        entryBgConfig = elem(elements, Config.ENTRY_BG);   // 胶囊手动底色（0=跟随封面），entryFollowColor 用
         cardBgPick = coercePick(elem(elements, Config.CARD_BG_PICK));
         clockPick = coercePick(elem(elements, Config.CLOCK_PICK));
         datePick = coercePick(elem(elements, Config.DATE_PICK));
@@ -1095,8 +1098,7 @@ final class LockScreenOverlay {
         notificationButton.setTextColor(entryInkColor());
         // 自绘胶囊替换系统默认背景：配色可配（含跟随封面）。默认半透明黑近似系统观感。
         entryBackgroundDrawable = new GradientDrawable();
-        int entryBg = elem(elements, Config.ENTRY_BG);
-        entryBackgroundDrawable.setColor(entryBg == 0 ? entryFollowColor() : entryBg);
+        entryBackgroundDrawable.setColor(entryFollowColor());   // 手动/跟随都由它统一分发
         entryBackgroundDrawable.setCornerRadius(dp(24));
         notificationButton.setBackground(entryBackgroundDrawable);
         notificationButton.setAllCaps(false);
@@ -1420,8 +1422,12 @@ final class LockScreenOverlay {
         return pickContainer(cardBgPick, displayedSwatch);
     }
 
-    /** 「跟随封面」入口胶囊背景：与播放器底色同规则但独立取色风格。读展示值。 */
-    private int followEntryBg() {
+    /** 入口胶囊底色：手动档（entry_bg）优先；跟随档用**胶囊自己的**取色风格 entry_bg_pick。
+     *  2026-10-12 修复：旧版直接抄播放器卡的 card_bg/card_bg_pick，胶囊自己的两个键被整个无视——
+     *  用户给胶囊设低饱和、播放器卡是原色档，同一张封面算出两个色，胶囊永远对不上通知卡
+     *  （真机复现：胶囊浅米 vs 通知卡深橄榄）。 */
+    private int entryFollowColor() {
+        if (entryBgConfig != 0) return entryBgConfig;
         if (displayedSwatch == 0) return 0x66101010;
         return pickContainer(entryBgPick, displayedSwatch);
     }
@@ -1437,11 +1443,6 @@ final class LockScreenOverlay {
         return isLightColor(entryFollowColor()) ? INK_TITLE : INK_TITLE_ON_DARK;
     }
 
-    /** 入口胶囊底色：zuige 2026-10-11 要求与卡片同色（手动档仍优先）。 */
-    private int entryFollowColor() {
-        return cardBgConfig == 0 ? followCardBg() : cardBgConfig;
-    }
-
     /** 取色回填时统一刷新所有「跟随封面」档（卡片底 + 文字 + 入口）的配色（主线程调用）。 */
     private void applyFollowColors() {
         if (autoSwatch == 0) return;
@@ -1449,9 +1450,10 @@ final class LockScreenOverlay {
         if (clockColorFollow && immersiveClock != null) immersiveClock.setTextColor(followText(clockPick, true));
         if (dateColorFollow && dateLine != null) dateLine.setTextColor(followText(datePick, false));
         if (signColorFollow && signatureLine != null) signatureLine.setTextColor(followText(signPick, false));
-        // 入口胶囊：底=卡片同色（独立取色风格），字=永远按底色亮度算法黑白。
-        int entryCard = entryFollowColor();
-        if (entryBgFollow && entryBackgroundDrawable != null) entryBackgroundDrawable.setColor(entryCard);
+        // 入口胶囊：底色（手动/跟随各自生效）+ 文字永远按底色亮度算法黑白。
+        // 无条件重设（手动档也是 entryFollowColor 的输出）：两个写者（这里与 applyNotificationTint）
+        // 必须写同一个值，否则就是真机看到的「返回播放器」黑白闪烁。
+        if (entryBackgroundDrawable != null) entryBackgroundDrawable.setColor(entryFollowColor());
         if (notificationButton != null) notificationButton.setTextColor(entryInkColor());
     }
 
@@ -2971,7 +2973,7 @@ final class LockScreenOverlay {
             tintOn = false;
             applyTintShallow(notifications, null, null, 0);
             restoreInk();
-            // 入口按钮颜色还原成算法黑白（展开期间被切成通知页墨色了）。
+            // 入口按钮颜色还原成算法黑白（与展开路径同一个写法，幂等兜底）。
             if (notificationButton != null) notificationButton.setTextColor(entryInkColor());
             Log.i(TAG, "Notification tint off");
             return;
@@ -2982,9 +2984,12 @@ final class LockScreenOverlay {
         PorterDuffColorFilter mediaFilter = obtainMediaFilter(tintColor);
         tintOn = true;   // 同色复用滤镜时 obtainMediaFilter 不会重建，这里必须显式置位（off→on 门闩）
         int views = applyTintShallow(notifications, tintColor, mediaFilter, 0);
-        // 「返回播放器」入口是我们自己的视图（不在通知栈子树里），展开时同步切成墨色。
-        if (notificationButton != null && notificationButton.getCurrentTextColor() != inkTitleColor) {
-            notificationButton.setTextColor(inkTitleColor);
+        // 「返回播放器」入口是我们自己的视图（不在通知栈子树里）。文字色**永远按胶囊自己的底色**
+        // 算黑白（entryInkColor），不切成通知页墨色——展开期间胶囊底色没变过，切 inkTitleColor
+        // 会与 applyFollowColors 的算法黑白互相抢（一个每 400ms 写、一个每 2s 写）＝黑白闪烁。
+        if (notificationButton != null) {
+            int ink = entryInkColor();
+            if (notificationButton.getCurrentTextColor() != ink) notificationButton.setTextColor(ink);
         }
     }
 
