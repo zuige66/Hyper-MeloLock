@@ -1956,23 +1956,55 @@ final class LockScreenOverlay {
 
     /**
      * 原生播放器模式：锁屏常驻的原生栈里**只保留媒体卡**，其他通知行（如充电统计卡）
-     * 藏掉（2026-10-15 zuige「卡卡什么情况」）。两遍扫：先确认栈里摸得到媒体卡再动手，
-     * 摸不到就整帧不动（失败关闭——类名匹配不上时绝不能把栈清空）。
-     * hide() 走 changedViews 登记，restore 时复原；系统 rebind 出新行由守卫下一帧再藏。
+     * 藏掉（2026-10-15 zuige「卡卡什么情况」）。
+     * 媒体卡可能不是栈的**直接**子级（嵌在行容器里——充电卡没被藏掉的实测教训），所以用
+     * 「子树递归找 MediaHeader」：包含媒体卡的那个直接子级整棵保留，其余整棵藏。
+     * **整栈摸不到媒体卡就整帧不动**（失败关闭，绝不能把栈清空）。
+     * hide() 走 changedViews 登记，restore 时复原；500ms 节流（通知行变化低频，不必每帧）。
      */
+    private long lastNativeSweepAtMs;
     private void sweepNativePlayerStack() {
         if (!fxNativePlayer || notifications == null) return;
-        View media = null;
-        for (int i = 0; i < notifications.getChildCount(); i++) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastNativeSweepAtMs < 500) return;
+        lastNativeSweepAtMs = now;
+        int childCount = notifications.getChildCount();
+        View mediaHolder = null;
+        for (int i = 0; i < childCount; i++) {
             View child = notifications.getChildAt(i);
-            if (child != null && child.getClass().getName().contains("MediaHeader")) { media = child; break; }
+            if (child != null && subtreeContainsMedia(child)) { mediaHolder = child; break; }
         }
-        if (media == null) return;
-        for (int i = 0; i < notifications.getChildCount(); i++) {
+        if (mediaHolder == null) {
+            if (debugLog && now - lastMediaMissLogAt > 15000) {
+                lastMediaMissLogAt = now;
+                StringBuilder names = new StringBuilder();
+                for (int i = 0; i < childCount && i < 12; i++) {
+                    if (i > 0) names.append(", ");
+                    names.append(notifications.getChildAt(i).getClass().getSimpleName());
+                }
+                Log.i(TAG, "Native player: no media card in stack(" + childCount + "): " + names);
+            }
+            return;
+        }
+        for (int i = 0; i < childCount; i++) {
             View child = notifications.getChildAt(i);
-            if (child != null && child != media) hide(child);
+            if (child == null) continue;
+            if (child == mediaHolder) show(child); else hide(child);
         }
-        show(media);
+        if (debugLog) Log.i(TAG, "Native player: media card kept, " + (childCount - 1) + " other rows hidden");
+    }
+
+    /** 子树（含自身）里有没有媒体卡（类名含 MediaHeader，与染色同一判定族）。 */
+    private boolean subtreeContainsMedia(View view) {
+        if (view == null) return false;
+        if (view.getClass().getName().contains("MediaHeader")) return true;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                if (subtreeContainsMedia(group.getChildAt(i))) return true;
+            }
+        }
+        return false;
     }
 
     /** 兜底：场景该显示时，背景层不该是 GONE 或半透明（解锁淡出期间由 unlockSignalled 拦住）。 */
@@ -2176,6 +2208,9 @@ final class LockScreenOverlay {
     private String[] lyricLines = new String[0];
     private String lyricKey = "";      // 解析缓存键（title|lrc 长度），同歌不重复解析
     private String shownLyricLine;     // 当前已显示句（去重，避免每 500ms 重复 apply）
+    /** 开头 3 秒内的 LRC 行不进歌词表：QQ 把官方广告句放在 [00:00.00]（zuige 2026-10-15），
+     *  跳过后第一句真歌词之前自然显示歌名。真歌词极少在 3 秒内开始（前奏未完）。 */
+    private static final long LYRIC_MIN_START_MS = 3000;
 
     /**
      * 解析当前歌的 LRC（QQ＝metadata 自定义 key，见 MediaSource.lyricsOf）。
@@ -2215,7 +2250,11 @@ final class LockScreenOverlay {
             if (stamps.isEmpty() || lastEnd == 0) continue;   // [ti:]/[ar:] 等元数据标签跳过
             String text = line.substring(lastEnd).trim();
             if (text.isEmpty()) continue;
-            for (Long stamp : stamps) { times.add(stamp - offset); lines.add(text); }
+            for (Long stamp : stamps) {
+                long t = stamp - offset;
+                if (t < LYRIC_MIN_START_MS) continue;   // 开头 3 秒内的行（QQ 广告句）不进歌词表：第一句前显示歌名
+                times.add(t); lines.add(text);
+            }
         }
         int n = times.size();
         lyricTimes = new long[n];
