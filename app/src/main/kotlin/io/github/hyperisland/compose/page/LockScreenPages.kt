@@ -1,8 +1,10 @@
 package io.github.hyperisland.compose.page
 
 import android.content.BroadcastReceiver
-import android.content.IntentFilter
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.IntentFilter
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
@@ -21,17 +23,21 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -62,6 +68,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -92,6 +99,9 @@ import io.github.hyperisland.utils.SystemPropertyReader
 import io.github.hyperisland.compose.service.UpdateDownloadService
 import io.github.hyperisland.compose.service.UpdateService
 import io.github.melolock.Config
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -789,6 +799,9 @@ internal fun LockAppearancePage() {
                     checked = value(Config.DEBUG_LOG) != 0,
                     onCheckedChange = { update(Config.DEBUG_LOG, if (it) 1 else 0) },
                 )
+                // 远程适配的核心反馈位：日志在 SystemUI 进程，用户设备没 root/adb 抓不到，
+                // 打开调试日志复现问题后在这里展开看、一键复制发给开发者。
+                DiagnosticReportCard()
             }
         }
         item {
@@ -1599,3 +1612,160 @@ private fun SignatureInputField() {
 
 /** 时间字体的圆润档位；0 用系统字体，1 / 2 用内置的开源圆体数字字体。 */
 private val ROUNDNESS_LABELS = listOf("直角", "中等圆", "很圆")
+
+// ── 诊断报告（2026-10-14） ────────────────────────────────────────────────────
+
+/**
+ * 「诊断报告」卡：读取 SystemUI 侧经 /runtime 回传的事件流水（见 Java 侧 `Diag`）。
+ *
+ * 为什么在 App 里做：模块的全部日志都打在 SystemUI 进程，用户设备没有 root / adb，
+ * 第三方 logcat 工具读不到；而失败路径（compatible 版本门禁、hook 类找不到、会话不
+ * 被允许）用户侧零感知。打开调试日志复现问题后，在这里展开看事件、一键复制。
+ *
+ * 键名必须与 Java 侧 `Diag.KEY_EVENTS` / `Diag.KEY_UPDATED_AT` 一致（Diag 不是 public
+ * 类，Kotlin 侧拿不到常量，与 Config 元素键名一样用字面量）。
+ */
+@Composable
+private fun DiagnosticReportCard() {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var expanded by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(false) }
+    var report by remember { mutableStateOf<DiagReport?>(null) }
+    // 每次展开重读一次：SystemUI 每 2 秒节流回写，展开时拿最新现场。
+    LaunchedEffect(expanded) {
+        if (!expanded) return@LaunchedEffect
+        loading = true
+        report = withContext(Dispatchers.IO) { loadDiagReport(context) }
+        loading = false
+    }
+    Card {
+        BasicComponent(
+            title = "诊断报告",
+            summary = when {
+                loading -> "读取中…"
+                else -> report?.let { "更新于 ${it.updatedAtText} · ${it.events.size} 条事件" }
+                    ?: "暂无记录：打开调试日志，灭屏亮屏一次后复现问题"
+            },
+            endActions = {
+                Text(
+                    text = if (expanded) "收起" else "展开",
+                    color = MiuixTheme.colorScheme.onSurfaceVariantActions,
+                    fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                )
+            },
+            onClick = { expanded = !expanded },
+        )
+        AnimatedVisibility(visible = expanded) {
+            Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp)) {
+                val current = report
+                if (current == null) {
+                    Text(
+                        text = "还没有回传记录。请先把上方「调试日志」打开，然后灭屏再亮屏触发一次锁屏，" +
+                                "复现问题后回到这里展开。若刚打开开关，等 2 秒左右再展开。",
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                    )
+                } else {
+                    // 状态快照（compatible 实际版本、设备信息、框架回报等）。
+                    current.snapshot.forEach { (key, value) ->
+                        Text(
+                            text = "$key = $value",
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        )
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "事件（新 → 旧）",
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                        fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                    )
+                    // 事件倒序（最新在上），限高滚动：环形缓冲最多 80 条，全铺开会撑爆页面。
+                    Column(
+                        modifier = Modifier
+                            .heightIn(max = 260.dp)
+                            .verticalScroll(rememberScrollState())
+                    ) {
+                        current.events.asReversed().forEach { line ->
+                            Text(
+                                text = line,
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = MiuixTheme.textStyles.footnote1.fontSize,
+                                color = MiuixTheme.colorScheme.onSurface,
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    BasicComponent(
+                        title = "复制报告",
+                        summary = "复制全部状态与事件，通过微信等发给开发者",
+                        onClick = {
+                            // 复制前重读一次：确保拿到的是最新现场，而不是展开时的旧快照。
+                            scope.launch {
+                                val fresh = withContext(Dispatchers.IO) { loadDiagReport(context) }
+                                if (fresh != null) report = fresh
+                                val text = report?.copyText()
+                                if (text.isNullOrEmpty()) {
+                                    Toast.makeText(context, "暂无报告可复制", Toast.LENGTH_SHORT).show()
+                                } else {
+                                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                                    clipboard.setPrimaryClip(ClipData.newPlainText("MeloLock 诊断报告", text))
+                                    Toast.makeText(context, "已复制诊断报告", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** /runtime 回传的诊断数据。events 为旧 → 新（写入序）。 */
+private data class DiagReport(
+    val events: List<String>,
+    val snapshot: Map<String, String>,
+    val updatedAt: Long,
+) {
+    val updatedAtText: String
+        get() = if (updatedAt > 0) {
+            SimpleDateFormat("MM-dd HH:mm:ss", Locale.getDefault()).format(Date(updatedAt))
+        } else {
+            "未知时间"
+        }
+
+    /** 一键复制的完整文本：头部（应用版本）+ 状态快照 + 事件流水（旧 → 新）。 */
+    fun copyText(): String = buildString {
+        appendLine("MeloLock 诊断报告 · app ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+        appendLine()
+        snapshot.forEach { (key, value) -> appendLine("$key = $value") }
+        appendLine()
+        appendLine("事件（旧 → 新）")
+        events.forEach { appendLine(it) }
+    }
+}
+
+/**
+ * 读 /runtime 里的诊断回传。空判定：没有事件流水即视为「无记录」
+ * （debug_log 没开，或 SystemUI 尚未回传）。
+ */
+private fun loadDiagReport(context: Context): DiagReport? {
+    val map = LinkedHashMap<String, String>()
+    try {
+        context.contentResolver.query(Config.RUNTIME_URI, null, null, null, null)?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val key = cursor.getString(0) ?: continue
+                map[key] = cursor.getString(1) ?: continue
+            }
+        }
+    } catch (error: RuntimeException) {
+        return null
+    }
+    val raw = map.remove("diag_events")?.trim().orEmpty()
+    val events = if (raw.isEmpty()) emptyList() else raw.split("\n")
+    if (events.isEmpty()) return null
+    val updatedAt = map.remove("diag_updated_at")?.toLongOrNull() ?: 0L
+    return DiagReport(events = events, snapshot = map, updatedAt = updatedAt)
+}

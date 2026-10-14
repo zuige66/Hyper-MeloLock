@@ -636,11 +636,13 @@ final class LockScreenOverlay {
                 Context.RECEIVER_EXPORTED);
         observing = true;
         Log.i(TAG, "Keyguard root compatible; observing module switch");
+        Diag.log("observing module switch");
         updateSwitch();
     }
 
     void destroy() {
         Log.i(TAG, "Overlay destroy " + state());
+        Diag.log("overlay destroy");
         if (observing) {
             context.getContentResolver().unregisterContentObserver(switchObserver);
             context.unregisterReceiver(screenReceiver);
@@ -657,10 +659,12 @@ final class LockScreenOverlay {
             // Provider 偶发查不到 ≠ 用户关了模块。旧代码把两者混为一谈，导致「改完设置
             // 锁屏上东西全没了 / 改完没反应」，且时好时坏（见 Config.enabledOrNull 注释）。
             Log.w(TAG, "Config read failed; keeping previous switch state=" + lastEnabled);
+            Diag.log("config read failed; keeping state=" + lastEnabled);
             return;
         }
         boolean enabled = read;
         if (lastEnabled == null || lastEnabled != enabled) Log.i(TAG, "Module enabled=" + enabled + " " + state());
+        Diag.log("module enabled=" + enabled);
         lastEnabled = enabled;
         if (enabled) media.start(); else { Log.i(TAG, "Module switched off; restoring " + state()); media.stop(); restore("switch-off"); fullTimeTintOff(); WallpaperCoverPush.clearCover(); }
     }
@@ -668,9 +672,22 @@ final class LockScreenOverlay {
     private boolean compatible() {
         try {
             PackageManager packages = context.getPackageManager();
-            return "16.03.251211.r".equals(packages.getPackageInfo("com.android.systemui", 0).versionName)
-                    && "17.1.4.26.0".equals(packages.getPackageInfo("miui.systemui.plugin", 0).versionName);
-        } catch (PackageManager.NameNotFoundException error) { return false; }
+            String systemui = packages.getPackageInfo("com.android.systemui", 0).versionName;
+            String plugin = packages.getPackageInfo("miui.systemui.plugin", 0).versionName;
+            boolean ok = "16.03.251211.r".equals(systemui) && "17.1.4.26.0".equals(plugin);
+            // 远程诊断：实际版本号必须回传。「沉浸式不显示」最常见的原因就是这里不符，
+            // 而旧代码只打一行 warning 就退回原生锁屏，用户侧零感知、远程零证据。
+            Diag.put("systemui_version", String.valueOf(systemui));
+            Diag.put("plugin_version", String.valueOf(plugin));
+            Diag.put("compatible", ok ? "pass" : "fail");
+            Diag.log("compatible systemui=" + systemui + " plugin=" + plugin
+                    + " -> " + (ok ? "pass" : "fail"));
+            return ok;
+        } catch (PackageManager.NameNotFoundException error) {
+            Diag.put("compatible", "fail:package-missing");
+            Diag.log("compatible check failed: " + error);
+            return false;
+        }
     }
 
     private void render(MediaSource.Snapshot snapshot) {
@@ -963,6 +980,7 @@ final class LockScreenOverlay {
         if (clock == null || notifications == null || windowRoot == null) {
             if (!missingViewsLogged) Log.w(TAG, "Native views missing: clock=" + (clock != null) + " notifications=" + (notifications != null));
             missingViewsLogged = true;
+            Diag.log("native views missing clock=" + (clock != null) + " notifications=" + (notifications != null));
             return false;
         }
         Log.i(TAG, "Native layers: clock=" + (clock != null) + " secondary=" + (secondaryClock != null)
@@ -1018,6 +1036,8 @@ final class LockScreenOverlay {
         swatchPickMode = Math.max(0, Math.min(2, elem(elements, Config.SWATCH_PICK)));
         debugLog = elem(elements, Config.DEBUG_LOG) != 0;
         MediaSource.verboseLog = debugLog;
+        // 用户中途打开调试日志：这里补一次 enable，之后事件开始回传（start() 那次在开机时）。
+        Diag.enable(debugLog, context);
         songFadeEnabled = elem(elements, Config.SONG_FADE) != 0;
         fxButtonFeedback = elem(elements, Config.BUTTON_FEEDBACK) != 0;
         fxSmoothProgress = elem(elements, Config.SMOOTH_PROGRESS) != 0;
@@ -1122,6 +1142,7 @@ final class LockScreenOverlay {
                 + " sign" + signPick + " entryBg" + entryBgPick
                 + " | swatch=" + (swatchPickMode == 2 ? "family" : swatchPickMode == 1 ? "dominant" : "vibrant"));
         Log.i(TAG, "Custom media card overlay created in " + createAttempts + " attempt(s)");
+        Diag.log("create ok in " + createAttempts + " attempt(s)");
         createAttempts = 0;
         unlockRestoreLogged = false;
         entryAligned = false; entryAlignAttempts = 0;
@@ -2102,6 +2123,7 @@ final class LockScreenOverlay {
     /** 撤层。reason 只用于诊断日志，用来定位「上滑露壁纸 / 亮屏先见原生锁屏」由哪条路径触发。 */
     private void restore(String reason) {
         if (foreground != null || background != null || shown != null) Log.i(TAG, "restore reason=" + reason + " " + state());
+        Diag.log("restore: " + reason);
         applyNotificationTint(false);   // 染过就要复原：原生通知栈要带着原始 scrim 回锁屏
         savedCardTints.clear();
         savedBgDrawables.clear();
@@ -2727,6 +2749,7 @@ final class LockScreenOverlay {
         if (reason.equals(lastSkipReason)) return;
         lastSkipReason = reason;
         if (debugLog) Log.i(TAG, "render skipped: " + reason + " " + state());
+        Diag.log("render skipped: " + reason);
     }
 
     private void registerGuard() {

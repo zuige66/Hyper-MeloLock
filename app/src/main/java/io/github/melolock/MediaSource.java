@@ -94,6 +94,7 @@ final class MediaSource {
         pendingArtworkUri = null;
         pendingArtworkController = null;
         Log.i(TAG, "No session for " + SESSION_GRACE_MS + "ms; overlay falls back");
+        Diag.log("no session for " + SESSION_GRACE_MS + "ms; overlay falls back");
         listener.onMedia(null);
     }
     private final MediaController.Callback controllerCallback = new MediaController.Callback() {
@@ -180,8 +181,9 @@ final class MediaSource {
             for (MediaController candidate : sessions) {
                 if (previousPackage.equals(candidate.getPackageName()) && packageAllowed(context, previousPackage)) {
                     tracked = candidate;
-                    Log.i(TAG, "Empty gap detected; keep tracking " + previousPackage + " for the next track");
-                    break;
+                Log.i(TAG, "Empty gap detected; keep tracking " + previousPackage + " for the next track");
+                Diag.log("empty gap; keep tracking " + previousPackage);
+                break;
                 }
             }
         }
@@ -189,6 +191,9 @@ final class MediaSource {
             if (current != null) current.unregisterCallback(controllerCallback);
             current = tracked;
             if (current != null) current.registerCallback(controllerCallback, main);
+            // 远程诊断核心行：会话跟踪目标的每次变化。「音乐 App 没勾选 / 没在播放」
+            // 在报告里直接可见（pkg=none 或停在不允许的包上）。
+            Diag.log("session -> " + (tracked != null ? tracked.getPackageName() : "none"));
         }
         if (snapshot != null) {
             lastReady = snapshot;
@@ -279,6 +284,7 @@ final class MediaSource {
             pendingArtworkUri = null;
             pendingArtworkController = null;
             Log.i(TAG, "No playing session in " + elapsed(refreshStart) + "ms; overlay falls back");
+        Diag.log("no playing session; overlay falls back");
             listener.onMedia(null);
         }
     }

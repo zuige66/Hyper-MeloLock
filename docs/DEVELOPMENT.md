@@ -21,6 +21,19 @@
 
 完整原文保留在上述 WorkBuddy 路径；本节是当前仓库的执行约定，后续变更日志也按该技能的“装包 → 重启作用域 → 用户复现 → 日志对账 → 文档更新”闭环记录。
 
+### 远程诊断回传（无 root / adb 的用户设备，2026-10-14）
+
+上面的闭环前提是「能拿到 SystemUI 进程的 logcat」。多机型适配时这条不成立：用户设备没有 root，第三方 logcat 工具读不到系统进程；而失败路径（`compatible()` 版本门禁、hook 目标类找不到、会话包名不被允许）**用户侧零感知**——「沉浸式不显示」时远程看不到任何证据。因此加了一条单向回传链路：
+
+- **SystemUI 侧 `Diag.java`**（`io.github.melolock`，package-private，无反射、不需要 keep 规则）：
+  - `log(message)` 记事件（自动带 `HH:mm:ss.SSS` 时间戳）；`put(key, value)` 写状态快照。
+  - **2 秒节流**：主线程只 `postDelayed` 调度，`insert` 落独立工作线程——`insert` 会跨进程拉起 App 进程，绝不能占 SystemUI 主线程（与 `reportFrameworkInfo` 同款约束）。
+  - **环形缓冲**：事件封顶 80 条，超出丢最旧；**早退缓冲**：`enable()` 之前的开机阶段事件（hook unavailable 等）单独缓存 8 条，用户往往是出问题后才打开 debug_log，这些不能丢。
+  - **门控**：只有 `debug_log` 打开才 `enable()`；关闭时零事件、零调度、零写入。开启点两处：`HookEntry.attach()`（早于 `compatible()` 检查，版本不符也要有证据）与 `LockScreenOverlay.create()`（用户中途打开开关即开始回传）。
+- **回传内容**：`/runtime` 通道（`ConfigProvider` 现成 insert，key/value，不冲突于 frameworkInfo 的键）。快照键：`compatible`（pass/fail/fail:package-missing）、`systemui_version`、`plugin_version`（**compatible 实际读到的版本号**——远程判断「是不是版本门禁问题」的第一证据）、`device_model` / `device_android` / `device_fingerprint`。事件埋点：hook installed / root attached / observing switch / module enabled= / create ok / native views missing / render skipped: reason / restore: reason / session -> pkg / no session / empty gap / config read failed。
+- **App 侧**：`LockScreenPages.kt` 调试分组的「诊断报告」卡——展开读 `/runtime`（每次展开重读，复制前再重读一次保最新），状态快照 + 事件（新→旧，限高滚动）+「复制报告」一键进剪贴板（头部带 app 版本号）。空态文案引导用户先开调试日志再复现。
+- **使用流程（远程适配）**：用户开「调试日志」→ 灭屏亮屏触发一次锁屏 → 复现问题 → 展开诊断报告 → 复制 → 发给开发者。全程无需电脑。
+
 ## 最近改动补充
 
 2026-10-12（凌）：① **响应优化**：pre-draw 守卫原本每个绘制帧都全树递归藏原生时钟层/壁纸层（逐视图 `resourceName` 资源表反查），改为**按 TTL(1s) 缓存命中列表**（`cachedClockViews` / `cachedWallpaperViews`，`create()` 换树时清空），每帧只遍历列表。背景：zuige 反馈「开了模块响应变慢」，A/B 实测——模块彻底不注入时 SystemUI 仍掉 30~34 帧（HyperOS 自身开销），模块注入时 30~61 帧，说明**大头是系统自己的**，我们只需把自己的那份砍掉。② **两处失败关闭违规修复**：染色泵染色时未置 `tintOn`，导致 `restore()` 的还原路径（`if (!tintOn) return`）整段跳过、随后 `savedCardTints` 被清空，重新捕获的「原始色」已是染后色 → **模块关掉后通知卡仍是染色状态且永久污染**；`WallpaperCoverPush` 自带 MediaSource 且**不看模块开关**，模块关了仍继续向壁纸进程推封面 → **锁屏还挂着我们的封面**。修复：泵置 `tintOn`；WCV 推送加开关闸 + 新增 `clearCover()` 在开关关闭时立即撤封面。
@@ -1605,3 +1618,10 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **播放器组**：4 个动画开关（按钮反馈 / 进度条平滑 / 卡片弹入 / 圆润图标）上移置顶，`底色`+`取色风格` 下拉居中，5 个滑条（缩放/宽/高/圆角/上间距）在底。
     - 其余组无需动：时间 / 背景 / 通知入口无开关本就下拉优先；专辑封面 / 调试已是开关置顶；日期 / 签名 / 通知页主开关置顶已一致。全页现在开关均在上。
     - 仅改 Compose 配置页，覆盖层 Java 未动；已 `assembleDebug` 装机确认 SystemUI 重新注入（新进程 PID 30424）。
+
+59. 2026-10-14 **远程诊断报告（多机型适配排障，zuige 拍板「选项 A」）**：
+
+    - **动机**：帮外地用户适配时，「沉浸式不显示」但拿不到日志——用户设备无 root/adb，第三方 logcat 读不到 SystemUI 进程；且 `compatible()` 版本门禁失败只打一行 warning 就退回原生锁屏，用户侧零感知。
+    - **实现**：SystemUI 侧新增 `Diag.java`（事件环形缓冲 80 条 + 8 条开机早退缓冲、2 秒节流、insert 落工作线程不占主线程、`debug_log` 门控默认零开销），经现成 `/runtime` insert 通道回传；埋点覆盖 HookEntry（hook installed / root attached / attach failed）/ LockScreenOverlay（compatible 实际版本、create ok、native views missing、render skipped、restore、module enabled）/ MediaSource（session -> pkg、no session、empty gap、config read failed）。App 侧调试分组加「诊断报告」卡：展开/收起、状态快照 + 事件流水（新→旧）、「复制报告」一键进剪贴板（展开与复制前各重读一次保最新）。机制细节见本文档「真机日志驱动调试技能」节末的「远程诊断回传」小节。
+    - **编译插曲**：`HookEntry` 新增 `debugLogOn(Context)` 用了短类名但文件只 import 过全限定用法 → `javac` 报找不到符号，补 `import android.content.Context` 后 `assembleDebug` 通过（7s）。
+    - **未做（明确取舍）**：① 不放宽 `compatible()` 版本门禁——视图结构不同的 ROM 上强行渲染有错乱风险，先用报告拿到实际版本号再决定白名单；② 不做「清空」按钮——App 侧删不了 Provider（delete 抛 UnsupportedOperation），且 SystemUI 内存缓冲还在，清了也会被下次 flush 写回，环形缓冲自然淘汰即可。

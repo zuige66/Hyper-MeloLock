@@ -1,5 +1,6 @@
 package io.github.melolock;
 
+import android.content.Context;
 import android.util.Log;
 import android.view.View;
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -75,7 +76,9 @@ public final class HookEntry implements IXposedHookLoadPackage {
             catch (Throwable error) { Log.w(TAG, "Mediator capture hook install failed", error); }
             XposedBridge.log(TAG + ": hook armed for exact OS3 build");
             Log.i(TAG, "SystemUI root constructor hook installed");
+            Diag.log("systemui root constructor hook installed");
         } catch (Throwable error) {
+            Diag.log("systemui hook unavailable: " + error);
             XposedBridge.log(TAG + ": incompatible hook; native lock screen retained (loader=" + param.classLoader + "): " + error);
             Log.e(TAG, "SystemUI hook unavailable; loader=" + param.classLoader, error);
         }
@@ -344,12 +347,26 @@ public final class HookEntry implements IXposedHookLoadPackage {
         if (overlays.containsKey(root)) return;
         try {
             Log.i(TAG, "Keyguard root attached");
+            // 诊断回传开关在这里打开（早于 LockScreenOverlay.start() 的 compatible() 检查，
+            // 也早于 create()）：「版本不符直接退回原生锁屏」这类零用户感知的失败也要有证据。
+            Diag.enable(debugLogOn(root.getContext()), root.getContext());
+            Diag.log("keyguard root attached");
             LockScreenOverlay overlay = new LockScreenOverlay(root);
             overlays.put(root, overlay);
             overlay.start();
         } catch (Throwable error) {
+            Diag.log("overlay attach failed: " + error);
             XposedBridge.log(TAG + ": overlay skipped: " + error);
             Log.e(TAG, "Overlay attach failed", error);
         }
+    }
+
+    /**
+     * debug_log 开关：决定 {@link Diag} 是否回传。SystemUI 侧走 /elements 查询；
+     * 读不到按默认值 0（失败关闭，与 Config 的整体语义一致）。
+     */
+    private static boolean debugLogOn(Context context) {
+        Integer value = Config.elementValues(context).get(Config.DEBUG_LOG);
+        return value != null && value != 0;
     }
 }
