@@ -1637,3 +1637,11 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - versionCode 15 / versionName 0.3.5，tag `v0.3.5`，Release 经 API 创建并上传 APK（3,700,044 字节，apksigner 校验 SHA-1 `2b73…c1f7` ✓，直链 200 OK）。https://github.com/zuige66/Hyper-MeloLock/releases/tag/v0.3.5
     - 内容 = #59 诊断报告 + #60 版本门禁移除。物料 `docs/release-v0.3.5.md`（含 latest.json）。
     - **blog 备用源待 zuige 手动同步**：`build/latest.json` 已生成在仓库根（versionCode 15，apkUrl 指 GitHub 直链）；上传后 App 更新检查的备用源才指向新版本。
+
+62. 2026-10-14 **通知染色残留修复 + 诊断报告卡增强（zuige 真机反馈）**：
+
+    - **染色残留根因（两个叠加）**：① 染色常驻泵（500ms 节流）门闩只有 `notifyCardTint && lastEnabled`，**不看媒体会话**——取色来自缓存的 `displayedSwatch`，退出音乐后泵拿旧色继续染，锁屏/桌面共用同一棵通知栈全中；`render()` 的「last-frame-kept」路径不走 restore，没人叫停泵。② 复原按「当前树」浅扫，**回收/detach 的通知行不在树上**——染色是视图实例状态，行带着污染回屏。
+    - **修复**：① 新增 `mediaAlive` 门（render 正常路径置 true、snapshot==null 置 false）：`sweepStackTint` 无媒体时复原一次停泵；`applyNotificationTint(true)` 开头 `if (on && !mediaAlive) return`（覆盖 606/1964 两处调用点）。② `restoreAllTinted()`：`savedCardTints`/`savedBgDrawables` 本身就是「染过哪些卡」的权威登记，按全表复原（树上树外全覆盖，幂等）。③ `updateSwitch` 关闭路径顺序改为 `fullTimeTintOff()` 在 `restore()` **之前**——restore 会 clear 登记表，之后复原只能把染后色当原始色写回。④ `restore()` 清 `mediaTintLayers` 前先把插进媒体卡的色层 `removeView`（原来只 clear map，视图无主地留在卡里）。
+    - **语义取舍**：退出音乐/关总开关 → 通知立刻回原生色；「暂停不撤层」「锁屏留最后一帧」的既有取舍不变（只停染色）。
+    - **诊断报告卡增强**：①「开始/停止记录」按钮——切 debug_log 配置 + 发新广播 `ACTION_DIAG_REFRESH`，SystemUI 收到后**立即**按最新配置 `Diag.enable`（不等 create()，否则要灭屏亮屏才生效，「点了开始没反应」会被当成模块坏了）；②「清除报告」按钮——发 `ACTION_DIAG_CLEAR` 广播，`Diag.clear()` 清内存+早退缓冲并立即回写空事件流（快照键保留）；③ 事件列表加 `NestedScrollConnection` 消费 `onPostScroll`/`onPostFling` 溢出——否则滑到列表顶/底会带动整个设置页（嵌套滚动穿透）。坑：`onPostFling` 是 suspend 函数，override 忘写 suspend 编译报错。
+    - **编译插曲**：receiver 的 `onReceive(Context ignored, Intent intent)` 参数名 `ignored` 与 catch 变量撞名（乱码报错「定义了变量 ignored」）。

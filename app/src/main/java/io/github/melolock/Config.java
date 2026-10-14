@@ -52,6 +52,18 @@ public final class Config {
      * 重启作用域这个功能就变成摆设。模块既然已经跑在 SystemUI 里，就不需要 root。
      */
     public static final String ACTION_RESTART_SYSTEMUI = "io.github.melolock.action.RESTART_SYSTEMUI";
+    /**
+     * 清空诊断报告（2026-10-14）：App 端「清除报告」按钮发显式广播，SystemUI 侧
+     * Diag 收到后清空内存事件缓冲并回写一份空报告。无害操作（只影响诊断数据），
+     * 走 RECEIVER_EXPORTED 的同一接收器。
+     */
+    public static final String ACTION_DIAG_CLEAR = "io.github.melolock.action.DIAG_CLEAR";
+    /**
+     * 「开始/停止记录」按钮（2026-10-14）：App 端切 debug_log 后发本广播，SystemUI 侧
+     * 立即按最新配置重读并 Diag.enable——否则要等下一次 create()（灭屏亮屏）才生效，
+     * 「点了开始没反应」会被当成模块坏了。
+     */
+    public static final String ACTION_DIAG_REFRESH = "io.github.melolock.action.DIAG_REFRESH";
     /** 广播的目标包：显式指定才能送达 SystemUI 进程里注册的接收器。 */
     public static final String SYSTEMUI_PACKAGE = "com.android.systemui";
 

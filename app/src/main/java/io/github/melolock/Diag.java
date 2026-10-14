@@ -106,6 +106,20 @@ final class Diag {
         scheduleFlush();
     }
 
+    /**
+     * 清空事件与早退缓冲（App 端「清除报告」按钮经广播触发）。快照键保留（设备信息、
+     * 版本号是环境事实，清了下次 flush 也会写回来）；清完立即回写一份空事件流，
+     * 让 App 端报告同步变空，不等下一轮 2 秒节流。
+     */
+    static void clear() {
+        if (!enabled) return;   // 未开启时缓冲本来就是空、也没在回写
+        synchronized (events) {
+            events.clear();
+            early.clear();
+        }
+        scheduleFlush();
+    }
+
     private static void putDeviceInfo() {
         if (deviceInfoPut) return;
         deviceInfoPut = true;

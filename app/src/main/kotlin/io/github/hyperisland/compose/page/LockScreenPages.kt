@@ -72,6 +72,11 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.hyperisland.BuildConfig
@@ -801,7 +806,10 @@ internal fun LockAppearancePage() {
                 )
                 // 远程适配的核心反馈位：日志在 SystemUI 进程，用户设备没 root/adb 抓不到，
                 // 打开调试日志复现问题后在这里展开看、一键复制发给开发者。
-                DiagnosticReportCard()
+                DiagnosticReportCard(
+                    debugLogOn = value(Config.DEBUG_LOG) != 0,
+                    onToggleDebugLog = { on -> update(Config.DEBUG_LOG, if (on) 1 else 0) },
+                )
             }
         }
         item {
@@ -1626,7 +1634,7 @@ private val ROUNDNESS_LABELS = listOf("直角", "中等圆", "很圆")
  * 类，Kotlin 侧拿不到常量，与 Config 元素键名一样用字面量）。
  */
 @Composable
-private fun DiagnosticReportCard() {
+private fun DiagnosticReportCard(debugLogOn: Boolean, onToggleDebugLog: (Boolean) -> Unit) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var expanded by remember { mutableStateOf(false) }
@@ -1645,7 +1653,7 @@ private fun DiagnosticReportCard() {
             summary = when {
                 loading -> "读取中…"
                 else -> report?.let { "更新于 ${it.updatedAtText} · ${it.events.size} 条事件" }
-                    ?: "暂无记录：打开调试日志，灭屏亮屏一次后复现问题"
+                    ?: "暂无记录：点「开始记录」后复现问题"
             },
             endActions = {
                 Text(
@@ -1661,8 +1669,7 @@ private fun DiagnosticReportCard() {
                 val current = report
                 if (current == null) {
                     Text(
-                        text = "还没有回传记录。请先把上方「调试日志」打开，然后灭屏再亮屏触发一次锁屏，" +
-                                "复现问题后回到这里展开。若刚打开开关，等 2 秒左右再展开。",
+                        text = "还没有回传记录。点下方「开始记录」，复现问题后回来展开（若刚点开始，等 2 秒左右）。",
                         color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
                         fontSize = MiuixTheme.textStyles.footnote1.fontSize,
                     )
@@ -1683,9 +1690,18 @@ private fun DiagnosticReportCard() {
                         fontSize = MiuixTheme.textStyles.footnote1.fontSize,
                     )
                     // 事件倒序（最新在上），限高滚动：环形缓冲最多 80 条，全铺开会撑爆页面。
+                    // nestedScroll(消费溢出)：列表滚到顶/底后剩余位移就地消化——否则会传给
+                    // 外层页面 LazyColumn，一次滑动直接把整个设置页带到顶/底（2026-10-14 zuige 反馈）。
+                    val consumeOverflow = remember {
+                        object : NestedScrollConnection {
+                            override fun onPostScroll(consumed: Offset, available: Offset, source: NestedScrollSource): Offset = available
+                            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity = available
+                        }
+                    }
                     Column(
                         modifier = Modifier
                             .heightIn(max = 260.dp)
+                            .nestedScroll(consumeOverflow)
                             .verticalScroll(rememberScrollState())
                     ) {
                         current.events.asReversed().forEach { line ->
@@ -1718,6 +1734,34 @@ private fun DiagnosticReportCard() {
                         },
                     )
                 }
+                BasicComponent(
+                    title = if (debugLogOn) "停止记录" else "开始记录",
+                    summary = if (debugLogOn) "记录进行中；停止后报告定格在当前内容"
+                              else "打开调试日志并通知锁屏侧立即生效",
+                    onClick = {
+                        onToggleDebugLog(!debugLogOn)
+                        // 广播让 SystemUI 立刻重读 debug_log 开关诊断回传，不用等灭屏亮屏。
+                        try {
+                            context.sendBroadcast(
+                                Intent(Config.ACTION_DIAG_REFRESH).setPackage(Config.SYSTEMUI_PACKAGE)
+                            )
+                        } catch (_: Throwable) { }
+                        Toast.makeText(context, if (debugLogOn) "已停止记录" else "已开始记录", Toast.LENGTH_SHORT).show()
+                    },
+                )
+                BasicComponent(
+                    title = "清除报告",
+                    summary = "清空事件流水（设备信息等快照保留，下次回写自动恢复）",
+                    onClick = {
+                        report = null
+                        try {
+                            context.sendBroadcast(
+                                Intent(Config.ACTION_DIAG_CLEAR).setPackage(Config.SYSTEMUI_PACKAGE)
+                            )
+                        } catch (_: Throwable) { }
+                        Toast.makeText(context, "已清除", Toast.LENGTH_SHORT).show()
+                    },
+                )
             }
         }
     }

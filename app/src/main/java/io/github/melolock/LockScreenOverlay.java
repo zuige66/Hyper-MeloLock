@@ -141,6 +141,25 @@ final class LockScreenOverlay {
      */
     private final BroadcastReceiver restartReceiver = new BroadcastReceiver() {
         @Override public void onReceive(Context ignored, Intent intent) {
+            if (Config.ACTION_DIAG_CLEAR.equals(intent.getAction())) {
+                Diag.clear();
+                Log.i(TAG, "Diagnostic report cleared via broadcast");
+                return;
+            }
+            if (Config.ACTION_DIAG_REFRESH.equals(intent.getAction())) {
+                // 「开始/停止记录」：App 端刚写完 debug_log，立即按最新配置开关诊断回传，
+                // 不等下一次 create()。elementValues 查不到（App 进程不在）时按关处理。
+                boolean on;
+                try {
+                    Integer value = Config.elementValues(context).get(Config.DEBUG_LOG);
+                    on = value != null && value != 0;
+                } catch (Throwable error) { on = false; }
+                debugLog = on;
+                MediaSource.verboseLog = on;
+                Diag.enable(on, context);
+                Log.i(TAG, "Diag toggled via broadcast: " + on);
+                return;
+            }
             if (!Config.ACTION_RESTART_SYSTEMUI.equals(intent.getAction())) return;
             Log.i(TAG, "Restart requested via broadcast; killing SystemUI for a clean reload");
             android.os.Process.killProcess(android.os.Process.myPid());
@@ -416,6 +435,13 @@ final class LockScreenOverlay {
      * 视图属性上，系统每 2 秒重设位图也不会丢，无需重扫。
      */
     private boolean notifyCardTint;
+    /**
+     * 媒体是否仍有有效会话（2026-10-14）：染色泵的第三道门。取色来自缓存的
+     * {@code displayedSwatch}，媒体退出后不清——没有这道门，泵会拿着上一次的
+     * 旧专辑色继续染，锁屏与桌面下拉共用同一棵通知栈，表现为「退出了音乐
+     * 通知还染色」（zuige 复现）。与「暂停不撤层」不冲突：暂停时快照仍在交。
+     */
+    private boolean mediaAlive;
     /** 通知页底色：0=全局取色（独立 *_pick 三档），其余=CARD_BG 同表手选色（不再强制与播放器同源）。 */
     private int notifyBgConfig;
     private int notifyBgPick;
@@ -632,8 +658,11 @@ final class LockScreenOverlay {
         events.addAction(Intent.ACTION_SCREEN_OFF); events.addAction(Intent.ACTION_SCREEN_ON); events.addAction(Intent.ACTION_USER_PRESENT);
         context.registerReceiver(screenReceiver, events, Context.RECEIVER_NOT_EXPORTED);
         // 显式广播（setPackage 到 SystemUI）才能穿过 RECEIVER_NOT_EXPORTED 送达这里。
-        context.registerReceiver(restartReceiver, new IntentFilter(Config.ACTION_RESTART_SYSTEMUI),
-                Context.RECEIVER_EXPORTED);
+        IntentFilter moduleActions = new IntentFilter();
+        moduleActions.addAction(Config.ACTION_RESTART_SYSTEMUI);
+        moduleActions.addAction(Config.ACTION_DIAG_CLEAR);
+        moduleActions.addAction(Config.ACTION_DIAG_REFRESH);
+        context.registerReceiver(restartReceiver, moduleActions, Context.RECEIVER_EXPORTED);
         observing = true;
         Log.i(TAG, "Keyguard root attached; observing module switch");
         Diag.log("observing module switch");
@@ -666,7 +695,9 @@ final class LockScreenOverlay {
         if (lastEnabled == null || lastEnabled != enabled) Log.i(TAG, "Module enabled=" + enabled + " " + state());
         Diag.log("module enabled=" + enabled);
         lastEnabled = enabled;
-        if (enabled) media.start(); else { Log.i(TAG, "Module switched off; restoring " + state()); media.stop(); restore("switch-off"); fullTimeTintOff(); WallpaperCoverPush.clearCover(); }
+        // 关闭时 fullTimeTintOff 必须在 restore **之前**：restore 会 clear savedCardTints/
+        // savedBgDrawables（原始色登记表），之后复原就只能把「染后色」当原始色写回——污染固化。
+        if (enabled) media.start(); else { Log.i(TAG, "Module switched off; restoring " + state()); media.stop(); fullTimeTintOff(); restore("switch-off"); WallpaperCoverPush.clearCover(); }
     }
 
     /**
@@ -737,6 +768,7 @@ final class LockScreenOverlay {
             return;
         }
         if (snapshot == null) {
+            mediaAlive = false;   // 染色泵据此自动复原停泵（锁屏留最后一帧的取舍不变，只停染色）
             // 锁屏上**只要有最后一帧就绝不撤层**。
             //
             // 旧写法只在 isStillPlaying() 时才保留、否则走 restore("render-no-session")。真机实测
@@ -753,6 +785,7 @@ final class LockScreenOverlay {
             return;
         }
         lastSkipReason = null;
+        mediaAlive = true;
         if (foreground == null && !create()) return;
         registerGuard();
         applySnapshot(snapshot);
@@ -2126,6 +2159,12 @@ final class LockScreenOverlay {
         applyNotificationTint(false);   // 染过就要复原：原生通知栈要带着原始 scrim 回锁屏
         savedCardTints.clear();
         savedBgDrawables.clear();
+        // 插进媒体卡的圆角色层先从宿主撤掉再清表：只 clear 的话视图还挂在卡里、引用丢失，
+        // 媒体卡（回收复用的实例）会一直带着我们的色层（2026-10-14 顺手修复）。
+        for (View layer : new java.util.ArrayList<>(mediaTintLayers.values())) {
+            try { if (layer != null && layer.getParent() instanceof ViewGroup) ((ViewGroup) layer.getParent()).removeView(layer); }
+            catch (Throwable ignored) { }
+        }
         mediaTintLayers.clear();
         mediaBgApplied.clear();
         // 场景整场销毁：调试常亮锁必须还回去（下次 create 按配置重取）。
@@ -2990,10 +3029,13 @@ final class LockScreenOverlay {
     private void applyNotificationTint(boolean on) {
         if (notifications == null) return;
         if (on && !notifyCardTint) return;
+        // 无媒体一律不染（锁屏留最后一帧的取舍只作用于封面场景，不外溢到通知染色）。
+        if (on && !mediaAlive) return;
         if (!on) {
             if (!tintOn) return;
             tintOn = false;
             applyTintShallow(notifications, null, null, 0);
+            restoreAllTinted();   // 全表复原：当前树扫会漏掉已回收/detach 的行（染色是视图实例状态）
             restoreInk();
             // 入口按钮颜色还原成算法黑白（与展开路径同一个写法，幂等兜底）。
             if (notificationButton != null) notificationButton.setTextColor(entryInkColor());
@@ -3065,6 +3107,13 @@ final class LockScreenOverlay {
         try {
             if (!notifyCardTint || !Boolean.TRUE.equals(lastEnabled)) return;
             if (stackAnchor == null || !stackAnchor.isAttachedToWindow()) return;
+            if (!mediaAlive) {
+                // 媒体退出：取色缓存还是旧专辑色，继续染会把旧色泼到锁屏+桌面全部通知
+                // （2026-10-14 zuige 复现「退出音乐通知还染色」）。复原一次然后停泵；
+                // 下次媒体快照到达时 applySnapshot 会重置 mediaAlive，泵自然恢复。
+                if (tintOn) { applyNotificationTint(false); Log.i(TAG, "Stack tint pump stopped: no media snapshot"); }
+                return;
+            }
             if (!stackChildrenLogged) {
                 StringBuilder names = new StringBuilder();
                 for (int i = 0; i < stackAnchor.getChildCount() && i < 12; i++) {
@@ -3104,9 +3153,31 @@ final class LockScreenOverlay {
     }
 
     /** 模块关闭：把全程染色也一并撤掉（restore() 只管场景自己的那份）。 */
+    /**
+     * 染色全表复原（2026-10-14）：当前树浅扫只摸得到「此刻挂树上」的卡，而染色是
+     * **视图实例状态**——系统回收的通知行带着污染回到屏幕，就是「关了模块通知还
+     * 染色」的另一半根因。{@code savedCardTints} / {@code savedBgDrawables} 本身就是
+     * 「染过哪些卡」的权威登记（首次染色时捕获原始色），按全表复原即可覆盖树外漏网。
+     * 幂等：树上的卡会被复原两次（浅扫一遍 + 全表一遍），写的是同一个原始色。
+     */
+    private void restoreAllTinted() {
+        for (View card : new java.util.ArrayList<>(savedCardTints.keySet())) {
+            try { tintCardInternal(card, null); } catch (Throwable ignored) { }
+        }
+        for (View child : new java.util.ArrayList<>(savedBgDrawables.keySet())) {
+            try {
+                Drawable saved = savedBgDrawables.get(child);
+                if (saved != null) child.setBackground(saved);
+                else child.setBackgroundColor(Color.TRANSPARENT);
+                mediaBgApplied.remove(child);
+            } catch (Throwable ignored) { }
+        }
+    }
+
     private void fullTimeTintOff() {
         try {
             if (stackAnchor != null) applyTintShallow(stackAnchor, null, null, 0);
+            restoreAllTinted();
             restoreInk();
         } catch (Throwable error) {
             Log.w(TAG, "Full-time tint off failed", error);
