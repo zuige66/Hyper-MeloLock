@@ -75,6 +75,13 @@ final class MediaSource {
     private static volatile Set<String> cachedAllowed;
     private static volatile long cachedAllowedAtMs;
 
+    /**
+     * 「没有可用会话」诊断行的去重键。refresh 每 2 秒一轮、亮屏每次 render 都跑，
+     * 旧写法每轮一条 {@code no playing session}，几小时就把 80 条环形缓冲冲爆、
+     * 把真正有用的事件顶掉。同因只回写一次；会话恢复时清键，下次失败重新报。
+     */
+    private static volatile String lastNoSessionDiag;
+
     private static boolean packageAllowed(Context context, String packageName) {
         long now = android.os.SystemClock.elapsedRealtime();
         Set<String> allowed = cachedAllowed;
@@ -140,10 +147,16 @@ final class MediaSource {
         String artworkUri = null;
         MediaController pausedSession = null;
         List<MediaController> sessions = null;
+        // 被允许名单挡掉的第一个包名（远程诊断用）：有会话但一个都不允许时，
+        // 报告里直接点名「哪个 App 没在模块里勾选」。
+        String blockedByAllow = null;
         try {
             sessions = manager.getActiveSessions(null);
             for (MediaController candidate : sessions) {
-                if (!packageAllowed(context, candidate.getPackageName())) continue;
+                if (!packageAllowed(context, candidate.getPackageName())) {
+                    if (blockedByAllow == null) blockedByAllow = candidate.getPackageName();
+                    continue;
+                }
                 PlaybackState state = candidate.getPlaybackState();
                 MediaMetadata metadata = candidate.getMetadata();
                 if (state == null || metadata == null) continue;
@@ -197,6 +210,7 @@ final class MediaSource {
         }
         if (snapshot != null) {
             lastReady = snapshot;
+            lastNoSessionDiag = null;   // 会话恢复正常：清掉去重键，下次无会话要重新报
             pendingArtworkUri = null;
             pendingArtworkController = null;
             cancelGrace();
@@ -284,7 +298,8 @@ final class MediaSource {
             pendingArtworkUri = null;
             pendingArtworkController = null;
             Log.i(TAG, "No playing session in " + elapsed(refreshStart) + "ms; overlay falls back");
-        Diag.log("no playing session; overlay falls back");
+            String reason = noSessionReason(sessions, blockedByAllow);
+            if (reason != null) Diag.log(reason);
             listener.onMedia(null);
         }
     }
@@ -292,6 +307,31 @@ final class MediaSource {
         if (!graceScheduled) return;
         graceScheduled = false;
         main.removeCallbacks(sessionLost);
+    }
+
+    /**
+     * 「无可用会话」的诊断行（带去重）。**三种病因必须能分开**——远程适配时旧报告里
+     * 它们全长得一样（都是一行 no playing session），拿到报告也判断不了：
+     *  ① {@code no active sessions}：getActiveSessions 返回空或抛了 RuntimeException
+     *     （被 173 行 catch 吞掉的那条）——SystemUI 侧会话监听本身有问题；
+     *  ② {@code session blocked by allowlist: <包名>}：会话在，但没在模块「音乐应用」里
+     *     勾选——fail-closed 设计（空名单＝全不允许），**远程适配最高发的原因**，
+     *     报告直接点名该勾哪个包；
+     *  ③ {@code no playing session; overlay falls back}：有允许的会话但没在播放
+     *     （或 metadata/封面不合格）。
+     */
+    private static String noSessionReason(List<MediaController> sessions, String blockedByAllow) {
+        String reason;
+        if (sessions == null || sessions.isEmpty()) {
+            reason = "no active sessions";
+        } else if (blockedByAllow != null) {
+            reason = "session blocked by allowlist: " + blockedByAllow + " (在模块「音乐应用」里勾选它)";
+        } else {
+            reason = "no playing session; overlay falls back";
+        }
+        if (reason.equals(lastNoSessionDiag)) return null;
+        lastNoSessionDiag = reason;
+        return reason;
     }
     private static long elapsed(long start) { return android.os.SystemClock.elapsedRealtime() - start; }
     private Bitmap loadArt(String uriText) {

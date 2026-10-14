@@ -1653,3 +1653,11 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **修复**：① `Diag` 改「**内存始终缓冲，开关只 gate 跨进程回写**」——`log/put` 无条件进 80 条环形缓冲 + 快照 map，删早退缓冲；`enabled` 只决定 flush；`enable(true)` 时立即 flush 开机至今全部历史。事件是锁屏生命周期级别（非每帧），成本可忽略；`scheduleFlush` 加 enabled 门避免白贴主线程回调。② **广播接收器上移全局**：`HookEntry.moduleReceiver`（静态，`ActivityThread.currentApplication()` 拿 context，`RECEIVER_EXPORTED`），在 hook 武装**成败两条路径末尾都注册**（幂等，Vector 双回调不会重装）；覆盖层内旧注册/注销与 `restartReceiver` 字段删除。REFRESH 处理保留旧行为：同步翻转存活 overlay 的 `debugLog`/`MediaSource.verboseLog`（新增 `setDebugLog`），不等 create()。③ App 侧旧「调试日志」开关 onChange 也发 `ACTION_DIAG_REFRESH`——两个入口都即时生效。④ rev HE4→HE5。
     - **修后行为**：不管沉浸式开没开、hook 成没成，装包后点「开始记录」（或只拨调试日志开关），开机至今全部事件（含 `systemui hook unavailable: ClassNotFound…` 这种关键证据）一次性进报告。
     - **测试包**：`Hyper-MeloLock-v0.3.5-diagfix-test.apk`（正式签名、版本仍 0.3.5/15，可直接覆盖装），已传 blog：`https://blog.zuiges.com/downloads/melolock/Hyper-MeloLock-v0.3.5-diagfix-test.apk`；`latest.json` 故意不动（仍指 GitHub 正式版）。
+
+64. 2026-10-14 **无会话病因诊断（朋友 K80 Pro 反馈：播着歌却 no session）**：
+
+    - **现象**：朋友设备（Redmi K80 Pro / myron，澎湃 3.0.23，LSPosed）hook 全绿（`hook installed` → `keyguard root attached` → `module enabled=true`），但网易云/QQ 音乐播放中仍报 `no playing session; overlay falls back`，且**一条 `session ->` 都没有**（连暂停会话都不会没有）。
+    - **排查结论**：`refresh()` 过滤链 = `getActiveSessions(null)` → **`packageAllowed()`** → 播放状态 → metadata。零 `session ->` 事件把病因指向链条最前端两环：① **允许名单为空**——「音乐应用」必须用户显式勾选（fail-closed，空名单＝全不允许），朋友没勾网易云/QQ 就会得到这份报告，**远程适配最高发原因**；② `getActiveSessions` 返回空/抛 RuntimeException（被 173 行 catch 吞掉，旧日志与①完全无法区分）。
+    - **修复（诊断向，不改行为）**：`refresh()` 记录第一个被允许名单挡掉的包名；新增 `noSessionReason()` 带去重输出三种病因——`no active sessions`（①会话监听问题）/ `session blocked by allowlist: <包名> (在模块「音乐应用」里勾选它)`（②直接点名）/ `no playing session; overlay falls back`（③）。同时修掉旧写法**每轮 refresh 一条同文本**把 80 条环形缓冲冲爆的问题（同因只回写一次，会话恢复清键）。
+    - **测试包**：`Hyper-MeloLock-v0.3.5-sessionfix-test.apk`（含此前全部修复，正式签名可覆盖装），已传 blog：`https://blog.zuiges.com/downloads/melolock/Hyper-MeloLock-v0.3.5-sessionfix-test.apk`；`latest.json` 不动。
+    - **部署坑（blog）**：Pages 部署状态 success 与 CDN 可访问之间有滞后，且 **Cloudflare 会缓存 404**（`Age` 头可见）——刚 deploy 完立刻验证可能拿到缓存的 404。验证 APK 链接要带缓存破坏参数（`?v=N`），并确认 `size_download` 与本地字节一致。
