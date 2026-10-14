@@ -33,7 +33,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
         // 机型门禁已撤（2026-10-09，zuige 正在多机型测试）：任何 SystemUI 都尝试 hook，
         // 目标类找不到自然失败关闭、恢复原生锁屏。非澎湃 3 上的表现靠测试反馈收集。
         if (!"com.android.systemui".equals(param.packageName)) return;
-        Log.i(TAG, "HookEntry rev=HE8 (icon v2 + predraw indication + native stack fix + metadata probe)");
+        Log.i(TAG, "HookEntry rev=HE9 (lyrics + play icon mirror + marquee fix + native media-only)");
         try {
             Class<?> root = XposedHelpers.findClass(
                     "com.android.keyguard.widget.HyperOSKeyguardRootView", param.classLoader);

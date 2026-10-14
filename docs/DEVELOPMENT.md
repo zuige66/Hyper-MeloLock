@@ -1688,5 +1688,14 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **编译插曲**：`android.media.session.MediaController` 没有 `getMediaDescription()`（那是 deprecated 的 `android.media.MediaController` 的方法）——探针里 MediaDescription 一段删掉，keySet 遍历已覆盖全部自定义字段。
     - rev HE7→HE8。测试包 `Hyper-MeloLock-v0.3.5-he8-test.apk` 上 blog（Pages「Deploy to GitHub Pages」步骤偶发 failure，用 `POST /repos/{owner}/{repo}/pages/builds` API 重触发后成功；验证时 `--max-time` 太短会把 3.7MB 下载截断成假不一致，要放宽到 120s 核对 size_download）。
 
+68. 2026-10-15 **HE9：歌词逐句显示 + 播放图标镜像 + 跑马灯两个 bug + 原生播放器只留媒体卡（zuige 真机反馈）**：
+
+    - **歌词逐句显示（zuige 批准方案后实现）**：`MediaSource` 从 metadata 自定义 key `ucar.media.metadata.LYRICS_WHOLE`（QQ 实锤）取整篇 LRC 进 `Snapshot.lyrics`；`LockScreenOverlay.rebuildLyrics()` 解析（多时间戳行展开、`[offset:]`、元数据标签跳过、冒泡排序，按 title|长度缓存），`titleTextFor()` 二分找当前句，**歌名位置逐句显示**，换句走 `applyTextWithFade` 柔和动效；无歌词/第一句前回退歌名；`progressTicker`（500ms）推进、暂停冻结。QQ 的 LRC 首行常是官方广告（`[00:00.00]「…APP！」`），如实显示（0~10 秒内是广告文案，是 LRC 原文）。网易云的 key 等探针采样后补。
+    - **播放图标镜像**：上一轮把 `ic_play_rounded` 的三角方向改反了（尖朝左），镜像回尖端朝右（`M660,480 L200,230 L200,730 Z`）。上一首/下一首方向本来就对，未动。
+    - **跑马灯两个 bug（「长歌名没滚」的真相）**：① 滚动时长 `overflow(px)/speed(dp/s)` 没乘 density——3x 屏上 45dp/s 被跑成 ~15dp/s，长歌名滚一轮 10s+；② 每轮停顿默认 15s 且首滚也是 15s，用户等不到。修复：时长乘 density；**换文本后首滚只停 3s**（`freshText` 标志，切歌也触发），之后按设置停顿；`setDebugLog` 同步 `MarqueeController.setVerbose`，debug_log 开着会打溢出距离/滚动启动（排查「没滚」有据可查）。
+    - **原生播放器只留媒体卡**：常驻的原生栈把充电统计卡等所有通知也带出来了（zuige「卡卡什么情况」）。`sweepNativePlayerStack()`（守卫每帧 + showMusicNative）：先确认栈里摸得到 `MediaHeader` 再动手，其他通知行 `hide()`（changedViews 登记，restore 复原）——摸不到媒体卡整帧不动（失败关闭，绝不能把栈清空）。语义变化：native 模式下锁屏上看不到其他通知（下拉 shade 照常），关掉开关即回。
+    - rev HE8→HE9。
+
+
 
 

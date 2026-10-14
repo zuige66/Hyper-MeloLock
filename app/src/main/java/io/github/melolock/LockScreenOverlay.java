@@ -601,6 +601,7 @@ final class LockScreenOverlay {
                     // ——不能让它每帧把栈打回 INVISIBLE（2026-10-14 zuige 反馈「开了原生播放器
                     // 播放器和按钮全没了」的真因：showMusicNative show 完，守卫下一帧又 hide）。
                     if (fxNativePlayer || expanded) show(notifications); else hide(notifications);
+                    if (fxNativePlayer) sweepNativePlayerStack();
                     // 展开期间重挂：系统 rebind 行视图会冲掉滤镜。**必须节流**（2026-10-12）：
                     // 这行原本每个绘制帧跑一次全量浅扫（每视图一次 resourceName + 反射 setTint），
                     // 而 stackAnchor 就是 notifications（见 attachStackTintPump），常驻泵已经在
@@ -652,6 +653,8 @@ final class LockScreenOverlay {
     void setDebugLog(boolean on) {
         debugLog = on;
         MediaSource.verboseLog = on;
+        if (marqueeTitle != null) marqueeTitle.setVerbose(on);
+        if (marqueeArtist != null) marqueeArtist.setVerbose(on);
     }
 
     void destroy() {
@@ -842,11 +845,14 @@ final class LockScreenOverlay {
         // 挂在封面变化分支里的话，换「主色来源」档位后要等下一首歌才会重取，用户会以为没生效。
         maybeExtractCardPalette(snapshot.art, emptyAs(snapshot.title, "") + "|" + emptyAs(snapshot.artist, "")
                 + "|" + snapshot.art.getWidth() + "x" + snapshot.art.getHeight());
+        rebuildLyrics(snapshot);
+        String titleText = titleTextFor(snapshot);
+        shownLyricLine = lyricTimes.length > 0 ? titleText : null;
         if (songFadeEnabled) {
-            applyTextWithFade(title, emptyAs(snapshot.title, "未知曲目"));
+            applyTextWithFade(title, titleText);
             applyTextWithFade(artist, emptyAs(snapshot.artist, "未知艺术家"));
         } else {
-            title.setText(emptyAs(snapshot.title, "未知曲目")); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
+            title.setText(titleText); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
         }
         // 播放/暂停图标：变化**先挂起 600ms 再提交**（glyphCommit）。切歌瞬间播放器会经历
         // playing → 缓冲/暂停 → playing，图标闪一下又变回去非常碍眼（zuige 反馈）；
@@ -1943,8 +1949,30 @@ final class LockScreenOverlay {
         }
         if (notificationButton != null) notificationButton.setVisibility(View.GONE);
         applyNotificationTint(true);
+        sweepNativePlayerStack();
         main.removeCallbacks(progressTicker);
         if (!fxNativePlayer) main.post(progressTicker);   // native 模式没有自制进度条，不跑 ticker
+    }
+
+    /**
+     * 原生播放器模式：锁屏常驻的原生栈里**只保留媒体卡**，其他通知行（如充电统计卡）
+     * 藏掉（2026-10-15 zuige「卡卡什么情况」）。两遍扫：先确认栈里摸得到媒体卡再动手，
+     * 摸不到就整帧不动（失败关闭——类名匹配不上时绝不能把栈清空）。
+     * hide() 走 changedViews 登记，restore 时复原；系统 rebind 出新行由守卫下一帧再藏。
+     */
+    private void sweepNativePlayerStack() {
+        if (!fxNativePlayer || notifications == null) return;
+        View media = null;
+        for (int i = 0; i < notifications.getChildCount(); i++) {
+            View child = notifications.getChildAt(i);
+            if (child != null && child.getClass().getName().contains("MediaHeader")) { media = child; break; }
+        }
+        if (media == null) return;
+        for (int i = 0; i < notifications.getChildCount(); i++) {
+            View child = notifications.getChildAt(i);
+            if (child != null && child != media) hide(child);
+        }
+        show(media);
     }
 
     /** 兜底：场景该显示时，背景层不该是 GONE 或半透明（解锁淡出期间由 unlockSignalled 拦住）。 */
@@ -2139,6 +2167,103 @@ final class LockScreenOverlay {
         if (shown.speed > 0f && shown.positionUpdateTimeMs > 0) position += (long) ((android.os.SystemClock.elapsedRealtime() - shown.positionUpdateTimeMs) * shown.speed);
         if (total > 0) { applyProgress((int) Math.min(1000, Math.max(0, position * 1000 / total))); elapsed.setText(time(position)); duration.setText(time(total)); }
         else { applyProgress(0); elapsed.setText("--:--"); duration.setText("--:--"); }
+        updateLyricLine();
+    }
+
+    // ---------- 歌词逐句显示（歌名位置，2026-10-15） ----------
+
+    private long[] lyricTimes = new long[0];
+    private String[] lyricLines = new String[0];
+    private String lyricKey = "";      // 解析缓存键（title|lrc 长度），同歌不重复解析
+    private String shownLyricLine;     // 当前已显示句（去重，避免每 500ms 重复 apply）
+
+    /**
+     * 解析当前歌的 LRC（QQ＝metadata 自定义 key，见 MediaSource.lyricsOf）。
+     * 歌词存在时歌名位置显示当前句（跟随播放进度），无歌词/第一句前回退显示歌名。
+     * LRC 一般 <200 行，主线程解析微秒级；按 title|长度 缓存，同一首歌只解析一次。
+     */
+    private void rebuildLyrics(MediaSource.Snapshot snapshot) {
+        String lrc = snapshot.lyrics;
+        String key = snapshot.title + "|" + (lrc == null ? 0 : lrc.length());
+        if (key.equals(lyricKey)) return;
+        lyricKey = key;
+        shownLyricLine = null;
+        if (lrc == null || lrc.isEmpty()) { lyricTimes = new long[0]; lyricLines = new String[0]; return; }
+        java.util.ArrayList<Long> times = new java.util.ArrayList<>();
+        java.util.ArrayList<String> lines = new java.util.ArrayList<>();
+        long offset = 0;
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\[(\\d+):(\\d+)(?:[.:](\\d+))?\\]").matcher("");
+        for (String raw : lrc.split("\n")) {
+            String line = raw.trim();
+            if (line.isEmpty()) continue;
+            if (line.startsWith("[offset:")) {
+                try { offset = Long.parseLong(line.substring(8, line.indexOf(']')).trim()); } catch (RuntimeException ignored) { }
+                continue;
+            }
+            m.reset(line);
+            java.util.ArrayList<Long> stamps = new java.util.ArrayList<>();
+            int lastEnd = 0;
+            while (m.find()) {
+                long t = Long.parseLong(m.group(1)) * 60000L + Long.parseLong(m.group(2)) * 1000L;
+                if (m.group(3) != null) {
+                    String frac = m.group(3);
+                    t += Long.parseLong(frac) * (frac.length() >= 3 ? 1L : 10L);
+                }
+                stamps.add(t);
+                lastEnd = m.end();
+            }
+            if (stamps.isEmpty() || lastEnd == 0) continue;   // [ti:]/[ar:] 等元数据标签跳过
+            String text = line.substring(lastEnd).trim();
+            if (text.isEmpty()) continue;
+            for (Long stamp : stamps) { times.add(stamp - offset); lines.add(text); }
+        }
+        int n = times.size();
+        lyricTimes = new long[n];
+        lyricLines = new String[n];
+        for (int i = 0; i < n; i++) { lyricTimes[i] = times.get(i); lyricLines[i] = lines.get(i); }
+        // 冒泡排序（行数少；多时间戳行展开后基本有序）
+        for (int i = 0; i < n - 1; i++) {
+            boolean swapped = false;
+            for (int j = 0; j < n - 1 - i; j++) {
+                if (lyricTimes[j] > lyricTimes[j + 1]) {
+                    long t = lyricTimes[j]; lyricTimes[j] = lyricTimes[j + 1]; lyricTimes[j + 1] = t;
+                    String s = lyricLines[j]; lyricLines[j] = lyricLines[j + 1]; lyricLines[j + 1] = s;
+                    swapped = true;
+                }
+            }
+            if (!swapped) break;
+        }
+        if (n > 0) Log.i(TAG, "Lyrics: parsed " + n + " lines for \"" + snapshot.title + "\"");
+    }
+
+    /** 当前播放位置推算（与进度条同一公式）。 */
+    private long estimatedPositionMs() {
+        if (shown == null) return 0;
+        long position = shown.positionMs;
+        if (shown.speed > 0f && shown.positionUpdateTimeMs > 0) position += (long) ((android.os.SystemClock.elapsedRealtime() - shown.positionUpdateTimeMs) * shown.speed);
+        return position;
+    }
+
+    /** 歌名位置应显示的文本：有歌词→当前句（第一句前回退歌名），无歌词→歌名。 */
+    private String titleTextFor(MediaSource.Snapshot snapshot) {
+        String fallback = emptyAs(snapshot.title, "未知曲目");
+        if (lyricTimes.length == 0) return fallback;
+        int lo = 0, hi = lyricTimes.length - 1, idx = -1;
+        long position = estimatedPositionMs();
+        while (lo <= hi) {
+            int mid = (lo + hi) >>> 1;
+            if (lyricTimes[mid] <= position) { idx = mid; lo = mid + 1; } else hi = mid - 1;
+        }
+        return idx >= 0 ? lyricLines[idx] : fallback;
+    }
+
+    /** progressTicker 每 500ms 调：推进一步歌词（只在播放中换句，暂停冻结）。 */
+    private void updateLyricLine() {
+        if (title == null || shown == null || lyricTimes.length == 0 || !shown.playing) return;
+        String line = titleTextFor(shown);
+        if (line.equals(shownLyricLine)) return;
+        shownLyricLine = line;
+        applyTextWithFade(title, line);   // 与切歌文字同一套柔和换字动效
     }
 
     /**
@@ -3768,9 +3893,14 @@ final class LockScreenOverlay {
         private float pauseSec = 15f;        // 每轮滚动前停顿，秒（5~60 钳制）
         private boolean running = false;
         private boolean pendingText = false;
+        private boolean freshText = false;   // 刚换过文本：首滚用短停顿（3s），别让用户等满 15s 以为功能没生效
+        private boolean verbose = false;     // debug_log：打印溢出/滚动启动（排查「跑马灯没滚」）
         private ObjectAnimator anim;
+        private static final long FIRST_PAUSE_MS = 3000;
 
         MarqueeController(Handler h) { this.handler = h; }
+
+        void setVerbose(boolean v) { this.verbose = v; }
 
         void configure(int speedDp, int pauseSecInt) {
             speedDpPerSec = Math.max(20, Math.min(120, speedDp));
@@ -3783,7 +3913,7 @@ final class LockScreenOverlay {
                 @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
                 @Override public void onTextChanged(CharSequence s, int st, int b, int c) { pendingText = true; }
                 @Override public void afterTextChanged(Editable s) {
-                    if (running && pendingText) { pendingText = false; scheduleMeasure(); }
+                    if (running && pendingText) { pendingText = false; freshText = true; scheduleMeasure(); }
                 }
             });
         }
@@ -3807,29 +3937,49 @@ final class LockScreenOverlay {
         private void scheduleMeasure() { handler.removeCallbacks(measure); handler.post(measure); }
         private void scheduleCycle(long delayMs) { handler.removeCallbacks(cycle); handler.postDelayed(cycle, delayMs); }
 
+        /** 溢出距离（px）；文本放得下返回 0。 */
+        private int currentOverflow() {
+            if (tv == null || clip == null) return 0;
+            return tv.getWidth() - clip.getWidth();
+        }
+
+        private long nextDelayMs() {
+            long delay = freshText ? FIRST_PAUSE_MS : (long) (pauseSec * 1000);
+            freshText = false;
+            return delay;
+        }
+
         private final Runnable measure = new Runnable() {
             @Override public void run() {
                 if (!running || tv == null || clip == null) return;
                 int clipW = clip.getWidth();
                 int textW = tv.getWidth();
                 if (clipW == 0 || textW == 0) { handler.postDelayed(measure, 60); return; }  // 尚未布局完，下一帧再试
-                int overflow = textW - clipW;
-                if (overflow <= 4) { cancelAnim(); tv.setTranslationX(0f); scheduleCycle((long) (pauseSec * 1000)); return; }
-                scheduleCycle((long) (pauseSec * 1000));
+                int overflow = currentOverflow();
+                if (overflow <= 4) {
+                    cancelAnim(); tv.setTranslationX(0f);
+                    if (verbose) Log.i(TAG, "Marquee: fits (" + textW + "<=" + clipW + "), idle " + nextDelayMs() + "ms");
+                    scheduleCycle(nextDelayMs());
+                    return;
+                }
+                if (verbose) Log.i(TAG, "Marquee: overflow=" + overflow + "px, first scroll in " + nextDelayMs() + "ms");
+                scheduleCycle(nextDelayMs());
             }
         };
 
         private final Runnable cycle = new Runnable() {
             @Override public void run() {
                 if (!running || tv == null || clip == null) return;
-                int clipW = clip.getWidth();
-                int textW = tv.getWidth();
-                int overflow = textW - clipW;
-                if (overflow <= 4) { cancelAnim(); tv.setTranslationX(0f); scheduleCycle((long) (pauseSec * 1000)); return; }
-                long dur = (long) (overflow / speedDpPerSec * 1000f);
+                int overflow = currentOverflow();
+                if (overflow <= 4) { cancelAnim(); tv.setTranslationX(0f); scheduleCycle(nextDelayMs()); return; }
+                // 速度是 dp/s，溢出是 px：必须乘 density，否则实际滚动速度慢 density 倍
+                // （3x 屏上 45dp/s 被跑成 ~15dp/s，长歌名滚一轮要 10s+，观感就是「没在滚」）。
+                float density = tv.getResources().getDisplayMetrics().density;
+                long dur = (long) (overflow / (speedDpPerSec * density) * 1000f);
                 dur = Math.max(dur, 600);
                 cancelAnim();
                 tv.setTranslationX(0f);
+                if (verbose) Log.i(TAG, "Marquee: scrolling " + overflow + "px in " + dur + "ms");
                 anim = ObjectAnimator.ofFloat(tv, "translationX", 0f, -(float) overflow);
                 anim.setDuration(dur);
                 anim.setInterpolator(new LinearInterpolator());

@@ -65,13 +65,27 @@ final class MediaSource {
         final float speed;
         /** 会话当前是否在播放。暂停时仍会交出最后一帧（playing=false），锁屏不会被原生界面顶替。 */
         final boolean playing;
+        /** 原始 LRC 歌词（部分 App 塞在 metadata 自定义 key 里，如 QQ 的 ucar.media.metadata.LYRICS_WHOLE）；无则 null。 */
+        final String lyrics;
         Snapshot(MediaController controller, Bitmap art, String title, String artist, long actions,
-                 long positionMs, long positionUpdateTimeMs, long durationMs, float speed, boolean playing) {
+                 long positionMs, long positionUpdateTimeMs, long durationMs, float speed, boolean playing, String lyrics) {
             this.controller = controller; this.art = art; this.title = title;
             this.artist = artist; this.actions = actions; this.positionMs = positionMs;
             this.positionUpdateTimeMs = positionUpdateTimeMs; this.durationMs = durationMs;
-            this.speed = speed; this.playing = playing;
+            this.speed = speed; this.playing = playing; this.lyrics = lyrics;
         }
+    }
+
+    /**
+     * 从 metadata 读 LRC 歌词（自定义 key，App 各不相同）：
+     * QQ 音乐＝{@code ucar.media.metadata.LYRICS_WHOLE}（探针实锤，2026-10-14）；
+     * 网易云等其他 App 的 key 等探针采样后再补。空/缺失返回 null（歌名回退显示）。
+     */
+    private static String lyricsOf(MediaMetadata metadata) {
+        if (metadata == null) return null;
+        String lrc = metadata.getString("ucar.media.metadata.LYRICS_WHOLE");
+        if (lrc == null || lrc.trim().isEmpty()) return null;
+        return lrc;
     }
     private final MediaSessionManager manager;
     private final Context context;
@@ -207,7 +221,8 @@ final class MediaSource {
                         text(metadata.getText(MediaMetadata.METADATA_KEY_TITLE)),
                         text(metadata.getText(MediaMetadata.METADATA_KEY_ARTIST)), state.getActions(),
                         state.getPosition(), state.getLastPositionUpdateTime(),
-                        metadata.getLong(MediaMetadata.METADATA_KEY_DURATION), state.getPlaybackSpeed(), true);
+                        metadata.getLong(MediaMetadata.METADATA_KEY_DURATION), state.getPlaybackSpeed(), true,
+                        lyricsOf(metadata));
                 break;
             }
         } catch (RuntimeException error) { snapshot = null; selected = null; }
@@ -289,7 +304,8 @@ final class MediaSource {
                             text(metadata.getText(MediaMetadata.METADATA_KEY_TITLE)),
                             text(metadata.getText(MediaMetadata.METADATA_KEY_ARTIST)), state.getActions(),
                             state.getPosition(), state.getLastPositionUpdateTime(),
-                            metadata.getLong(MediaMetadata.METADATA_KEY_DURATION), state.getPlaybackSpeed(), true);
+                            metadata.getLong(MediaMetadata.METADATA_KEY_DURATION), state.getPlaybackSpeed(), true,
+                            lyricsOf(metadata));
                     pendingArtworkUri = null;
                     pendingArtworkController = null;
                     if (verboseLog) Log.i(TAG, "Media ready from URI decode in " + elapsed(refreshStart) + "ms title=" + lastReady.title);
@@ -304,7 +320,7 @@ final class MediaSource {
                 lastReady = new Snapshot(lastReady.controller, lastReady.art, lastReady.title, lastReady.artist,
                         pausedState.getActions(), pausedState.getPosition(), pausedState.getLastPositionUpdateTime(),
                         lastReady.durationMs, pausedState.getPlaybackSpeed(),
-                        pausedState.getState() == PlaybackState.STATE_PLAYING);
+                        pausedState.getState() == PlaybackState.STATE_PLAYING, lastReady.lyrics);
             }
             if (verboseLog) Log.i(TAG, "Session paused in " + elapsed(refreshStart) + "ms; keeping last frame");
             cancelGrace();
