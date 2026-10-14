@@ -200,6 +200,20 @@ public final class Config {
     public static final String PLAYER_VECTOR_ICONS = "player_vector_icons";
 
     /**
+     * 跑马灯滚动速度（外观页「播放器」分组，默认 45）：
+     * 单位 dp/s，仅当歌名或歌手文本溢出卡片宽度时启用跑马灯。
+     * 取值 20~120，值越大滚得越快。
+     */
+    public static final String MARQUEE_SPEED = "marquee_speed";
+
+    /**
+     * 跑马灯滚动前停顿（外观页「播放器」分组，默认 15）：
+     * 单位秒，文本滚动到末尾后停留多久再跳回开头重新开始。
+     * 取值 5~60。
+     */
+    public static final String MARQUEE_PAUSE = "marquee_pause";
+
+    /**
      * 调试日志开关（「设置」页底部「调试」分组，默认关）：
      * 开＝SystemUI 侧输出周期性细节日志（每轮媒体快照的 Session/Media ready、逐帧 render 跳过、
      * 逐句歌词的取色结果等）；关＝只留生命周期/状态变化/错误级日志。
@@ -297,6 +311,8 @@ public final class Config {
         ELEMENT_DEFAULTS.put(COVER_POP, 1);
         ELEMENT_DEFAULTS.put(PLAYER_CARD_POP, 0);        // 默认关（2026-10-12 真机同步）
         ELEMENT_DEFAULTS.put(PLAYER_VECTOR_ICONS, 1);
+        ELEMENT_DEFAULTS.put(MARQUEE_SPEED, 45);          // dp/s，20~120
+        ELEMENT_DEFAULTS.put(MARQUEE_PAUSE, 15);          // 秒，5~60
         ELEMENT_DEFAULTS.put(DEBUG_LOG, 0);
         ELEMENT_DEFAULTS.put(HIDE_SHORTCUTS, 0);
         ELEMENT_DEFAULTS.put(STAY_AWAKE, 0);

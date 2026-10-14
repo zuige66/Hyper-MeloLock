@@ -81,6 +81,7 @@
 15. **从 SystemUI 直接 `startActivity` 在锁屏上是静默失效的**（启动被批准，但 `transition.abort()` 因为锁屏不让 Activity 变可见）。要点亮别的 App 必须先把锁屏收掉；而 `KeyguardManager.KeyguardLock` 对系统 uid 已禁用（Android 16 抛 `Only apps can use the KeyguardLock API`）——正解是反射调 `KeyguardViewMediator#dismiss(IKeyguardDismissCallback, CharSequence)`（实例用 `hookAllConstructors` 捕获），详见 `docs/DEVELOPMENT.md`。
 16. **卡死/OOM 类问题，DropBox 的 ANR 记录常常拿不到栈**（OOM 先杀进程，ANR trace 没写成；`/data/anr`、`/data/miuilog` 对 shell 不可读）→ 用**模块内临时探针**采样 Java 栈。**采样必须由模块自己排**（在触发点 `postDelayed` 采样），外部 `am broadcast` 对时会 miss：接收器默认跑在主线程，主线程卡死时 `onReceive` 会被排队到风暴之后。探针若用广播，须 `registerReceiver(..., scheduler=后台Handler, ...)`。
 17. **SystemUI→App 的回传只能经 `Diag`（/runtime insert）**：不要直接 `ContentResolver.insert`（跨进程拉起 App 进程，会占 SystemUI 主线程），也不要给 Provider 加方法/改列投影。**失败路径的判据必须回传**——`compatible()` 实际版本号、native views missing、render skipped / restore 原因这类「用户侧零感知」的失败，不回传就等于远程盲猜（2026-10-14 诊断报告的立项原因）。
+18. **播放器图标尺寸不能靠 `icon()` 的 `sizeDp` 参数改**（该参数实际未被使用，绘制按矢量图 `android:width/height` 固有尺寸）——改图标大小要改 drawable 的固有尺寸，不是改调用参数。歌名/歌手跑马灯用独立 `ObjectAnimator` 做 translationX，刻意与 `applyTextWithFade` 的 `ViewPropertyAnimator` 淡入淡出隔离，避免两种动画串扰同一视图属性（同一视图的位移与透明度若共用一个动画器，一次 cancel 会互相打断并丢字）。
 
 **验证闭环**：装 APK → 重启作用域（`am crash` 或模块广播）→ 让用户复现 → 读日志对账 → 提交。
 设备拒绝 ADB 注入输入事件，UI 交互只能人工；SELinux 拦 shell 写 app data，配置只能由用户在 App 里改。

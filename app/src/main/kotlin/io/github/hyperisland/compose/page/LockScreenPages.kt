@@ -515,7 +515,7 @@ internal fun LockAppearancePage() {
         "sign" to listOf(Config.SIGN_ENABLED, Config.SIGN_SIZE, Config.SIGN_WEIGHT, Config.SIGN_COLOR, Config.SIGN_SPACING),
         "clock" to listOf(Config.CLOCK_SIZE, Config.CLOCK_SPACING, Config.CLOCK_WEIGHT, Config.CLOCK_COLOR, Config.CLOCK_ROUNDNESS, Config.CLOCK_STROKE),
         "cover" to listOf(Config.COVER_SCALE, Config.COVER_WIDTH, Config.COVER_HEIGHT, Config.COVER_SPACING, Config.COVER_POP),
-        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.PLAYER_CARD_POP, Config.PLAYER_VECTOR_ICONS),
+        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.PLAYER_CARD_POP, Config.PLAYER_VECTOR_ICONS, Config.MARQUEE_SPEED, Config.MARQUEE_PAUSE),
         "entry" to listOf(Config.ENTRY_BG, Config.ENTRY_BG_PICK),
         "debug" to listOf(Config.DEBUG_LOG),
     )
@@ -709,6 +709,32 @@ internal fun LockAppearancePage() {
                     icon = null,
                     checked = value(Config.PLAYER_VECTOR_ICONS) != 0,
                     onCheckedChange = { update(Config.PLAYER_VECTOR_ICONS, if (it) 1 else 0) },
+                )
+                var marqueeSpeed by remember(value(Config.MARQUEE_SPEED)) { mutableStateOf(value(Config.MARQUEE_SPEED)) }
+                PreferenceSlider(
+                    title = "歌名滚动速度",
+                    summary = "跑马灯滚动速度（dp/s），越快越急",
+                    icon = null,
+                    value = marqueeSpeed.toFloat(),
+                    valueText = "$marqueeSpeed dp/s",
+                    valueRange = 20f..120f,
+                    steps = 100,
+                    allowManualInput = false,
+                    onValueChange = { marqueeSpeed = it.toInt() },
+                    onValueChangeFinished = { update(Config.MARQUEE_SPEED, marqueeSpeed) },
+                )
+                var marqueePause by remember(value(Config.MARQUEE_PAUSE)) { mutableStateOf(value(Config.MARQUEE_PAUSE)) }
+                PreferenceSlider(
+                    title = "滚动前停顿",
+                    summary = "歌名滚动前静止时长（秒）",
+                    icon = null,
+                    value = marqueePause.toFloat(),
+                    valueText = "$marqueePause 秒",
+                    valueRange = 5f..60f,
+                    steps = 55,
+                    allowManualInput = false,
+                    onValueChange = { marqueePause = it.toInt() },
+                    onValueChangeFinished = { update(Config.MARQUEE_PAUSE, marqueePause) },
                 )
                 PreferenceDropdown(
                     title = "底色",

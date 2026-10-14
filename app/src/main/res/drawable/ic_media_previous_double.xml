@@ -1,9 +1,11 @@
+<!-- 上一首（双左三角，圆角实心，stroke round join 与播放三角同款风格） -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    android:width="32dp"
-    android:height="32dp"
-    android:viewportWidth="48"
-    android:viewportHeight="48">
+    android:width="30dp" android:height="30dp"
+    android:viewportWidth="960" android:viewportHeight="960">
     <path
         android:fillColor="#FFFFFFFF"
-        android:pathData="M22,5L3,24L22,43Z M45,5L26,24L45,43Z" />
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="40"
+        android:strokeLineJoin="round"
+        android:pathData="M180,480 L420,220 L420,740 Z M440,480 L680,220 L680,740 Z" />
 </vector>

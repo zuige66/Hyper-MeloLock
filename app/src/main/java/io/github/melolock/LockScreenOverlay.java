@@ -30,7 +30,9 @@ import android.graphics.drawable.TransitionDrawable;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.PowerManager;
+import android.text.Editable;
 import android.text.TextUtils;
+import android.text.TextWatcher;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.view.Gravity;
@@ -38,8 +40,10 @@ import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewTreeObserver;
+import android.view.animation.LinearInterpolator;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.animation.ObjectAnimator;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
@@ -513,6 +517,7 @@ final class LockScreenOverlay {
     /** 背景三层：模糊封面 / 纯色底（style==2 才可见）/ 遮罩。提为字段以便 resume() 就地更新。 */
     private View solidFill, baseScrim;
     private TextView title, artist, elapsed, duration;
+    private MarqueeController marqueeTitle, marqueeArtist;   // 歌名/歌手跑马灯
     /** 传输控制三键：player_vector_icons 开＝矢量圆润 ImageView，关＝旧版字符 TextView；统一按 View 持有。 */
     private View previous, playPause, next;
     private ProgressBar progress;
@@ -646,6 +651,8 @@ final class LockScreenOverlay {
     void destroy() {
         Log.i(TAG, "Overlay destroy " + state());
         Diag.log("overlay destroy");
+        if (marqueeTitle != null) marqueeTitle.stop();
+        if (marqueeArtist != null) marqueeArtist.stop();
         if (observing) {
             context.getContentResolver().unregisterContentObserver(switchObserver);
             context.unregisterReceiver(screenReceiver);
@@ -1373,24 +1380,39 @@ final class LockScreenOverlay {
         LinearLayout labels = new LinearLayout(context); labels.setOrientation(LinearLayout.VERTICAL); labels.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, -1, 1f); labelParams.leftMargin = dp(14); header.addView(labels, labelParams);
         title = label(Color.WHITE, 22, true); artist = label(0xFF9E9EA3, 15, false);
-        labels.addView(title, new LinearLayout.LayoutParams(-1, dp(34))); labels.addView(artist, new LinearLayout.LayoutParams(-1, dp(24)));
+        // 跑马灯：去掉省略号、允许按内容宽度排版（WRAP_CONTENT 才能溢出），外层裁剪框限制可见宽度。
+        title.setEllipsize(null); artist.setEllipsize(null);
+        FrameLayout titleClip = clipFrame(dp(34));
+        title.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, -1, Gravity.START | Gravity.CENTER_VERTICAL));
+        titleClip.addView(title);
+        FrameLayout artistClip = clipFrame(dp(24));
+        artist.setLayoutParams(new FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, -1, Gravity.START | Gravity.CENTER_VERTICAL));
+        artistClip.addView(artist);
+        labels.addView(titleClip, new LinearLayout.LayoutParams(-1, dp(34)));
+        labels.addView(artistClip, new LinearLayout.LayoutParams(-1, dp(24)));
+        marqueeTitle = new MarqueeController(main);
+        marqueeTitle.configure(elem(elements, Config.MARQUEE_SPEED), elem(elements, Config.MARQUEE_PAUSE));
+        marqueeTitle.bind(title, titleClip); marqueeTitle.start();
+        marqueeArtist = new MarqueeController(main);
+        marqueeArtist.configure(elem(elements, Config.MARQUEE_SPEED), elem(elements, Config.MARQUEE_PAUSE));
+        marqueeArtist.bind(artist, artistClip); marqueeArtist.start();
         LinearLayout controls = new LinearLayout(context); controls.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-1, dp(54)); controlsParams.topMargin = dp(4); card.addView(controls, controlsParams);
         if (fxVectorIcons) {
             iconWave = icon(R.drawable.ic_wave_rounded, 26, Color.WHITE); header.addView(iconWave, new LinearLayout.LayoutParams(dp(38), -1));
             iconHeart = icon(R.drawable.ic_heart_rounded, 26, Color.WHITE); controls.addView(iconHeart, controlParams());
-            previous = icon(R.drawable.ic_media_previous_double, 28, Color.WHITE); previous.setOnClickListener(v -> transport(1)); attachPressFeedback(previous); controls.addView(previous, controlParams());
-            playPause = icon(R.drawable.ic_media_pause_block, 32, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); attachPressFeedback(playPause); controls.addView(playPause, controlParams());
-            next = icon(R.drawable.ic_media_next_double, 28, Color.WHITE); next.setOnClickListener(v -> transport(3)); attachPressFeedback(next); controls.addView(next, controlParams());
+            previous = icon(R.drawable.ic_media_previous_double, 30, Color.WHITE); previous.setOnClickListener(v -> transport(1)); attachPressFeedback(previous); controls.addView(previous, controlParams());
+            playPause = icon(R.drawable.ic_media_pause_block, 44, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); attachPressFeedback(playPause); controls.addView(playPause, controlParams());
+            next = icon(R.drawable.ic_media_next_double, 30, Color.WHITE); next.setOnClickListener(v -> transport(3)); attachPressFeedback(next); controls.addView(next, controlParams());
             iconQueue = icon(R.drawable.ic_queue_rounded, 26, Color.WHITE); controls.addView(iconQueue, controlParams());
             Log.i(TAG, "Player icons: vector-rounded");
         } else {
             // 旧版字符播放键（player_vector_icons=0 的回退）：TextView + Unicode 字形，形状随字体。
             iconWave = iconGlyph("⌁", 30, Color.WHITE); header.addView(iconWave, new LinearLayout.LayoutParams(dp(38), -1));
             iconHeart = iconGlyph("\u2661", 28, Color.WHITE); controls.addView(iconHeart, controlParams());
-            previous = iconGlyph("\u25c0", 29, Color.WHITE); previous.setOnClickListener(v -> transport(1)); attachPressFeedback(previous); controls.addView(previous, controlParams());
-            playPause = iconGlyph("\u2161", 34, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); attachPressFeedback(playPause); controls.addView(playPause, controlParams());
-            next = iconGlyph("\u25b6", 29, Color.WHITE); next.setOnClickListener(v -> transport(3)); attachPressFeedback(next); controls.addView(next, controlParams());
+            previous = iconGlyph("\u25c0", 30, Color.WHITE); previous.setOnClickListener(v -> transport(1)); attachPressFeedback(previous); controls.addView(previous, controlParams());
+            playPause = iconGlyph("\u2161", 44, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); attachPressFeedback(playPause); controls.addView(playPause, controlParams());
+            next = iconGlyph("\u25b6", 30, Color.WHITE); next.setOnClickListener(v -> transport(3)); attachPressFeedback(next); controls.addView(next, controlParams());
             iconQueue = iconGlyph("\u25a3", 27, Color.WHITE); controls.addView(iconQueue, controlParams());
             Log.i(TAG, "Player icons: glyph-legacy");
         }
@@ -2310,6 +2332,8 @@ final class LockScreenOverlay {
         foreground.animate().cancel();
         if (cover != null) cover.animate().cancel();
         if (playerCard != null) playerCard.animate().cancel();
+        if (marqueeTitle != null) marqueeTitle.stop();
+        if (marqueeArtist != null) marqueeArtist.stop();
         // 2026-10-07（解锁闪原生壁纸收尾版）：交接期间**完全不动可见性**。
         // 旧版在这里 foreground 淡出 120ms + background 立即 GONE —— 比系统的退场编排快了一截，
         // 等于自己提前掀盖子，露出系统正在过渡展示的壁纸窗口（com.miui.miwallpaper…ImageWallpaper，
@@ -2521,6 +2545,8 @@ final class LockScreenOverlay {
         }
         if (notificationButton != null) notificationButton.setVisibility(View.VISIBLE);
         ensureBackgroundOrder();
+        if (marqueeTitle != null) marqueeTitle.start();
+        if (marqueeArtist != null) marqueeArtist.start();
         main.post(this::alignEntryWithShortcutRow);
         showMusic();
     }
@@ -3559,6 +3585,13 @@ final class LockScreenOverlay {
         TextView text = new TextView(context); text.setTextColor(color); text.setTextSize(sizeSp); text.setSingleLine(true); text.setEllipsize(TextUtils.TruncateAt.END);
         if (bold) text.setTypeface(android.graphics.Typeface.DEFAULT_BOLD); return text;
     }
+    /** 水平裁剪框：限制子视图可见宽度（跑马灯外层），超出部分被裁掉不溢出卡片。 */
+    private FrameLayout clipFrame(int heightDp) {
+        FrameLayout f = new FrameLayout(context);
+        f.setClipChildren(true); f.setClipToPadding(true);
+        f.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(heightDp)));
+        return f;
+    }
     /**
      * 矢量图标版：Material Symbols Rounded 的 drawable，CENTER 不缩放居中（外层仍是 weight 格子，
      * 与旧字符按钮同布局语义）；颜色走 ColorFilter，与「跟随封面」配色联动兼容。
@@ -3611,4 +3644,98 @@ final class LockScreenOverlay {
     }
     private View findById(View parent, String name) { int id = context.getResources().getIdentifier(name, "id", "com.android.systemui"); return id == 0 ? null : parent.findViewById(id); }
     private int dp(float value) { return (int) (value * context.getResources().getDisplayMetrics().density + .5f); }
+
+    /**
+     * 歌名 / 歌手跑马灯：文本超出裁剪框宽度时，做 translationX 循环滚动。
+     * 不用系统内置 marquee——它的速度 / 停顿不可配；这里按可配的 dp/s 与停顿秒数自驱动。
+     * 循环语义：停留 pauseSec → 从开头滚动到末尾 → 跳回开头 → 停留 pauseSec …（文本放得下时不滚动，恒左对齐）。
+     * 文本变化由 TextView 的 TextWatcher 触发重新测量；视图被 suspend/destroy 时 stop() 复位并停表。
+     * 位移用独立的 ObjectAnimator（不和 applyTextWithFade 的 ViewPropertyAnimator 淡入淡出串扰）。
+     */
+    private static final class MarqueeController {
+        private final Handler handler;
+        private TextView tv;
+        private ViewGroup clip;
+        private float speedDpPerSec = 45f;   // 滚动速度，dp/s（20~120 钳制）
+        private float pauseSec = 15f;        // 每轮滚动前停顿，秒（5~60 钳制）
+        private boolean running = false;
+        private boolean pendingText = false;
+        private ObjectAnimator anim;
+
+        MarqueeController(Handler h) { this.handler = h; }
+
+        void configure(int speedDp, int pauseSecInt) {
+            speedDpPerSec = Math.max(20, Math.min(120, speedDp));
+            pauseSec = Math.max(5, Math.min(60, pauseSecInt));
+        }
+
+        void bind(TextView t, ViewGroup c) {
+            tv = t; clip = c;
+            t.addTextChangedListener(new TextWatcher() {
+                @Override public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
+                @Override public void onTextChanged(CharSequence s, int st, int b, int c) { pendingText = true; }
+                @Override public void afterTextChanged(Editable s) {
+                    if (running && pendingText) { pendingText = false; scheduleMeasure(); }
+                }
+            });
+        }
+
+        /** 开始（或重启）跑马灯循环：先量一次，溢出则按 pause→scroll→pause 循环。 */
+        void start() {
+            if (tv == null) return;
+            running = true;
+            scheduleMeasure();
+        }
+
+        /** 停止：取消所有待执行与动画，文本回到开头（translationX=0）。suspend/destroy 时调用。 */
+        void stop() {
+            running = false;
+            handler.removeCallbacks(measure);
+            handler.removeCallbacks(cycle);
+            if (anim != null) { anim.cancel(); anim = null; }
+            if (tv != null) tv.setTranslationX(0f);
+        }
+
+        private void scheduleMeasure() { handler.removeCallbacks(measure); handler.post(measure); }
+        private void scheduleCycle(long delayMs) { handler.removeCallbacks(cycle); handler.postDelayed(cycle, delayMs); }
+
+        private final Runnable measure = new Runnable() {
+            @Override public void run() {
+                if (!running || tv == null || clip == null) return;
+                int clipW = clip.getWidth();
+                int textW = tv.getWidth();
+                if (clipW == 0 || textW == 0) { handler.postDelayed(measure, 60); return; }  // 尚未布局完，下一帧再试
+                int overflow = textW - clipW;
+                if (overflow <= 4) { cancelAnim(); tv.setTranslationX(0f); scheduleCycle((long) (pauseSec * 1000)); return; }
+                scheduleCycle((long) (pauseSec * 1000));
+            }
+        };
+
+        private final Runnable cycle = new Runnable() {
+            @Override public void run() {
+                if (!running || tv == null || clip == null) return;
+                int clipW = clip.getWidth();
+                int textW = tv.getWidth();
+                int overflow = textW - clipW;
+                if (overflow <= 4) { cancelAnim(); tv.setTranslationX(0f); scheduleCycle((long) (pauseSec * 1000)); return; }
+                long dur = (long) (overflow / speedDpPerSec * 1000f);
+                dur = Math.max(dur, 600);
+                cancelAnim();
+                tv.setTranslationX(0f);
+                anim = ObjectAnimator.ofFloat(tv, "translationX", 0f, -(float) overflow);
+                anim.setDuration(dur);
+                anim.setInterpolator(new LinearInterpolator());
+                anim.addListener(new android.animation.AnimatorListenerAdapter() {
+                    @Override public void onAnimationEnd(android.animation.Animator a) {
+                        if (!running) return;
+                        tv.setTranslationX(0f);
+                        scheduleCycle((long) (pauseSec * 1000));
+                    }
+                });
+                anim.start();
+            }
+        };
+
+        private void cancelAnim() { if (anim != null) { anim.cancel(); anim = null; } }
+    }
 }

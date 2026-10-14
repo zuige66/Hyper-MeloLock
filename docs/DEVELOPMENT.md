@@ -1661,3 +1661,13 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **修复（诊断向，不改行为）**：`refresh()` 记录第一个被允许名单挡掉的包名；新增 `noSessionReason()` 带去重输出三种病因——`no active sessions`（①会话监听问题）/ `session blocked by allowlist: <包名> (在模块「音乐应用」里勾选它)`（②直接点名）/ `no playing session; overlay falls back`（③）。同时修掉旧写法**每轮 refresh 一条同文本**把 80 条环形缓冲冲爆的问题（同因只回写一次，会话恢复清键）。
     - **测试包**：`Hyper-MeloLock-v0.3.5-sessionfix-test.apk`（含此前全部修复，正式签名可覆盖装），已传 blog：`https://blog.zuiges.com/downloads/melolock/Hyper-MeloLock-v0.3.5-sessionfix-test.apk`；`latest.json` 不动。
     - **部署坑（blog）**：Pages 部署状态 success 与 CDN 可访问之间有滞后，且 **Cloudflare 会缓存 404**（`Age` 头可见）——刚 deploy 完立刻验证可能拿到缓存的 404。验证 APK 链接要带缓存破坏参数（`?v=N`），并确认 `size_download` 与本地字节一致。
+
+65. 2026-10-14 **歌名/歌手跑马灯 + 播放器图标重画（zuige 需求）**：
+
+    - **跑马灯**：歌名/歌手文本超出卡片宽度时循环滚动（停顿→滚动→跳回→停顿）。自驱动 `ObjectAnimator`（不用系统内置 marquee，因其速度/停顿不可配）；循环语义：停留 `marquee_pause` 秒 → 从开头滚到末尾 → 跳回开头 → 再停留。文本放得下时不滚动，恒左对齐。`TextView` 去掉省略号、改 WRAP_CONTENT 才能溢出；外层 `FrameLayout` 裁剪框限制可见宽度（clipChildren）。文本变化经 `TextWatcher` 触发重新测量；`suspend`/`destroy` 时 `stop()` 复位并停表，`resume` 非重建分支 `start()` 重启；与 `applyTextWithFade` 的 `ViewPropertyAnimator` 淡入淡出用不同动画器，互不串扰。
+    - **新增配置**：`Config.MARQUEE_SPEED`（dp/s，默认 45，20~120）、`Config.MARQUEE_PAUSE`（秒，默认 15，5~60），加进 `ELEMENT_DEFAULTS` 与「播放器」分组重置清单；走 `/elements` 通道。因纳入 `elementSignature`，改这两项灭屏亮屏一次即按新值重建（resume 比对指纹）。
+    - **设置 UI**：播放器分组加两个滑条「歌名滚动速度」「滚动前停顿」（PreferenceSlider，整数档）。
+    - **图标重画**：上一首/下一首改为圆润双三角（viewport 960、`fill`+`stroke` round join，与播放三角同款）；播放/暂停固有尺寸 32→44dp、上一首/下一首 28→30dp（原 `icon()` 的 `sizeDp` 参数实际未驱动绘制——绘制按矢量图 `android:width/height` 固有尺寸，故改固有尺寸）。播放/暂停逻辑不变。rev HE5→HE6。
+    - **编译插曲**：`ObjectAnimator.ofFloat(tv, "translationX", 0f, -overflow.toFloat())` 在 Java 里 `int` 无 `.toFloat()`（那是 Kotlin 扩展）→ 改 `-(float) overflow`。
+    - **测试包**：`Hyper-MeloLock-v0.3.5-marquee-test.apk`（正式签名可覆盖装）；blog 同款链路上传，`latest.json` 不动（仍指 GitHub 正式版）。
+
