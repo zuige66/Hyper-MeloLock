@@ -135,37 +135,6 @@ final class LockScreenOverlay {
     private final MediaSource media;
     private final ContentObserver switchObserver;
     /**
-     * 无 root 的重启通道：配置端发现 `su` 不可用时，会发一条显式广播过来，
-     * 由已经跑在 SystemUI 进程里的模块自己 kill 自己完成一次作用域重启。
-     * 与 `am crash com.android.systemui` 效果等价，但不需要 root 也不需要 adb。
-     */
-    private final BroadcastReceiver restartReceiver = new BroadcastReceiver() {
-        @Override public void onReceive(Context ignored, Intent intent) {
-            if (Config.ACTION_DIAG_CLEAR.equals(intent.getAction())) {
-                Diag.clear();
-                Log.i(TAG, "Diagnostic report cleared via broadcast");
-                return;
-            }
-            if (Config.ACTION_DIAG_REFRESH.equals(intent.getAction())) {
-                // 「开始/停止记录」：App 端刚写完 debug_log，立即按最新配置开关诊断回传，
-                // 不等下一次 create()。elementValues 查不到（App 进程不在）时按关处理。
-                boolean on;
-                try {
-                    Integer value = Config.elementValues(context).get(Config.DEBUG_LOG);
-                    on = value != null && value != 0;
-                } catch (Throwable error) { on = false; }
-                debugLog = on;
-                MediaSource.verboseLog = on;
-                Diag.enable(on, context);
-                Log.i(TAG, "Diag toggled via broadcast: " + on);
-                return;
-            }
-            if (!Config.ACTION_RESTART_SYSTEMUI.equals(intent.getAction())) return;
-            Log.i(TAG, "Restart requested via broadcast; killing SystemUI for a clean reload");
-            android.os.Process.killProcess(android.os.Process.myPid());
-        }
-    };
-    /**
      * 配置变更后的防抖重建：与 {@link #resume()} 的指纹比对走同一条路径——
      * 三元素变了撤掉重建（下一帧 render，避开 pre-draw 内改视图树），
      * 背景三态/圆角变了 applyBackdrop() 就地更新。
@@ -657,16 +626,21 @@ final class LockScreenOverlay {
         IntentFilter events = new IntentFilter();
         events.addAction(Intent.ACTION_SCREEN_OFF); events.addAction(Intent.ACTION_SCREEN_ON); events.addAction(Intent.ACTION_USER_PRESENT);
         context.registerReceiver(screenReceiver, events, Context.RECEIVER_NOT_EXPORTED);
-        // 显式广播（setPackage 到 SystemUI）才能穿过 RECEIVER_NOT_EXPORTED 送达这里。
-        IntentFilter moduleActions = new IntentFilter();
-        moduleActions.addAction(Config.ACTION_RESTART_SYSTEMUI);
-        moduleActions.addAction(Config.ACTION_DIAG_CLEAR);
-        moduleActions.addAction(Config.ACTION_DIAG_REFRESH);
-        context.registerReceiver(restartReceiver, moduleActions, Context.RECEIVER_EXPORTED);
+        // 模块动作广播（诊断刷新/清除、作用域重启）已上移 HookEntry 全局注册：
+        // 覆盖层不存在的场景（沉浸式没开 / hook 失败）也必须能收到，见 moduleReceiver。
         observing = true;
         Log.i(TAG, "Keyguard root attached; observing module switch");
         Diag.log("observing module switch");
         updateSwitch();
+    }
+
+    /**
+     * 诊断刷新广播（HookEntry.moduleReceiver）转发：细节日志开关立即翻转，
+     * 不等下一次 create()。覆盖层不存在时广播照常工作（Diag 那半段不经过这里）。
+     */
+    void setDebugLog(boolean on) {
+        debugLog = on;
+        MediaSource.verboseLog = on;
     }
 
     void destroy() {
@@ -675,7 +649,6 @@ final class LockScreenOverlay {
         if (observing) {
             context.getContentResolver().unregisterContentObserver(switchObserver);
             context.unregisterReceiver(screenReceiver);
-            try { context.unregisterReceiver(restartReceiver); } catch (Throwable ignored) { }
             observing = false;
         }
         media.close(); restore("destroy");

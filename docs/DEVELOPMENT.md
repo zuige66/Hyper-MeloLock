@@ -1645,3 +1645,11 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **语义取舍**：退出音乐/关总开关 → 通知立刻回原生色；「暂停不撤层」「锁屏留最后一帧」的既有取舍不变（只停染色）。
     - **诊断报告卡增强**：①「开始/停止记录」按钮——切 debug_log 配置 + 发新广播 `ACTION_DIAG_REFRESH`，SystemUI 收到后**立即**按最新配置 `Diag.enable`（不等 create()，否则要灭屏亮屏才生效，「点了开始没反应」会被当成模块坏了）；②「清除报告」按钮——发 `ACTION_DIAG_CLEAR` 广播，`Diag.clear()` 清内存+早退缓冲并立即回写空事件流（快照键保留）；③ 事件列表加 `NestedScrollConnection` 消费 `onPostScroll`/`onPostFling` 溢出——否则滑到列表顶/底会带动整个设置页（嵌套滚动穿透）。坑：`onPostFling` 是 suspend 函数，override 忘写 suspend 编译报错。
     - **编译插曲**：receiver 的 `onReceive(Context ignored, Intent intent)` 参数名 `ignored` 与 catch 变量撞名（乱码报错「定义了变量 ignored」）。
+
+63. 2026-10-14 **诊断回传断链路修复（多机型适配反馈：朋友设备零日志）**：
+
+    - **现象**：zuige 观察「沉浸式没开时一条日志都不记」；朋友设备（别的澎湃 3 机型）装包后报告永远空白。
+    - **根因（三条断链，全部指向「Diag 的生命周期绑错了对象」）**：`Diag.enable()` 仅三个调用点——`HookEntry.attach()`（开机一次，debug_log 默认关 → enable(false)）、`create()`（**只有覆盖层真创建了才跑**）、`ACTION_DIAG_REFRESH` 广播（**接收器注册在 `LockScreenOverlay.start()` 里，同样只有覆盖层创建了才存在**）。于是：① 沉浸式没开/模块总开关关着 → enable 永远停在开机那次 false，事件只进 8 条早退缓冲、满了就丢，报告空白；② 别的机型 `HyperOSKeyguardRootView` 类不存在（hook 失败）→ attach 永不执行 → enable 一次没调、广播没人收，**连「开始记录」按钮都落空**——而这正是最需要证据的场景；③ 只拨旧「调试日志」开关不点新按钮 → 值要等下一次 create() 才读，沉浸式没开就永远等不到。
+    - **修复**：① `Diag` 改「**内存始终缓冲，开关只 gate 跨进程回写**」——`log/put` 无条件进 80 条环形缓冲 + 快照 map，删早退缓冲；`enabled` 只决定 flush；`enable(true)` 时立即 flush 开机至今全部历史。事件是锁屏生命周期级别（非每帧），成本可忽略；`scheduleFlush` 加 enabled 门避免白贴主线程回调。② **广播接收器上移全局**：`HookEntry.moduleReceiver`（静态，`ActivityThread.currentApplication()` 拿 context，`RECEIVER_EXPORTED`），在 hook 武装**成败两条路径末尾都注册**（幂等，Vector 双回调不会重装）；覆盖层内旧注册/注销与 `restartReceiver` 字段删除。REFRESH 处理保留旧行为：同步翻转存活 overlay 的 `debugLog`/`MediaSource.verboseLog`（新增 `setDebugLog`），不等 create()。③ App 侧旧「调试日志」开关 onChange 也发 `ACTION_DIAG_REFRESH`——两个入口都即时生效。④ rev HE4→HE5。
+    - **修后行为**：不管沉浸式开没开、hook 成没成，装包后点「开始记录」（或只拨调试日志开关），开机至今全部事件（含 `systemui hook unavailable: ClassNotFound…` 这种关键证据）一次性进报告。
+    - **测试包**：`Hyper-MeloLock-v0.3.5-diagfix-test.apk`（正式签名、版本仍 0.3.5/15，可直接覆盖装），已传 blog：`https://blog.zuiges.com/downloads/melolock/Hyper-MeloLock-v0.3.5-diagfix-test.apk`；`latest.json` 故意不动（仍指 GitHub 正式版）。

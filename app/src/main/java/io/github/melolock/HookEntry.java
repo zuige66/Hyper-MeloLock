@@ -1,6 +1,9 @@
 package io.github.melolock;
 
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.util.Log;
 import android.view.View;
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -30,7 +33,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
         // 机型门禁已撤（2026-10-09，zuige 正在多机型测试）：任何 SystemUI 都尝试 hook，
         // 目标类找不到自然失败关闭、恢复原生锁屏。非澎湃 3 上的表现靠测试反馈收集。
         if (!"com.android.systemui".equals(param.packageName)) return;
-        Log.i(TAG, "HookEntry rev=HE4 (gate removed for multi-device testing)");
+        Log.i(TAG, "HookEntry rev=HE5 (gate removed; global diag receiver)");
         try {
             Class<?> root = XposedHelpers.findClass(
                     "com.android.keyguard.widget.HyperOSKeyguardRootView", param.classLoader);
@@ -77,10 +80,76 @@ public final class HookEntry implements IXposedHookLoadPackage {
             XposedBridge.log(TAG + ": hook armed (version gate removed, hook-point lookup is the fallback)");
             Log.i(TAG, "SystemUI root constructor hook installed");
             Diag.log("systemui root constructor hook installed");
+            // 广播通道与 hook 成败无关： hook 挂了的机型（根视图类不存在）恰恰最需要
+            // 「开始记录」把开机缓冲 flush 出来——那种设备上覆盖层永远建不起来。
+            installModuleReceiver(param.classLoader);
         } catch (Throwable error) {
             Diag.log("systemui hook unavailable: " + error);
             XposedBridge.log(TAG + ": incompatible hook; native lock screen retained (loader=" + param.classLoader + "): " + error);
             Log.e(TAG, "SystemUI hook unavailable; loader=" + param.classLoader, error);
+            installModuleReceiver(param.classLoader);
+        }
+    }
+
+    /**
+     * 模块动作广播的全局接收器（2026-10-14 从 LockScreenOverlay.start() 上移）。
+     *
+     * 为什么必须全局：旧注册点在覆盖层里，而「沉浸式没开 / 模块总开关关着 / hook 失败」
+     * 三种远程适配最常见的场景下覆盖层根本不存在——App 端「开始记录」「清除报告」「重启
+     * 作用域」全部落空，用户侧零反馈。现在挂在 SystemUI 应用上下文上，活到进程死，
+     * 与覆盖层生命周期彻底解耦。
+     *
+     * 三个 action：
+     *  - ACTION_DIAG_REFRESH：App 刚写完 debug_log，立即重读并开关回传，不等 create()。
+     *    打开时会把开机至今缓冲的全部历史一次性 flush（见 Diag.enable）。
+     *  - ACTION_DIAG_CLEAR：清事件缓冲并回写空流。
+     *  - ACTION_RESTART_SYSTEMUI：kill 自己完成作用域重启（无 root 方案）。
+     */
+    private static final BroadcastReceiver moduleReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            String action = intent.getAction();
+            if (Config.ACTION_DIAG_REFRESH.equals(action)) {
+                // elementValues 查不到（App 进程不在）时按关处理，与 debugLogOn() 一致。
+                boolean on = debugLogOn(context);
+                Diag.enable(on, context);
+                // 同步存活覆盖层的细节日志开关（旧注册器在 LockScreenOverlay 里做的事，
+                // 上移后不能丢）：不同步就要等下一次 create() 才翻转 MediaSource.verboseLog。
+                for (LockScreenOverlay overlay : overlays.values().toArray(new LockScreenOverlay[0])) {
+                    try { overlay.setDebugLog(on); } catch (Throwable ignored) { }
+                }
+                Log.i(TAG, "Diag toggled via broadcast: " + on);
+            } else if (Config.ACTION_DIAG_CLEAR.equals(action)) {
+                Diag.clear();
+                Log.i(TAG, "Diagnostic report cleared via broadcast");
+            } else if (Config.ACTION_RESTART_SYSTEMUI.equals(action)) {
+                Log.i(TAG, "Restart requested via broadcast; killing SystemUI for a clean reload");
+                android.os.Process.killProcess(android.os.Process.myPid());
+            }
+        }
+    };
+    private static volatile boolean moduleReceiverOn;
+
+    /**
+     * 用 SystemUI 应用上下文注册 {@link #moduleReceiver}。legacy Xposed 的
+     * handleLoadPackage 拿不到 Context，走 {@code ActivityThread.currentApplication()}。
+     * 幂等：重复调用直接返回（Vector 对同包回调两次，两个 classLoader 都会走到这里）。
+     */
+    private static void installModuleReceiver(ClassLoader loader) {
+        if (moduleReceiverOn) return;
+        try {
+            Context app = (Context) XposedHelpers.callStaticMethod(
+                    XposedHelpers.findClass("android.app.ActivityThread", loader), "currentApplication");
+            if (app == null) return;
+            IntentFilter actions = new IntentFilter();
+            actions.addAction(Config.ACTION_DIAG_REFRESH);
+            actions.addAction(Config.ACTION_DIAG_CLEAR);
+            actions.addAction(Config.ACTION_RESTART_SYSTEMUI);
+            // RECEIVER_EXPORTED：广播来自另一个 uid（我们的 App），NOT_EXPORTED 收不到。
+            app.registerReceiver(moduleReceiver, actions, Context.RECEIVER_EXPORTED);
+            moduleReceiverOn = true;
+            Log.i(TAG, "Module action receiver registered (diag refresh/clear + restart)");
+        } catch (Throwable error) {
+            Log.w(TAG, "Module action receiver install failed", error);
         }
     }
 

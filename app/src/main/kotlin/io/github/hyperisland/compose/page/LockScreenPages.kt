@@ -802,7 +802,17 @@ internal fun LockAppearancePage() {
                     summary = "输出细节日志用于排查",
                     icon = null,
                     checked = value(Config.DEBUG_LOG) != 0,
-                    onCheckedChange = { update(Config.DEBUG_LOG, if (it) 1 else 0) },
+                    onCheckedChange = {
+                        update(Config.DEBUG_LOG, if (it) 1 else 0)
+                        // 旧开关也走即时生效：发广播让 SystemUI 立即重读 debug_log 并 flush
+                        // 开机至今缓冲的全部历史。不走广播就要等下一次 create()——沉浸式没开
+                        // 或 hook 失败的设备上永远等不到，报告永远空白（2026-10-14 修）。
+                        try {
+                            context.sendBroadcast(
+                                Intent(Config.ACTION_DIAG_REFRESH).setPackage(Config.SYSTEMUI_PACKAGE)
+                            )
+                        } catch (_: Throwable) { }
+                    },
                 )
                 // 远程适配的核心反馈位：日志在 SystemUI 进程，用户设备没 root/adb 抓不到，
                 // 打开调试日志复现问题后在这里展开看、一键复制发给开发者。
