@@ -43,7 +43,9 @@
 
 ## 上传清单
 
-1. GitHub Release（tag `v0.3.5`，资产 `Hyper-MeloLock-v0.3.5.apk`）——可用 PAT 经 API 创建
-2. blog 侧 `downloads/melolock/latest.json` 按上面 JSON 更新（zuige 手动上传；若 APK 也放
-   blog 直链，把 `apkUrl` 换成 `https://blog.zuiges.com/downloads/melolock/Hyper-MeloLock-v0.3.5.apk`）
-3. 发布前让 zuige 过目 release notes
+1. ✅ GitHub Release 已发布：https://github.com/zuige66/Hyper-MeloLock/releases/tag/v0.3.5
+   （资产 `Hyper-MeloLock-v0.3.5.apk` 3,700,044 字节已上传，直链 200 OK 验证过）
+2. ⬜ blog 侧 `downloads/melolock/latest.json` 按上面 JSON 更新（**待 zuige 手动上传**，
+   生成好的文件在仓库根 `build/latest.json`；若 APK 也放 blog 直链，把 `apkUrl` 换成
+   `https://blog.zuiges.com/downloads/melolock/Hyper-MeloLock-v0.3.5.apk`）
+3. ✅ tag `v0.3.5` 已推送远端

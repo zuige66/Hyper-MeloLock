@@ -1631,3 +1631,9 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **动机**：zuige 拍板「直接不要这个门禁」——#59 的取舍①作废。理由：门禁精确匹配 `16.03.251211.r` + `17.1.4.26.0`，同 OS3 小版本的不同区域包都进不来，成了多机型适配的头号拦截器；而诊断报告已经能拿到实际版本号，风险可控（Hook 找不到类/方法时天然失败关闭，本就有兜底）。
     - **实现**：`LockScreenOverlay.compatible()` → `reportVersions()`（void，不再返回布尔）：仍采集 `systemui_version` / `plugin_version` 两个快照键回传（远程适配第一证据），但**不再拦截渲染**；`start()` 里 `if (!compatible()) return` 改为无条件 `reportVersions()`。`compatible` 快照键取消（不再有 pass/fail 语义）。附带改掉三处过时注释/文案（HookEntry「exact OS3 build」→「version gate removed」等）。
     - **风险口径**：视图结构不同的 ROM 上可能错乱，但失败关闭兜底仍在（native views missing → render skip）；README「适配情况」改为如实措辞（门禁已移除 + 多机型测试期 + 出问题带诊断报告反馈）。
+
+61. 2026-10-14 **v0.3.5 发布**：
+
+    - versionCode 15 / versionName 0.3.5，tag `v0.3.5`，Release 经 API 创建并上传 APK（3,700,044 字节，apksigner 校验 SHA-1 `2b73…c1f7` ✓，直链 200 OK）。https://github.com/zuige66/Hyper-MeloLock/releases/tag/v0.3.5
+    - 内容 = #59 诊断报告 + #60 版本门禁移除。物料 `docs/release-v0.3.5.md`（含 latest.json）。
+    - **blog 备用源待 zuige 手动同步**：`build/latest.json` 已生成在仓库根（versionCode 15，apkUrl 指 GitHub 直链）；上传后 App 更新检查的备用源才指向新版本。
