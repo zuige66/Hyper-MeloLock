@@ -68,8 +68,8 @@ final class Diag {
 
     /**
      * 开关。由 {@code LockScreenOverlay.start()} 与 {@code create()} 按 debug_log 配置调用——
-     * start() 里的调用必须早于 {@code compatible()} 检查，这样「版本不匹配直接退回原生
-     * 锁屏」这条最需要证据的路径也有记录。
+     * start() 里的调用早于 {@code reportVersions()} 采集，这样开机阶段（版本采集之前）的
+     * 失败也能进早退缓冲。
      */
     static void enable(boolean on, Context systemContext) {
         context = systemContext;

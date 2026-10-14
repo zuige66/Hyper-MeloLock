@@ -1625,3 +1625,9 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **实现**：SystemUI 侧新增 `Diag.java`（事件环形缓冲 80 条 + 8 条开机早退缓冲、2 秒节流、insert 落工作线程不占主线程、`debug_log` 门控默认零开销），经现成 `/runtime` insert 通道回传；埋点覆盖 HookEntry（hook installed / root attached / attach failed）/ LockScreenOverlay（compatible 实际版本、create ok、native views missing、render skipped、restore、module enabled）/ MediaSource（session -> pkg、no session、empty gap、config read failed）。App 侧调试分组加「诊断报告」卡：展开/收起、状态快照 + 事件流水（新→旧）、「复制报告」一键进剪贴板（展开与复制前各重读一次保最新）。机制细节见本文档「真机日志驱动调试技能」节末的「远程诊断回传」小节。
     - **编译插曲**：`HookEntry` 新增 `debugLogOn(Context)` 用了短类名但文件只 import 过全限定用法 → `javac` 报找不到符号，补 `import android.content.Context` 后 `assembleDebug` 通过（7s）。
     - **未做（明确取舍）**：① 不放宽 `compatible()` 版本门禁——视图结构不同的 ROM 上强行渲染有错乱风险，先用报告拿到实际版本号再决定白名单；② 不做「清空」按钮——App 侧删不了 Provider（delete 抛 UnsupportedOperation），且 SystemUI 内存缓冲还在，清了也会被下次 flush 写回，环形缓冲自然淘汰即可。
+
+60. 2026-10-14 **版本门禁整体移除（v0.3.5）**：
+
+    - **动机**：zuige 拍板「直接不要这个门禁」——#59 的取舍①作废。理由：门禁精确匹配 `16.03.251211.r` + `17.1.4.26.0`，同 OS3 小版本的不同区域包都进不来，成了多机型适配的头号拦截器；而诊断报告已经能拿到实际版本号，风险可控（Hook 找不到类/方法时天然失败关闭，本就有兜底）。
+    - **实现**：`LockScreenOverlay.compatible()` → `reportVersions()`（void，不再返回布尔）：仍采集 `systemui_version` / `plugin_version` 两个快照键回传（远程适配第一证据），但**不再拦截渲染**；`start()` 里 `if (!compatible()) return` 改为无条件 `reportVersions()`。`compatible` 快照键取消（不再有 pass/fail 语义）。附带改掉三处过时注释/文案（HookEntry「exact OS3 build」→「version gate removed」等）。
+    - **风险口径**：视图结构不同的 ROM 上可能错乱，但失败关闭兜底仍在（native views missing → render skip）；README「适配情况」改为如实措辞（门禁已移除 + 多机型测试期 + 出问题带诊断报告反馈）。

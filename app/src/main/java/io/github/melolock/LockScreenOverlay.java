@@ -626,7 +626,7 @@ final class LockScreenOverlay {
     }
 
     void start() {
-        if (!compatible()) { Log.w(TAG, "SystemUI or plugin version differs; native lockscreen kept"); return; }
+        reportVersions();
         context.getContentResolver().registerContentObserver(Config.URI, false, switchObserver);
         IntentFilter events = new IntentFilter();
         events.addAction(Intent.ACTION_SCREEN_OFF); events.addAction(Intent.ACTION_SCREEN_ON); events.addAction(Intent.ACTION_USER_PRESENT);
@@ -635,7 +635,7 @@ final class LockScreenOverlay {
         context.registerReceiver(restartReceiver, new IntentFilter(Config.ACTION_RESTART_SYSTEMUI),
                 Context.RECEIVER_EXPORTED);
         observing = true;
-        Log.i(TAG, "Keyguard root compatible; observing module switch");
+        Log.i(TAG, "Keyguard root attached; observing module switch");
         Diag.log("observing module switch");
         updateSwitch();
     }
@@ -669,24 +669,23 @@ final class LockScreenOverlay {
         if (enabled) media.start(); else { Log.i(TAG, "Module switched off; restoring " + state()); media.stop(); restore("switch-off"); fullTimeTintOff(); WallpaperCoverPush.clearCover(); }
     }
 
-    private boolean compatible() {
+    /**
+     * 版本门禁已移除（v0.3.5）：不再按 systemui/plugin 版本号拦截渲染——其他机型 /
+     * ROM 小版本只要 hook 点还在（找不到类/方法时天然兜底失败关闭），就尝试生效。
+     * 实际版本号仍必须采集回传：远程适配时报告里一眼可见用户跑的是什么版本。
+     */
+    private void reportVersions() {
         try {
             PackageManager packages = context.getPackageManager();
             String systemui = packages.getPackageInfo("com.android.systemui", 0).versionName;
             String plugin = packages.getPackageInfo("miui.systemui.plugin", 0).versionName;
-            boolean ok = "16.03.251211.r".equals(systemui) && "17.1.4.26.0".equals(plugin);
-            // 远程诊断：实际版本号必须回传。「沉浸式不显示」最常见的原因就是这里不符，
-            // 而旧代码只打一行 warning 就退回原生锁屏，用户侧零感知、远程零证据。
             Diag.put("systemui_version", String.valueOf(systemui));
             Diag.put("plugin_version", String.valueOf(plugin));
-            Diag.put("compatible", ok ? "pass" : "fail");
-            Diag.log("compatible systemui=" + systemui + " plugin=" + plugin
-                    + " -> " + (ok ? "pass" : "fail"));
-            return ok;
+            Diag.log("versions systemui=" + systemui + " plugin=" + plugin + " (gate removed)");
         } catch (PackageManager.NameNotFoundException error) {
-            Diag.put("compatible", "fail:package-missing");
-            Diag.log("compatible check failed: " + error);
-            return false;
+            // 非 HyperOS 机器：hook 点大概率全部落空，走失败关闭，这里只留证据。
+            Diag.put("systemui_version", "package-missing");
+            Diag.log("version probe failed: " + error);
         }
     }
 

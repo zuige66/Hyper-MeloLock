@@ -74,7 +74,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             // 捕获锁屏中介实例：装不上只是「点小封面跳 App」退回直接启动（失败关闭）。
             try { hookMediatorCapture(param.classLoader); }
             catch (Throwable error) { Log.w(TAG, "Mediator capture hook install failed", error); }
-            XposedBridge.log(TAG + ": hook armed for exact OS3 build");
+            XposedBridge.log(TAG + ": hook armed (version gate removed, hook-point lookup is the fallback)");
             Log.i(TAG, "SystemUI root constructor hook installed");
             Diag.log("systemui root constructor hook installed");
         } catch (Throwable error) {
@@ -347,7 +347,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
         if (overlays.containsKey(root)) return;
         try {
             Log.i(TAG, "Keyguard root attached");
-            // 诊断回传开关在这里打开（早于 LockScreenOverlay.start() 的 compatible() 检查，
+            // 诊断回传开关在这里打开（早于 LockScreenOverlay.start() 的 reportVersions() 采集，
             // 也早于 create()）：「版本不符直接退回原生锁屏」这类零用户感知的失败也要有证据。
             Diag.enable(debugLogOn(root.getContext()), root.getContext());
             Diag.log("keyguard root attached");
