@@ -1679,4 +1679,14 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **歌词结论（排查后不改代码）**：「歌词显示在歌名位置」不是模块功能——是小米音乐 / cool music 这类 App 把**当前歌词行写进 MediaMetadata.title**（每 3~4 秒滚一行，`WallpaperCoverPush` 早就踩过：title 跟着歌词变导致封面去重失效），模块只是忠实显示 metadata.title。QQ 音乐 / 网易云不往 MediaSession 的 metadata 里写歌词，模块拿不到——要显示只能接各 App 私有接口（不稳定且有合规风险），不做。
     - 两个新键都进 `ELEMENT_DEFAULTS` → `elementSignature`，改完灭屏亮屏一次生效；rev HE6→HE7。
 
+67. 2026-10-14 **HE8：图标 v2 + 原生播放器栈不显示真因 + 充电文案闪烁 + 歌词实锤（zuige 真机反馈）**：
+
+    - **图标 v2**：zuige 再发参考图定稿——上一首＝左小右大双左三角、下一首＝左大右小双右三角（靠内的大）、播放＝大三角朝右，圆角明显加大。stroke 40→80/100（round join 半径 40/50@960），坐标已把 stroke 外扩计入，两三角间隙 30 不粘连（外扩 40 会吃掉原 60 间隙，tip 右移 50 补偿）。
+    - **原生栈不显示真因（关键）**：pre-draw 守卫每帧跑 `if (expanded) show(notifications) else hide(notifications)`——原生播放器模式 `expanded` 恒 false，`showMusicNative` 的 show() 下一帧就被打回 INVISIBLE。修复：`fxNativePlayer || expanded` 才 show；守卫染色节流同步改成 `fxNativePlayer || expanded`（栈常驻显示要持续染色）。
+    - **充电文案闪烁**：`applyIndicationVisibility` 原来只在 showMusic（约 2 秒一次）跑，亮屏到下一轮之间原生文案可见。改为 **id 缓存直查**（`getIdentifier` 结果缓存 + `root.findViewById`，每帧跑都便宜）并挂进 pre-draw 守卫每帧压住——pre-draw 先于绘制，理论零闪烁；id 查不到退回类名 TTL 扫描兜底。
+    - **歌词实锤（重大）**：metadata 探针（`MediaSource.dumpMetadataProbe`，debug_log 门控、按 包名|title 去重）抓到 QQ 音乐的 MediaMetadata 里有自定义字段 **`ucar.media.metadata.LYRICS_WHOLE`＝完整 LRC 歌词**。「歌词显示在歌名位置」从此有数据源：小米音乐/cool music 是 App 自己把歌词行写进 title，QQ 不写 title 但把整篇 LRC 塞在自定义 key 里——可以自己解析 + 按播放进度选行实现逐句歌词（待 zuige 拍板方案）。
+    - **编译插曲**：`android.media.session.MediaController` 没有 `getMediaDescription()`（那是 deprecated 的 `android.media.MediaController` 的方法）——探针里 MediaDescription 一段删掉，keySet 遍历已覆盖全部自定义字段。
+    - rev HE7→HE8。测试包 `Hyper-MeloLock-v0.3.5-he8-test.apk` 上 blog（Pages「Deploy to GitHub Pages」步骤偶发 failure，用 `POST /repos/{owner}/{repo}/pages/builds` API 重触发后成功；验证时 `--max-time` 太短会把 3.7MB 下载截断成假不一致，要放宽到 120s 核对 size_download）。
+
+
 
