@@ -509,13 +509,13 @@ internal fun LockAppearancePage() {
     // 各分组的「恢复默认」键集（↺ 按钮）；背景组例外：三态存 SharedPreferences 非 elements。
     // 2026-10-11 重排：动效组取消（归位到各组件）；左下拉、永不息屏归全局；通知页独立成组。
     val sectionDefaultKeys: Map<String, List<String>> = mapOf(
-        "global" to listOf(Config.SWATCH_PICK, Config.SONG_FADE, Config.HIDE_SHORTCUTS, Config.BLOCK_LEFT_SHADE, Config.STAY_AWAKE),
+        "global" to listOf(Config.SWATCH_PICK, Config.SONG_FADE, Config.HIDE_SHORTCUTS, Config.HIDE_CHARGING, Config.BLOCK_LEFT_SHADE, Config.STAY_AWAKE),
         "notify" to listOf(Config.NOTIFY_CARD_TINT, Config.NOTIFY_CARD_BG, Config.NOTIFY_CARD_BG_PICK),
         "date" to listOf(Config.DATE_ENABLED, Config.DATE_SIZE, Config.DATE_WEIGHT, Config.DATE_COLOR, Config.DATE_SPACING),
         "sign" to listOf(Config.SIGN_ENABLED, Config.SIGN_SIZE, Config.SIGN_WEIGHT, Config.SIGN_COLOR, Config.SIGN_SPACING),
         "clock" to listOf(Config.CLOCK_SIZE, Config.CLOCK_SPACING, Config.CLOCK_WEIGHT, Config.CLOCK_COLOR, Config.CLOCK_ROUNDNESS, Config.CLOCK_STROKE),
         "cover" to listOf(Config.COVER_SCALE, Config.COVER_WIDTH, Config.COVER_HEIGHT, Config.COVER_SPACING, Config.COVER_POP),
-        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.PLAYER_CARD_POP, Config.PLAYER_VECTOR_ICONS, Config.MARQUEE_SPEED, Config.MARQUEE_PAUSE),
+        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.NATIVE_PLAYER, Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.PLAYER_CARD_POP, Config.PLAYER_VECTOR_ICONS, Config.MARQUEE_SPEED, Config.MARQUEE_PAUSE),
         "entry" to listOf(Config.ENTRY_BG, Config.ENTRY_BG_PICK),
         "debug" to listOf(Config.DEBUG_LOG),
     )
@@ -552,6 +552,13 @@ internal fun LockAppearancePage() {
                     icon = null,
                     checked = value(Config.HIDE_SHORTCUTS) != 0,
                     onCheckedChange = { update(Config.HIDE_SHORTCUTS, if (it) 1 else 0) },
+                )
+                PreferenceSwitch(
+                    title = "隐藏充电信息",
+                    summary = "隐藏锁屏底部充电提示文案",
+                    icon = null,
+                    checked = value(Config.HIDE_CHARGING) != 0,
+                    onCheckedChange = { update(Config.HIDE_CHARGING, if (it) 1 else 0) },
                 )
                 PreferenceSwitch(
                     title = "锁屏禁止左下拉",
@@ -682,6 +689,13 @@ internal fun LockAppearancePage() {
         }
         item {
             CollapsibleSection("播放器", "card", MiuixIcons.Music, expandedSections, ::toggleSection, { resetSection("card") }) {
+                PreferenceSwitch(
+                    title = "原生播放器",
+                    summary = "显示系统媒体卡代替自制卡片",
+                    icon = null,
+                    checked = value(Config.NATIVE_PLAYER) != 0,
+                    onCheckedChange = { update(Config.NATIVE_PLAYER, if (it) 1 else 0) },
+                )
                 PreferenceSwitch(
                     title = "按钮反馈",
                     summary = "按压缩放回弹与切键弹跳",

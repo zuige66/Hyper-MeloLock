@@ -1671,3 +1671,12 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **编译插曲**：`ObjectAnimator.ofFloat(tv, "translationX", 0f, -overflow.toFloat())` 在 Java 里 `int` 无 `.toFloat()`（那是 Kotlin 扩展）→ 改 `-(float) overflow`。
     - **测试包**：`Hyper-MeloLock-v0.3.5-marquee-test.apk`（正式签名可覆盖装）；blog 同款链路上传，`latest.json` 不动（仍指 GitHub 正式版）。
 
+66. 2026-10-14 **充电文案默认隐藏 + 原生播放器开关 + 通知染色残留第二修复（zuige 反馈）**：
+
+    - **隐藏底部充电/提示文案（`hide_charging`，全局分组，默认开＝隐藏）**：目标是原生 `keyguard_indication_text_bottom`（「正在充电 XX%」/ 指纹提示）。实现仿 `hideNativeClockLayers`：按「类名/id 含 indication」收集（自绘场景子树排除），1s TTL 缓存重扫——系统更新文案时可能把可见性改回，必须每轮 showMusic 重新压住；`restore()` 里 `forceRestoreIndication()` 强制 VISIBLE 复原（同 `forceRestoreMainClock` 语义）。
+    - **原生播放器开关（`native_player`，播放器分组置顶，默认关）**：动机——原生媒体卡 v0.3.4 起能染色了，自制播放器当初存在的核心理由（原生卡染不了色、观感突兀）消失。开＝`showMusicNative()`：自制卡片 GONE（保留实例，切档 restore 重建即回），直接显示原生通知栈（原生媒体卡在其中）；「展开通知」入口没有切换语义一并 GONE；progressTicker 不跑（没有自制进度条）。关＝现状。`showNotifications()` 在此模式下分流回 `showMusic()`（两页合一）。时钟/封面背景仍是自绘的。
+    - **通知染色残留第二修复**：第一轮（#62）修了「泵门闩不看媒体」和「按树浅扫漏 detach 行」，但 `mediaAlive` 的置否**只发生在锁屏 render 的媒体分支**——桌面/解锁期间 render 在更早的 `!lockscreenCycle`/`keyguard-unlocked` 分支就 return，媒体在桌面上被关掉时 `mediaAlive` 永远停在 true，染色泵继续拿旧专辑色染**桌面**的通知；锁屏音乐页则因通知栈 GONE、pre-draw 不跑，被动等泵复原要拖到「展开通知」那一刻。修复：① `render()` 四个早退分支（unlocked-cycle / keyguard-unlocked / display-off / snapshot==null）在 `snapshot==null && mediaAlive` 时置否并**主动** `applyNotificationTint(false)`（登记表全表复原，不依赖栈可见；幂等）；② snapshot==null 分支同样主动推一次，不等泵。
+    - **歌词结论（排查后不改代码）**：「歌词显示在歌名位置」不是模块功能——是小米音乐 / cool music 这类 App 把**当前歌词行写进 MediaMetadata.title**（每 3~4 秒滚一行，`WallpaperCoverPush` 早就踩过：title 跟着歌词变导致封面去重失效），模块只是忠实显示 metadata.title。QQ 音乐 / 网易云不往 MediaSession 的 metadata 里写歌词，模块拿不到——要显示只能接各 App 私有接口（不稳定且有合规风险），不做。
+    - 两个新键都进 `ELEMENT_DEFAULTS` → `elementSignature`，改完灭屏亮屏一次生效；rev HE6→HE7。
+
+

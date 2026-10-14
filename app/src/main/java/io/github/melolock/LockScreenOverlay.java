@@ -392,6 +392,8 @@ final class LockScreenOverlay {
      * 开＝整排容器置 GONE（图标与触摸响应一起没），入口按钮改走几何兜底对齐。
      */
     private boolean hideShortcuts;
+    private boolean fxHideIndication;   // 隐藏锁屏底部充电/提示文案（hide_charging，默认开）
+    private boolean fxNativePlayer;     // 原生播放器模式（native_player）：不建自制卡片，直接显示原生通知栈
     /** 快捷栏容器缓存（见 applyShortcutRowVisibility）：避免每个 pre-draw 周期都全树按 id 找。 */
     private View cachedShortcutRow;
     private int shortcutRowLookups;
@@ -710,6 +712,11 @@ final class LockScreenOverlay {
         if (!lockscreenCycle) {
             // 下拉桌面通知栏时系统仍可能把 keyguard root 保持 attached。这个周期
             // 标记优先于 KeyguardManager，确保自绘时间/背景绝不渗到桌面通知栏。
+            if (snapshot == null && mediaAlive) { mediaAlive = false; applyNotificationTint(false); }
+            //  ↑ 桌面/解锁期间媒体被关掉：render 的媒体分支（下方 snapshot==null）根本走不到，
+            //    mediaAlive 永远停在 true → 染色泵继续拿旧专辑色染**桌面**的通知（2026-10-14 zuige
+            //    反馈「关闭音乐软件通知还染色」）。这里补上置否 + 主动复原（登记表全表复原，
+            //    不依赖通知栈此刻可见——pre-draw 在 GONE 的栈上不跑，被动等泵会漏）。
             if (snapshot != null && foreground == null) preCreate(snapshot);
             else if (foreground != null && !suspended) suspend("desktop-notification-shade");
             skip("unlocked-cycle");
@@ -728,6 +735,7 @@ final class LockScreenOverlay {
         if (keyguard == null || !keyguard.isKeyguardLocked()) {
             // 桌面上不接管界面，但趁媒体回调把场景提前建好（不可见）：
             // 一播放歌曲场景就绪，之后锁屏/熄屏/亮屏都不用再 create()。
+            if (snapshot == null && mediaAlive) { mediaAlive = false; applyNotificationTint(false); }
             if (snapshot != null && foreground == null) {
                 preCreate(snapshot);
                 skip("scene prebuilt on desktop");
@@ -743,12 +751,16 @@ final class LockScreenOverlay {
             // 屏幕已灭、用户看不见，正好把场景提前建好：「桌面播歌 → 熄屏 → 亮屏」
             // 这条路径上从来没有场景（解锁期间不接管界面），亮屏得现 create()，
             // 实测 126~145ms，正是「先见原生锁屏」的来源。
+            if (snapshot == null && mediaAlive) { mediaAlive = false; applyNotificationTint(false); }
             if (snapshot != null && foreground == null) preCreate(snapshot);
             skip("display-off");
             return;
         }
         if (snapshot == null) {
             mediaAlive = false;   // 染色泵据此自动复原停泵（锁屏留最后一帧的取舍不变，只停染色）
+            if (tintOn) applyNotificationTint(false);
+            //  ↑ 主动复原一次，不等染色泵：通知栈在音乐页是 GONE，pre-draw 不跑，
+            //    被动等泵只能拖到「展开通知」那一刻才复原（2026-10-14 zuige 反馈残留）。
             // 锁屏上**只要有最后一帧就绝不撤层**。
             //
             // 旧写法只在 isStillPlaying() 时才保留、否则走 restore("render-no-session")。真机实测
@@ -1057,6 +1069,8 @@ final class LockScreenOverlay {
         fxPlayerCardPop = elem(elements, Config.PLAYER_CARD_POP) != 0;
         fxVectorIcons = elem(elements, Config.PLAYER_VECTOR_ICONS) != 0;
         hideShortcuts = elem(elements, Config.HIDE_SHORTCUTS) != 0;
+        fxHideIndication = elem(elements, Config.HIDE_CHARGING) != 0;
+        fxNativePlayer = elem(elements, Config.NATIVE_PLAYER) != 0;
         notifyCardTint = elem(elements, Config.NOTIFY_CARD_TINT) != 0;
         notifyBgConfig = elem(elements, Config.NOTIFY_CARD_BG);
         notifyBgPick = coercePick(elem(elements, Config.NOTIFY_CARD_BG_PICK));
@@ -1840,9 +1854,10 @@ final class LockScreenOverlay {
     }
 
     private void showMusic() {
+        if (fxNativePlayer) { showMusicNative(); return; }
         boolean animateIn = !playerSceneVisible;
         boolean returning = expanded;   // 从通知页返回：走共享元素的反向动画
-        expanded = false; hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility();
+        expanded = false; hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility(); applyIndicationVisibility();
         // 取消动画**只在真的发生页面切换时做**：showMusic() 是每次快照（约 2 秒一次）都被
         // render() 调一遍的，无条件 cancel 会把刚启动的组件动效（封面弹入）在画出第一帧前
         // 就掐掉，而且缩放会永远卡在动画起点 0.9 —— 真机表现就是「封面弹入没生效」。
@@ -1903,6 +1918,29 @@ final class LockScreenOverlay {
         ensureCoverVisible();
         playerSceneVisible = true;
         main.removeCallbacks(progressTicker); main.post(progressTicker);
+    }
+
+    /**
+     * 原生播放器模式（native_player）：自制卡片退场（GONE 保留实例，关掉开关走 restore 重建即可回），
+     * 直接显示原生通知栈——原生媒体卡（MiuiMediaHeaderView）在其中，v0.3.4 起支持染色，
+     * 观感与原生锁屏一致。时钟/封面背景仍是自绘的；「展开通知」入口没有切换语义，一并隐藏。
+     */
+    private void showMusicNative() {
+        expanded = false; playerSceneVisible = true;
+        hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility(); applyIndicationVisibility();
+        foreground.setVisibility(View.VISIBLE); foreground.setAlpha(1f);
+        cover.setVisibility(View.VISIBLE); cover.setAlpha(1f); cover.setTranslationY(0f);
+        playerCard.setVisibility(View.GONE);
+        immersiveClock.setVisibility(View.VISIBLE); immersiveClock.setAlpha(1f);
+        show(notifications);
+        if (notifications != null) {
+            notifications.animate().cancel();
+            notifications.setAlpha(1f); notifications.setTranslationY(0f);
+        }
+        if (notificationButton != null) notificationButton.setVisibility(View.GONE);
+        applyNotificationTint(true);
+        main.removeCallbacks(progressTicker);
+        if (!fxNativePlayer) main.post(progressTicker);   // native 模式没有自制进度条，不跑 ticker
     }
 
     /** 兜底：场景该显示时，背景层不该是 GONE 或半透明（解锁淡出期间由 unlockSignalled 拦住）。 */
@@ -1986,10 +2024,11 @@ final class LockScreenOverlay {
     }
 
     private void showNotifications() {
+        if (fxNativePlayer) { showMusic(); return; }   // 原生播放器模式两页合一：原生栈常驻，没有「展开通知」可切
         expanded = true; playerSceneVisible = false; main.removeCallbacks(progressTicker);
         // The album backdrop and the module clock remain visible. Only the native
         // notification stack is revealed; restoring all views would show wallpaper.
-        show(notifications); hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility(); applyNotificationTint(true);
+        show(notifications); hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility(); applyIndicationVisibility(); applyNotificationTint(true);
         immersiveClock.setVisibility(View.VISIBLE); immersiveClock.setAlpha(1f);
         foreground.animate().cancel(); cover.animate().cancel(); playerCard.animate().cancel();
         foreground.setVisibility(View.VISIBLE); foreground.setAlpha(1f); cover.setAlpha(1f); cover.setTranslationY(0f);
@@ -2152,6 +2191,7 @@ final class LockScreenOverlay {
         if (foreground != null || background != null || shown != null) Log.i(TAG, "restore reason=" + reason + " " + state());
         Diag.log("restore: " + reason);
         applyNotificationTint(false);   // 染过就要复原：原生通知栈要带着原始 scrim 回锁屏
+        forceRestoreIndication();       // 底部充电/提示文案同理（hide_charging 开过的话）
         savedCardTints.clear();
         savedBgDrawables.clear();
         // 插进媒体卡的圆角色层先从宿主撤掉再清表：只 clear 的话视图还挂在卡里、引用丢失，
@@ -2886,6 +2926,54 @@ final class LockScreenOverlay {
         changedViews.clear();
     }
     /** Hides every stock keyguard clock layer; ROM themes may add one after create(). */
+    // ---------- 底部充电/提示文案（hide_charging，默认隐藏） ----------
+
+    private final java.util.ArrayList<View> cachedIndicationViews = new java.util.ArrayList<>();
+    private final java.util.ArrayList<View> hiddenIndicationViews = new java.util.ArrayList<>();
+    private long indicationScanAtMs;
+
+    /**
+     * 底部充电/提示文案（原生 keyguard_indication_text_bottom，类名 KeyguardIndicationTextView）：
+     * 开关开时隐藏。仿 hideNativeClockLayers 的 1s 缓存重扫——系统更新文案时可能把可见性
+     * 改回，必须每轮 showMusic 重新压住；restore() 时 forceRestoreIndication() 复原。
+     */
+    private void applyIndicationVisibility() {
+        if (root == null || !fxHideIndication) return;
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - indicationScanAtMs >= NATIVE_SCAN_TTL_MS) {
+            indicationScanAtMs = now;
+            cachedIndicationViews.clear();
+            collectIndicationViews(root, cachedIndicationViews);
+        }
+        hiddenIndicationViews.clear();
+        for (int i = 0; i < cachedIndicationViews.size(); i++) {
+            View hit = cachedIndicationViews.get(i);
+            hide(hit);
+            hiddenIndicationViews.add(hit);
+        }
+    }
+
+    /** 收集「类名/id 含 indication」的视图（不改动任何状态）；自绘场景子树排除。 */
+    private void collectIndicationViews(View view, java.util.List<View> out) {
+        if (view == null || view == foreground || view == background) return;
+        String className = view.getClass().getName().toLowerCase(java.util.Locale.ROOT);
+        String idName = resourceName(view);
+        if (className.contains("indication") || idName.contains("indication")) out.add(view);
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) collectIndicationViews(group.getChildAt(i), out);
+        }
+    }
+
+    /** 复原底部文案（场景销毁/换外观重建时）：强制 VISIBLE，同 forceRestoreMainClock 的兜底语义。 */
+    private void forceRestoreIndication() {
+        for (int i = 0; i < hiddenIndicationViews.size(); i++) {
+            try { hiddenIndicationViews.get(i).setVisibility(View.VISIBLE); } catch (Throwable ignored) { }
+        }
+        hiddenIndicationViews.clear();
+        cachedIndicationViews.clear();
+    }
+
     private void hideNativeClockLayers(View view) {
         // 每帧全树递归（含 resourceName 资源表反查）是锁屏/下拉响应变慢的一处主要开销
         // （2026-10-12）：命中列表缓存 1 秒，期间每帧只对列表跑；视图树换了由 create() 清缓存。

@@ -233,6 +233,20 @@ public final class Config {
     public static final String HIDE_SHORTCUTS = "hide_shortcuts";
 
     /**
+     * 隐藏锁屏底部充电/提示文案（外观页「全局」分组，默认开＝隐藏）：
+     * 目标是原生 keyguard_indication_text_bottom（「正在充电 XX%」/ 指纹提示那一行）。
+     * 模块关闭或场景销毁时复原原生视图。
+     */
+    public static final String HIDE_CHARGING = "hide_charging";
+
+    /**
+     * 原生播放器模式（外观页「播放器」分组，默认关）：
+     * 开＝沉浸锁屏不再显示自制播放器卡片，直接显示原生通知栈（原生媒体卡在其中，
+     * 已支持染色）；关＝现状自制播放器。
+     */
+    public static final String NATIVE_PLAYER = "native_player";
+
+    /**
      * 通知卡跟随封面（notify_card_tint，默认开）。
      *
      * 展开通知时原生媒体卡与通知卡是系统黑底/白底，和沉浸背景不搭。打开后按封面主色
@@ -315,6 +329,8 @@ public final class Config {
         ELEMENT_DEFAULTS.put(MARQUEE_PAUSE, 15);          // 秒，5~60
         ELEMENT_DEFAULTS.put(DEBUG_LOG, 0);
         ELEMENT_DEFAULTS.put(HIDE_SHORTCUTS, 0);
+        ELEMENT_DEFAULTS.put(HIDE_CHARGING, 1);           // 默认隐藏（zuige 2026-10-14：底部充电文案默认不要）
+        ELEMENT_DEFAULTS.put(NATIVE_PLAYER, 0);
         ELEMENT_DEFAULTS.put(STAY_AWAKE, 0);
         ELEMENT_DEFAULTS.put(NOTIFY_CARD_TINT, 1);
         ELEMENT_DEFAULTS.put(NOTIFY_CARD_BG, 0);
