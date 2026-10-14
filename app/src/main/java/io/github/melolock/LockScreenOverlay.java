@@ -594,14 +594,18 @@ final class LockScreenOverlay {
                     hideNativeWallpaperLayers(root);
                     hideNativeClockLayers(root);
                     applyShortcutRowVisibility();
+                    applyIndicationVisibility();
                     // 通知栈的显隐完全由 expanded 决定：展开时它自己在淡入（由 show() 保证可见），
                     // 收起时立即隐藏——不再做淡出（淡出层盖在时钟上，会让时间看起来闪一下）。
-                    if (expanded) show(notifications); else hide(notifications);
+                    // 原生播放器模式例外：栈常驻显示（原生媒体卡就是「播放器」），expanded 恒 false
+                    // ——不能让它每帧把栈打回 INVISIBLE（2026-10-14 zuige 反馈「开了原生播放器
+                    // 播放器和按钮全没了」的真因：showMusicNative show 完，守卫下一帧又 hide）。
+                    if (fxNativePlayer || expanded) show(notifications); else hide(notifications);
                     // 展开期间重挂：系统 rebind 行视图会冲掉滤镜。**必须节流**（2026-10-12）：
                     // 这行原本每个绘制帧跑一次全量浅扫（每视图一次 resourceName + 反射 setTint），
                     // 而 stackAnchor 就是 notifications（见 attachStackTintPump），常驻泵已经在
                     // 500ms 节流地扫同一棵树了——每帧再扫一遍纯属重复劳动，正是下拉卡顿的来源之一。
-                    if (expanded) {
+                    if (fxNativePlayer || expanded) {
                         long nowMs = android.os.SystemClock.elapsedRealtime();
                         if (nowMs - lastNotifyTintAtMs >= NOTIFY_TINT_THROTTLE_MS) {
                             lastNotifyTintAtMs = nowMs;
@@ -2931,14 +2935,30 @@ final class LockScreenOverlay {
     private final java.util.ArrayList<View> cachedIndicationViews = new java.util.ArrayList<>();
     private final java.util.ArrayList<View> hiddenIndicationViews = new java.util.ArrayList<>();
     private long indicationScanAtMs;
+    private int indicationIdA = -1, indicationIdB = -1;   // getIdentifier 结果缓存（-1=未查，0=查过没有）
 
     /**
-     * 底部充电/提示文案（原生 keyguard_indication_text_bottom，类名 KeyguardIndicationTextView）：
-     * 开关开时隐藏。仿 hideNativeClockLayers 的 1s 缓存重扫——系统更新文案时可能把可见性
-     * 改回，必须每轮 showMusic 重新压住；restore() 时 forceRestoreIndication() 复原。
+     * 底部充电/提示文案（原生 keyguard_indication_text_bottom）：开关开时隐藏。
+     * 主路径 = id 直查（getIdentifier 结果缓存，findViewById 每帧跑都便宜）——**挂进 pre-draw
+     * 守卫每帧压住**：否则只在 showMusic（约 2 秒一次）跑，亮屏到下一次 showMusic 之间
+     * 原生文案可见，用户看到「开屏闪烁一下才消失」（2026-10-14 zuige 反馈）。
+     * id 查不到（ROM 改名/资源包名不同）退回类名扫描（1s TTL 缓存，同 hideNativeClockLayers）。
      */
     private void applyIndicationVisibility() {
         if (root == null || !fxHideIndication) return;
+        if (indicationIdA < 0) {
+            indicationIdA = context.getResources().getIdentifier("keyguard_indication_text_bottom", "id", "com.android.systemui");
+            indicationIdB = context.getResources().getIdentifier("keyguard_indication_text_bottom", "id", "miui.systemui.plugin");
+        }
+        View hit = null;
+        if (indicationIdA != 0) hit = root.findViewById(indicationIdA);
+        if (hit == null && indicationIdB != 0) hit = root.findViewById(indicationIdB);
+        if (hit != null) {
+            hide(hit);
+            hiddenIndicationViews.clear();
+            hiddenIndicationViews.add(hit);
+            return;
+        }
         long now = android.os.SystemClock.elapsedRealtime();
         if (now - indicationScanAtMs >= NATIVE_SCAN_TTL_MS) {
             indicationScanAtMs = now;
@@ -2947,9 +2967,9 @@ final class LockScreenOverlay {
         }
         hiddenIndicationViews.clear();
         for (int i = 0; i < cachedIndicationViews.size(); i++) {
-            View hit = cachedIndicationViews.get(i);
-            hide(hit);
-            hiddenIndicationViews.add(hit);
+            View fallback = cachedIndicationViews.get(i);
+            hide(fallback);
+            hiddenIndicationViews.add(fallback);
         }
     }
 

@@ -1,11 +1,11 @@
-<!-- 上一首（双左三角，圆角实心，stroke round join 与播放三角同款风格） -->
+<!-- 上一首（zuige 参考图 2026-10-14：双左三角，靠外小、靠内大，圆角明显；stroke 80 外扩 40 已计入坐标，两三角间隙 30 不粘连） -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="30dp" android:height="30dp"
     android:viewportWidth="960" android:viewportHeight="960">
     <path
         android:fillColor="#FFFFFFFF"
         android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="40"
+        android:strokeWidth="80"
         android:strokeLineJoin="round"
-        android:pathData="M180,480 L420,220 L420,740 Z M440,480 L680,220 L680,740 Z" />
+        android:pathData="M110,480 L310,330 L310,630 Z M420,480 L830,225 L830,735 Z"/>
 </vector>

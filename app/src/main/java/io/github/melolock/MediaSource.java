@@ -20,6 +20,32 @@ import java.util.concurrent.Executors;
 /** MediaSession-only data and transport layer; no player package names or ROM classes. */
 final class MediaSource {
     private static final String TAG = "MeloLock";
+
+    private String lastDumpedMetaKey;
+
+    /**
+     * debug_log 探针：把会话的 MediaMetadata **全部文本字段** + MediaDescription 三行打出来
+     * （按 包名|title 去重，一首歌只打一遍）。
+     * 用途：「歌词显示在歌名位置」的数据源实证——部分播放器（小米音乐 / cool music）把
+     * 当前歌词行写进 title；QQ 音乐 / 网易云到底有没有在任何字段带歌词，看这份输出就有答案，
+     * 不用猜（2026-10-14 zuige 两次问起）。
+     */
+    private void dumpMetadataProbe(MediaController controller, MediaMetadata metadata) {
+        if (!verboseLog || controller == null || metadata == null) return;
+        String title = String.valueOf(metadata.getText(MediaMetadata.METADATA_KEY_TITLE));
+        String key = controller.getPackageName() + "|" + title;
+        if (key.equals(lastDumpedMetaKey)) return;
+        lastDumpedMetaKey = key;
+        try {
+            StringBuilder text = new StringBuilder("metadata probe pkg=").append(controller.getPackageName());
+            for (String field : metadata.keySet()) {
+                String value = metadata.getString(field);
+                if (value == null || value.length() == 0) continue;
+                text.append(" | ").append(field).append('=').append(value);
+            }
+            Log.i(TAG, text.toString());
+        } catch (Throwable error) { Log.w(TAG, "metadata probe failed", error); }
+    }
     /**
      * 细节日志开关（debug_log，LockScreenOverlay.create() 按配置写这里）：
      * 关＝不打每轮快照的周期性日志（Session/Media ready/Keeping previous frame），
@@ -176,6 +202,7 @@ final class MediaSource {
                     if (artworkUri == null) continue;
                 } else if (art.isRecycled() || art.getWidth() < 16 || art.getHeight() < 16) continue;
                 selected = candidate;
+                dumpMetadataProbe(candidate, metadata);
                 if (art != null) snapshot = new Snapshot(candidate, art,
                         text(metadata.getText(MediaMetadata.METADATA_KEY_TITLE)),
                         text(metadata.getText(MediaMetadata.METADATA_KEY_ARTIST)), state.getActions(),

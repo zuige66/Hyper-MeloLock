@@ -1,11 +1,11 @@
-<!-- 实心三角播放（zuige 参考图风格：圆角实心三角，stroke round join 做圆角） -->
+<!-- 播放（zuige 参考图 2026-10-14：大三角朝右、圆角明显；stroke round join 做大圆角，外扩已计入坐标） -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="44dp" android:height="44dp"
     android:viewportWidth="960" android:viewportHeight="960">
     <path
         android:fillColor="#FFFFFFFF"
         android:strokeColor="#FFFFFFFF"
-        android:strokeWidth="40"
+        android:strokeWidth="100"
         android:strokeLineJoin="round"
-        android:pathData="M200,480 L780,220 L780,740 Z"/>
+        android:pathData="M300,480 L760,230 L760,730 Z"/>
 </vector>
