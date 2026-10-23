@@ -210,7 +210,7 @@ apksigner verify --print-certs -v app/build/outputs/apk/release/app-release.apk
 
 - **[开发文档](docs/DEVELOPMENT.md)** — 实现细节、SystemUI 侧机制与完整变更日志
 - **[常见问题与排查](docs/TROUBLESHOOTING.md)** — 问题 → 现象 → 定位方法 → 解决/结论（维护者向）
-- **[酷安发布文案](docs/COOLAPK-v0.3.1.md)** — v0.3.1 的对外介绍与更新说明（含发布前检查项）
+- **[酷安发布文案](docs/COOLAPK-v0.3.6.md)** — v0.3.6 的对外介绍与更新说明（含发布前检查项）
 - **[AGENTS.md](AGENTS.md)** — 面向 AI 协作者的工程约定与铁律
 
 ---
