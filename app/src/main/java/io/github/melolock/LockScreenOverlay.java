@@ -1424,9 +1424,16 @@ final class LockScreenOverlay {
         cardArt.setOnClickListener(v -> launchMusicApp());
         attachPressFeedback(cardArt);
         cardArt.setContentDescription("打开音乐应用");
+        // 隐藏小封面（hide_card_art）：封面 GONE 后文字两行才有地方真正居中——左侧那块
+        // 64dp 封面 + 14dp 边距是文字列的起点偏移，留着它「居中」只是在小半屏里居中。
+        // 代价：点封面跳 App 的入口随封面一起消失（开关 summary 已写明）。
+        // 仍把 cardArt 挂进树只是置 GONE：render() 的交叉淡入、applyCardColors 的取色回填都
+        // 还按「视图在树上」写，少一个 parent 就多一类 NPE 风险，而 GONE 子视图不占位、零绘制。
+        boolean hideArt = elem(elements, Config.HIDE_CARD_ART) != 0;
         header.addView(cardArt, new LinearLayout.LayoutParams(dp(64), dp(64)));
+        if (hideArt) cardArt.setVisibility(View.GONE);
         LinearLayout labels = new LinearLayout(context); labels.setOrientation(LinearLayout.VERTICAL); labels.setGravity(Gravity.CENTER_VERTICAL);
-        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, -1, 1f); labelParams.leftMargin = dp(14); header.addView(labels, labelParams);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, -1, 1f); labelParams.leftMargin = hideArt ? 0 : dp(14); header.addView(labels, labelParams);
         title = label(Color.WHITE, 22, true); artist = label(0xFF9E9EA3, 15, false);
         // 跑马灯：去掉省略号、允许按内容宽度排版（WRAP_CONTENT 才能溢出），外层裁剪框限制可见宽度。
         title.setEllipsize(null); artist.setEllipsize(null);
@@ -1440,14 +1447,15 @@ final class LockScreenOverlay {
         labels.addView(artistClip, new LinearLayout.LayoutParams(-1, dp(24)));
         marqueeTitle = new MarqueeController(main);
         marqueeTitle.configure(elem(elements, Config.MARQUEE_SPEED), elem(elements, Config.MARQUEE_PAUSE));
-        marqueeTitle.bind(title, titleClip); marqueeTitle.start();
+        marqueeTitle.bind(title, titleClip); marqueeTitle.setCentered(hideArt); marqueeTitle.start();
         marqueeArtist = new MarqueeController(main);
         marqueeArtist.configure(elem(elements, Config.MARQUEE_SPEED), elem(elements, Config.MARQUEE_PAUSE));
-        marqueeArtist.bind(artist, artistClip); marqueeArtist.start();
+        marqueeArtist.bind(artist, artistClip); marqueeArtist.setCentered(hideArt); marqueeArtist.start();
         LinearLayout controls = new LinearLayout(context); controls.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams controlsParams = new LinearLayout.LayoutParams(-1, dp(54)); controlsParams.topMargin = dp(4); card.addView(controls, controlsParams);
         if (fxVectorIcons) {
             iconWave = icon(R.drawable.ic_wave_rounded, 26, Color.WHITE); header.addView(iconWave, new LinearLayout.LayoutParams(dp(38), -1));
+            if (hideArt) iconWave.setVisibility(View.GONE);   // 右侧这块占位不让掉，「居中」只是在小半屏里居中
             iconHeart = icon(R.drawable.ic_heart_rounded, 26, Color.WHITE); controls.addView(iconHeart, controlParams());
             previous = icon(R.drawable.ic_media_previous_double, 30, Color.WHITE); previous.setOnClickListener(v -> transport(1)); attachPressFeedback(previous); controls.addView(previous, controlParams());
             playPause = icon(R.drawable.ic_media_pause_block, 44, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); attachPressFeedback(playPause); controls.addView(playPause, controlParams());
@@ -1457,6 +1465,7 @@ final class LockScreenOverlay {
         } else {
             // 旧版字符播放键（player_vector_icons=0 的回退）：TextView + Unicode 字形，形状随字体。
             iconWave = iconGlyph("⌁", 30, Color.WHITE); header.addView(iconWave, new LinearLayout.LayoutParams(dp(38), -1));
+            if (hideArt) iconWave.setVisibility(View.GONE);   // 同上：真居中要把右侧占位也让掉
             iconHeart = iconGlyph("\u2661", 28, Color.WHITE); controls.addView(iconHeart, controlParams());
             previous = iconGlyph("\u25c0", 30, Color.WHITE); previous.setOnClickListener(v -> transport(1)); attachPressFeedback(previous); controls.addView(previous, controlParams());
             playPause = iconGlyph("\u2161", 44, Color.WHITE); playPause.setOnClickListener(v -> transport(2)); attachPressFeedback(playPause); controls.addView(playPause, controlParams());
@@ -4130,7 +4139,10 @@ final class LockScreenOverlay {
      * 歌名 / 歌手跑马灯：文本超出裁剪框宽度时，做 translationX 循环滚动。
      * 不用系统内置 marquee——它的速度 / 停顿不可配；这里按可配的 dp/s 与停顿秒数自驱动。
      * 循环语义：停留 pauseSec → 从开头滚动到末尾 → 跳回开头 → 停留 pauseSec …（文本放得下时不滚动，恒左对齐）。
-     * 文本变化由 TextView 的 TextWatcher 触发重新测量；视图被 suspend/destroy 时 stop() 复位并停表。
+     * 居中模式（centered，hide_card_art 开启时）：**只在文本放得下时**生效——把文本平移到裁剪框
+     * 水平中线，溢出（要跑马灯）时仍从左侧 0 起滚，否则「从中间开始滚」既看不出头尾、也丢掉
+     * 「读到大半才启动滚动」的暗示。文本变化由 TextView 的 TextWatcher 触发重新测量；视图被
+     * suspend/destroy 时 stop() 复位并停表。
      * 位移用独立的 ObjectAnimator（不和 applyTextWithFade 的 ViewPropertyAnimator 淡入淡出串扰）。
      */
     private static final class MarqueeController {
@@ -4143,12 +4155,20 @@ final class LockScreenOverlay {
         private boolean pendingText = false;
         private boolean freshText = false;   // 刚换过文本：首滚用短停顿（3s），别让用户等满 15s 以为功能没生效
         private boolean verbose = false;     // debug_log：打印溢出/滚动启动（排查「跑马灯没滚」）
+        private boolean centered = false;    // 放得下时水平居中（隐藏小封面时文字两行居中用）
         private ObjectAnimator anim;
         private static final long FIRST_PAUSE_MS = 3000;
 
         MarqueeController(Handler h) { this.handler = h; }
 
         void setVerbose(boolean v) { this.verbose = v; }
+
+        /** 居中模式：文本放得下时水平居中（溢出要滚时仍从左侧起滚）。 */
+        void setCentered(boolean c) {
+            if (this.centered == c) return;
+            this.centered = c;
+            if (running) scheduleMeasure();   // 切换后立刻重算位置，不用等下一次换文本
+        }
 
         void configure(int speedDp, int pauseSecInt) {
             speedDpPerSec = Math.max(20, Math.min(120, speedDp));
@@ -4205,7 +4225,8 @@ final class LockScreenOverlay {
                 if (clipW == 0 || textW == 0) { handler.postDelayed(measure, 60); return; }  // 尚未布局完，下一帧再试
                 int overflow = currentOverflow();
                 if (overflow <= 4) {
-                    cancelAnim(); tv.setTranslationX(0f);
+                    cancelAnim();
+                    tv.setTranslationX(centeredOffset());
                     if (verbose) Log.i(TAG, "Marquee: fits (" + textW + "<=" + clipW + "), idle " + nextDelayMs() + "ms");
                     scheduleCycle(nextDelayMs());
                     return;
@@ -4219,7 +4240,7 @@ final class LockScreenOverlay {
             @Override public void run() {
                 if (!running || tv == null || clip == null) return;
                 int overflow = currentOverflow();
-                if (overflow <= 4) { cancelAnim(); tv.setTranslationX(0f); scheduleCycle(nextDelayMs()); return; }
+                if (overflow <= 4) { cancelAnim(); tv.setTranslationX(centeredOffset()); scheduleCycle(nextDelayMs()); return; }
                 // 速度是 dp/s，溢出是 px：必须乘 density，否则实际滚动速度慢 density 倍
                 // （3x 屏上 45dp/s 被跑成 ~15dp/s，长歌名滚一轮要 10s+，观感就是「没在滚」）。
                 float density = tv.getResources().getDisplayMetrics().density;
@@ -4243,5 +4264,12 @@ final class LockScreenOverlay {
         };
 
         private void cancelAnim() { if (anim != null) { anim.cancel(); anim = null; } }
+
+        /** 居中位移量：仅在 centered 且文本比裁剪框窄时非 0（负数截断为 0＝左对齐）。 */
+        private float centeredOffset() {
+            if (!centered || tv == null || clip == null) return 0f;
+            int offset = (clip.getWidth() - tv.getWidth()) / 2;
+            return offset > 0 ? offset : 0f;
+        }
     }
 }

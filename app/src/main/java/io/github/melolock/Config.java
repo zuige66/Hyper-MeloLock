@@ -231,6 +231,15 @@ public final class Config {
     public static final String LYRIC_ROW = "lyric_row";
 
     /**
+     * 隐藏播放器小封面（外观页「播放器」分组，默认开）：
+     * 关＝卡片左侧显示 64dp 专辑小封面（点它可跳音乐 App）。
+     * 开＝小封面 GONE，歌名/歌词与歌手两行改为水平居中；点封面跳 App 的入口随封面一起消失。
+     * 只影响自制卡片（native_player 原生播放器模式不建卡片，与本开关无关）。
+     * 文本溢出时的跑马灯行为不变（仍从左侧起滚）；只有「放得下」时才居中。
+     */
+    public static final String HIDE_CARD_ART = "hide_card_art";
+
+    /**
      * 调试日志开关（「设置」页底部「调试」分组，默认关）：
      * 开＝SystemUI 侧输出周期性细节日志（每轮媒体快照的 Session/Media ready、逐帧 render 跳过、
      * 逐句歌词的取色结果等）；关＝只留生命周期/状态变化/错误级日志。
@@ -345,6 +354,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(MARQUEE_SPEED, 45);          // dp/s，20~120
         ELEMENT_DEFAULTS.put(MARQUEE_PAUSE, 15);          // 秒，5~60
         ELEMENT_DEFAULTS.put(LYRIC_ROW, 1);               // 默认开（zuige 2026-10-23：装了就该看到三者同显）
+        ELEMENT_DEFAULTS.put(HIDE_CARD_ART, 1);           // 默认开（zuige 2026-10-23：装了就要看到封面隐藏+文字居中）
         ELEMENT_DEFAULTS.put(DEBUG_LOG, 0);
         ELEMENT_DEFAULTS.put(HIDE_SHORTCUTS, 0);
         ELEMENT_DEFAULTS.put(HIDE_CHARGING, 1);           // 默认隐藏（zuige 2026-10-14：底部充电文案默认不要）
