@@ -37,7 +37,13 @@
 - **构建发布包**：`./gradlew.bat :app:assembleRelease` → `app/build/outputs/apk/release/app-release.apk`；校验 `apksigner verify --print-certs -v <apk>`。Release **已启用 R8 混淆 + 资源收缩**（2026-10-10，APK 39MB→3.6MB）：keep 规则钉住 `xposed_init` 的 3 个入口、`ConfigProvider` 与 `LockScreenOverlay`（`app/proguard-rules.pro`），Manifest 组件由 AGP 自动保留——**新增按类名/字段名反射本模块类的代码时，必须同步加 keep 规则。盘点反射点时别只查 `Class.forName`/`getDeclaredMethod`，`XposedHelpers.findAndHookMethod("io.github.melolock.Xxx")` 和 `getObjectField(obj, "field")` 同样会中招**（2026-10-11 真机踩到 `NoSuchFieldError: lm0#shownArtwork`，手电筒/相机转场只能退回纯色遮罩；加 keep 后归零）。R8 后必须真机跑一轮：入口 `rev=` 行齐全 + 日志里没有 `NoSuchFieldError`/`ClassNotFound`。`lint.checkReleaseBuilds` 仍关闭。
 - **HyperIsland 遗留代码已清理**（2026-10-10）：`io.github.hyperisland.xposed.**`、`screenrecorder`、死页面（apps/settings/extensions 等）、死服务与 4 个无用依赖（dexkit/aptabase/hyperisland_kit/graphics-shapes）已全部删除，Kotlin 237→38 个文件、strings 1023→120 条。**改配置字段仍要同时看 `Config.java`、`ConfigProvider.java`、Compose 页面、SystemUI 读取逻辑**；上游残留的 `FlutterPrefsRepository` 只保留了活代码用到的方法，别往里加灵岛键。
 - **版本号**：`app/build.gradle.kts` 的 `versionCode` / `versionName`，发版时改这里并打同名 tag。
-- **不要提交**：`local.properties`、`.workbuddy/`、临时调试截图 `hmsc-*.png`、任何 `*.keystore` / `*.jks`。**要提交的展示图放在 `docs/images/`**（`icon.png` 为应用图标，供 README 引用）。
+- **发版是四步，缺一步就是半成品**（zuige 2026-10-24 明确要求写进项目记录）。顺序固定，每步都要验证再进下一步：
+  1. **代码侧**：bump `versionCode`/`versionName` → `:app:assembleRelease` → `apksigner verify --print-certs -v` → **装机真机跑一轮**（`dumpsys package io.github.melolock` 看版本号、logcat 看入口 `rev=` 行齐全、`content query --uri content://io.github.melolock.config/elements` 看新开关默认值）→ 提交 + `git push origin main` → `git tag -a vX.Y.Z` + `git push origin vX.Y.Z`。**只推 tag 不推 main 会让 Release 指向不完整的树**。
+  2. **GitHub Release**：用 PAT 调 REST API 建 release 并上传 APK（**本机没有 `gh` CLI**）。PAT 存在用户级记忆里，失效判断 `GET /user` 返 401。**本机调 GitHub API 必须带 `--noproxy '*' --ssl-no-revoke`**——环境里有指向 127.0.0.1 的代理变量但代理没开；直连又会 `schannel: CRYPT_E_REVOCATION_OFFLINE`（Windows 查证书吊销列表离线失败）。缺一个参数 curl 返回 000，极易误判成「PAT 失效」。release 文案只写用户可感知的效果/用法/限制，不写实现原理（见上面「对外文案」约定）。
+  3. **国内备用源 blog**（`D:\Workplace\hexo`，App 检查更新的回退源，字段缺失会被判无效源）：复制 APK 到 `source/downloads/melolock/`、更新同目录 `latest.json`（`versionCode`/`versionName`/`apkUrl`/`changelog` 四字段都要有值）→ `hexo generate`（注意日志可能打 "0 files generated" 但产物是对的，以 `public/downloads/melolock/latest.json` 实际内容为准）→ `hexo deploy` 推到 `zuige66/hexo` 的 `gh-pages`。**线上有 CDN 缓存（max-age=600），deploy 后立刻验可能还是旧内容，等几分钟再验。**
+  4. **博客文章**：`source/_posts/hyper-melolock-lockscreen-cover.md` 是常青介绍文，发版时更新里面「最新版国内直链」的版本号，并在文末追加一节当版更新说明（措辞跟酷安文案一致，面向用户）。README 的下载直链与 `docs/COOLAPK-vX.Y.Z.md` 链接同步更新。
+  **v0.3.5 就是只做了第 1、2 步，blog 源和文章欠到 v0.3.6 才补**——别再犯。
+- **不要提交**：`local.properties`、`.workbuddy/`、`.workbuddy-ai/`、临时调试截图 `hmsc-*.png`、任何 `*.keystore` / `*.jks`。**要提交的展示图放在 `docs/images/`**（`icon.png` 为应用图标，供 README 引用）。
 
 ## 调试与验证方法论（真机日志驱动）
 
