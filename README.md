@@ -163,7 +163,7 @@
 
 ## 🚀 安装
 
-1. 到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases) 下载最新 APK 安装（正式签名，可直接覆盖升级）；最新版直链：[Hyper-MeloLock-v0.3.5.apk](https://github.com/zuige66/Hyper-MeloLock/releases/download/v0.3.5/Hyper-MeloLock-v0.3.5.apk)。安装包约 3.6MB。
+1. 到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases) 下载最新 APK 安装（正式签名，可直接覆盖升级）；最新版直链：[Hyper-MeloLock-v0.3.6.apk](https://github.com/zuige66/Hyper-MeloLock/releases/download/v0.3.6/Hyper-MeloLock-v0.3.6.apk)。安装包约 3.6MB。
 2. 在 Vector 中启用本模块，**作用域勾这两项**，缺一项对应功能就不生效：
    - `com.android.systemui` —— 锁屏覆盖层本体，**必须**
    - `com.miui.miwallpaper` —— 封面壁纸化（不勾则仍是「在 SystemUI 里叠一层」的旧效果）
