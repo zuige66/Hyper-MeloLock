@@ -19,3 +19,6 @@ hmsc-*.png
 
 # 构建产物：release APK 不入库（网页 Release 上传用）
 *.apk
+
+# Kotlin 编译错误日志（IDE 每次构建生成，曾被误提交进来）
+.kotlin/
