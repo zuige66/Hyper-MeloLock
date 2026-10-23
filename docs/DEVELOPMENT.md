@@ -36,6 +36,8 @@
 
 ## 最近改动补充
 
+2026-10-23（zuige）：**歌词不再顶掉歌名（新开关 `lyric_row`，HE17）**。原行为：`titleTextFor()` 在有歌词时把主行（歌名位置）换成当前歌词句，副行（`artist`）只显示歌手 → 有歌词时屏幕上只剩「歌词 + 歌手」，**歌名消失**（真机取证：《孤勇者》播放中主行是「编曲: 钱雷」、副行「陈奕迅」，看不到歌名）。新增 `Config.LYRIC_ROW`（`lyric_row`，默认 **1＝开**；zuige 反馈「装了怎么没变」后由默认 0 改为 1，只对新装/未设置过该键的用户生效，存量配置不受影响）：开＝副行改由新方法 `artistTextFor()` 生成 **「歌手 / 歌名」**，主行仍是歌词（无歌词时回退歌名），于是歌词、歌名、歌手三者同屏；**无歌词时副行不拼歌名**（主行本来就是歌名，拼上去等于同一句念两遍）。设置入口：外观页「播放器」分组 →「歌词不顶掉歌名」。改完 120ms 防抖重建（`applyPendingConfig`），不需要重启 SystemUI。副行变长后的溢出照旧交给 `MarqueeController`（它用 TextWatcher 感知换文本，无需额外通知）。真机验收：主行「次中音萨克斯：刘晓光」+ 副行「易烊千玺 / 冷屁股」同屏，与目标样式一致。
+
 2026-10-12（凌）：① **响应优化**：pre-draw 守卫原本每个绘制帧都全树递归藏原生时钟层/壁纸层（逐视图 `resourceName` 资源表反查），改为**按 TTL(1s) 缓存命中列表**（`cachedClockViews` / `cachedWallpaperViews`，`create()` 换树时清空），每帧只遍历列表。背景：zuige 反馈「开了模块响应变慢」，A/B 实测——模块彻底不注入时 SystemUI 仍掉 30~34 帧（HyperOS 自身开销），模块注入时 30~61 帧，说明**大头是系统自己的**，我们只需把自己的那份砍掉。② **两处失败关闭违规修复**：染色泵染色时未置 `tintOn`，导致 `restore()` 的还原路径（`if (!tintOn) return`）整段跳过、随后 `savedCardTints` 被清空，重新捕获的「原始色」已是染后色 → **模块关掉后通知卡仍是染色状态且永久污染**；`WallpaperCoverPush` 自带 MediaSource 且**不看模块开关**，模块关了仍继续向壁纸进程推封面 → **锁屏还挂着我们的封面**。修复：泵置 `tintOn`；WCV 推送加开关闸 + 新增 `clearCover()` 在开关关闭时立即撤封面。
 
 2026-10-12（凌·二）：**亮屏「慢一拍」定位与修复**（zuige 反馈「有时候亮屏慢一拍」）。逐条时间线取证：`Pre-showing scene while display is dark` 在 SCREEN_ON 之前就完成、cover=front=V1.00，说明**我们的层不迟**，迟的是壁纸层。两个亮屏时刻的额外开销：① `logWallpaperLikeViews()` 每次 SCREEN_ON 全窗口根递归 + 同步打几十行 logcat（已改为仅 `debugLog` 时执行，logcat 写入是同步的，「只打日志」不是零成本）；② **主因**——`WallpaperCoverPush` 在 `ACTION_SCREEN_ON` 时无条件重发当前封面（`resendCurrent`），壁纸进程收到即**重建 1440×3200 位图 + 重传 GL 全屏纹理**，重传间隙原生壁纸闪一帧，主观就是「亮屏慢一拍」。真机时间线佐证：00:30:54.850 SCREEN_ON → 00:30:55.075 cover pushed → 00:30:55.726 `WCV cover applied 1440x3200`，一整套重活压在亮屏瞬间。**修法（推改拉）**：壁纸进程自己的缓存在活着时一直有效，只有「进程被杀重启丢缓存」才需要重发 → 新增 `Config.ACTION_COVER_REQUEST`，由 `WallpaperCover.requestCover()` 在壁纸 service `onCreate` 时向 SystemUI 索要（带 1.5s/3s 两次重试，因为它常比 SystemUI 的接收器先起来），SystemUI 侧删掉 SCREEN_ON 重发接收器，只响应索要。**踩坑**：索要接收器初版用 `Context.RECEIVER_NOT_EXPORTED`，而索要方是独立 UID 的壁纸进程 → 跨 UID 广播根本收不到（壁纸侧自己收 SystemUI 的推送用的是 `RECEIVER_EXPORTED`）。改 EXPORTED 后真机确认 `WCV cover request received; snapshot=…` 成对出现。风险可控：别人伪造这条只会让壁纸重画一次当前封面。**沉淀**：亮屏/解锁这类最敏感的瞬间不要安排任何周期性或诊断性重活；「定时重推以保稳」默认改成「对方丢了才来要」。
@@ -1695,6 +1697,12 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **跑马灯两个 bug（「长歌名没滚」的真相）**：① 滚动时长 `overflow(px)/speed(dp/s)` 没乘 density——3x 屏上 45dp/s 被跑成 ~15dp/s，长歌名滚一轮 10s+；② 每轮停顿默认 15s 且首滚也是 15s，用户等不到。修复：时长乘 density；**换文本后首滚只停 3s**（`freshText` 标志，切歌也触发），之后按设置停顿；`setDebugLog` 同步 `MarqueeController.setVerbose`，debug_log 开着会打溢出距离/滚动启动（排查「没滚」有据可查）。
     - **原生播放器只留媒体卡**：常驻的原生栈把充电统计卡等所有通知也带出来了（zuige「卡卡什么情况」）。`sweepNativePlayerStack()`（守卫每帧 + showMusicNative）：先确认栈里摸得到 `MediaHeader` 再动手，其他通知行 `hide()`（changedViews 登记，restore 复原）——摸不到媒体卡整帧不动（失败关闭，绝不能把栈清空）。语义变化：native 模式下锁屏上看不到其他通知（下拉 shade 照常），关掉开关即回。
     - rev HE8→HE9。
+
+69. 2026-10-23 **HE17：歌词与歌名同显（`lyric_row`）+ 合并远端「密码界面专辑背景沉浸」**：
+
+    - **歌词不再顶掉歌名**：新增 `Config.LYRIC_ROW`（`lyric_row`，默认 1＝开），开＝副行 `artistTextFor()` 输出「歌手 / 歌名」，主行仍是歌词；无歌词时副行只留歌手（主行已是歌名，不重复）。详见「最近改动补充」2026-10-23 条。
+    - **合并 `277a35d`（远端「密码界面专辑背景沉浸」）的连带修复**：该提交把 `WallpaperCoverPush.install` 签名从 `(Context)` 改成 `(Context, View keyguardRoot)`（要用锁屏根定位 bouncer 容器），而本地工作区的 `HookEntry` 仍按旧签名调用 → **`git merge` 报无冲突但编译失败**（`HookEntry.java:60 无法将方法 install 应用到给定类型`）。已改为 `install(attached.getContext(), attached)`（`attached` 就是 `onViewAttachedToWindow` 收到的锁屏根）。**沉淀：合并「无文件冲突」≠「能编译」，跨会话改签名后必须编译验证。**
+    - rev HE16→HE17。
 
 
 

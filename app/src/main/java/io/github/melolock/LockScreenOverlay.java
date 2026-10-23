@@ -394,6 +394,11 @@ final class LockScreenOverlay {
     private boolean hideShortcuts;
     private boolean fxHideIndication;   // 隐藏锁屏底部充电/提示文案（hide_charging，默认开）
     private boolean fxNativePlayer;     // 原生播放器模式（native_player）：不建自制卡片，直接显示原生通知栈
+    /**
+     * 歌词独占主行（lyric_row，默认关）：开＝副行合并成「歌手 / 歌名」，歌词+歌名+歌手三者同屏；
+     * 关＝历史行为（副行只有歌手，有歌词时歌名被歌词顶掉）。
+     */
+    private boolean fxLyricRow;
     /** 快捷栏容器缓存（见 applyShortcutRowVisibility）：避免每个 pre-draw 周期都全树按 id 找。 */
     private View cachedShortcutRow;
     private int shortcutRowLookups;
@@ -601,7 +606,24 @@ final class LockScreenOverlay {
                     // ——不能让它每帧把栈打回 INVISIBLE（2026-10-14 zuige 反馈「开了原生播放器
                     // 播放器和按钮全没了」的真因：showMusicNative show 完，守卫下一帧又 hide）。
                     if (fxNativePlayer || expanded) show(notifications); else hide(notifications);
-                    if (fxNativePlayer) sweepNativePlayerStack();
+                    if (fxNativePlayer) {
+                        sweepNativePlayerStack();
+                        // 守卫帧探针（HE16，10s 节流）：锁屏画帧前行的真实可见性——
+                        // 截图里行是 V 而画帧应被压成 I，到底是「守卫没跑」还是「被改回」，
+                        // 这一行直接定论（普查日志在缓存有效分支里，存在盲区）。
+                        long probeNow = android.os.SystemClock.elapsedRealtime();
+                        if (debugLog && notifications != null && probeNow - nativeGuardProbeAtMs > 10000) {
+                            nativeGuardProbeAtMs = probeNow;
+                            StringBuilder vis = new StringBuilder();
+                            for (int i = 0; i < notifications.getChildCount(); i++) {
+                                View c = notifications.getChildAt(i);
+                                int v = c == null ? -1 : c.getVisibility();
+                                vis.append(v == View.VISIBLE ? 'V' : v == View.INVISIBLE ? 'I' : v == View.GONE ? 'G' : '?');
+                            }
+                            Log.i(TAG, "native guard frame: rows=" + notifications.getChildCount()
+                                    + " vis=" + vis + " stackTY=" + notifications.getTranslationY());
+                        }
+                    }
                     // 展开期间重挂：系统 rebind 行视图会冲掉滤镜。**必须节流**（2026-10-12）：
                     // 这行原本每个绘制帧跑一次全量浅扫（每视图一次 resourceName + 反射 setTint），
                     // 而 stackAnchor 就是 notifications（见 attachStackTintPump），常驻泵已经在
@@ -848,11 +870,12 @@ final class LockScreenOverlay {
         rebuildLyrics(snapshot);
         String titleText = titleTextFor(snapshot);
         shownLyricLine = lyricTimes.length > 0 ? titleText : null;
+        String artistText = artistTextFor(snapshot);
         if (songFadeEnabled) {
             applyTextWithFade(title, titleText);
-            applyTextWithFade(artist, emptyAs(snapshot.artist, "未知艺术家"));
+            applyTextWithFade(artist, artistText);
         } else {
-            title.setText(titleText); artist.setText(emptyAs(snapshot.artist, "未知艺术家"));
+            title.setText(titleText); artist.setText(artistText);
         }
         // 播放/暂停图标：变化**先挂起 600ms 再提交**（glyphCommit）。切歌瞬间播放器会经历
         // playing → 缓冲/暂停 → playing，图标闪一下又变回去非常碍眼（zuige 反馈）；
@@ -1081,6 +1104,7 @@ final class LockScreenOverlay {
         hideShortcuts = elem(elements, Config.HIDE_SHORTCUTS) != 0;
         fxHideIndication = elem(elements, Config.HIDE_CHARGING) != 0;
         fxNativePlayer = elem(elements, Config.NATIVE_PLAYER) != 0;
+        fxLyricRow = elem(elements, Config.LYRIC_ROW) != 0;
         notifyCardTint = elem(elements, Config.NOTIFY_CARD_TINT) != 0;
         notifyBgConfig = elem(elements, Config.NOTIFY_CARD_BG);
         notifyBgPick = coercePick(elem(elements, Config.NOTIFY_CARD_BG_PICK));
@@ -1940,7 +1964,10 @@ final class LockScreenOverlay {
         hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility(); applyIndicationVisibility();
         foreground.setVisibility(View.VISIBLE); foreground.setAlpha(1f);
         cover.setVisibility(View.VISIBLE); cover.setAlpha(1f); cover.setTranslationY(0f);
-        playerCard.setVisibility(View.GONE);
+        // INVISIBLE 而不是 GONE（HE16）：GONE 会折叠布局位，下面要拿 playerCard.getTop()
+        // 当「原生媒体卡的目标卡槽」锚点——折叠了就量不到。INVISIBLE 不绘制、仍参与布局，
+        // 位置与正常模式完全一致。
+        playerCard.setVisibility(View.INVISIBLE);
         immersiveClock.setVisibility(View.VISIBLE); immersiveClock.setAlpha(1f);
         show(notifications);
         if (notifications != null) {
@@ -1957,41 +1984,215 @@ final class LockScreenOverlay {
     /**
      * 原生播放器模式：锁屏常驻的原生栈里**只保留媒体卡**，其他通知行（如充电统计卡）
      * 藏掉（2026-10-15 zuige「卡卡什么情况」）。
-     * 媒体卡可能不是栈的**直接**子级（嵌在行容器里——充电卡没被藏掉的实测教训），所以用
-     * 「子树递归找 MediaHeader」：包含媒体卡的那个直接子级整棵保留，其余整棵藏。
+     * **必须每帧压**（守卫 pre-draw 调用）：充电卡每秒刷新数据，系统会把行可见性改回
+     * VISIBLE——500ms 节流的扫法压不住，窗口期就露出来（HE10 截图实锤，同 charging 文案套路）。
+     * 媒体卡可能嵌在行容器里（不是栈的直接子级），用「子树递归找 MediaHeader」定位包含它的
+     * 直接子级；引用缓存 + getParent 失效检测，每帧成本 = 直接子级循环 + 同值 setVisibility。
      * **整栈摸不到媒体卡就整帧不动**（失败关闭，绝不能把栈清空）。
-     * hide() 走 changedViews 登记，restore 时复原；500ms 节流（通知行变化低频，不必每帧）。
+     * hide() 走 changedViews 登记，restore 时复原。
      */
-    private long lastNativeSweepAtMs;
+    private View cachedMediaHolder;
+    private long nativeMissLogAtMs;
+    private long nativeTreeDumpAtMs;
+    private long nativeGuardProbeAtMs;
     private void sweepNativePlayerStack() {
         if (!fxNativePlayer || notifications == null) return;
-        long now = android.os.SystemClock.elapsedRealtime();
-        if (now - lastNativeSweepAtMs < 500) return;
-        lastNativeSweepAtMs = now;
-        int childCount = notifications.getChildCount();
-        View mediaHolder = null;
-        for (int i = 0; i < childCount; i++) {
-            View child = notifications.getChildAt(i);
-            if (child != null && subtreeContainsMedia(child)) { mediaHolder = child; break; }
-        }
-        if (mediaHolder == null) {
-            if (debugLog && now - lastMediaMissLogAt > 15000) {
-                lastMediaMissLogAt = now;
-                StringBuilder names = new StringBuilder();
-                for (int i = 0; i < childCount && i < 12; i++) {
-                    if (i > 0) names.append(", ");
-                    names.append(notifications.getChildAt(i).getClass().getSimpleName());
+        if (cachedMediaHolder == null || cachedMediaHolder.getParent() != notifications) {
+            cachedMediaHolder = findMediaHolder();
+            if (cachedMediaHolder == null) {
+                long now = android.os.SystemClock.elapsedRealtime();
+                if (debugLog && now - nativeMissLogAtMs > 15000) {
+                    nativeMissLogAtMs = now;
+                    StringBuilder names = new StringBuilder();
+                    int childCount = notifications.getChildCount();
+                    for (int i = 0; i < childCount && i < 12; i++) {
+                        if (i > 0) names.append(", ");
+                        names.append(notifications.getChildAt(i).getClass().getSimpleName());
+                    }
+                    Log.i(TAG, "Native player: no media card in stack(" + childCount + "): " + names);
                 }
-                Log.i(TAG, "Native player: no media card in stack(" + childCount + "): " + names);
+                return;
             }
-            return;
+            if (debugLog) Log.i(TAG, "Native player: media card found (" + cachedMediaHolder.getClass().getSimpleName() + ")");
         }
-        for (int i = 0; i < childCount; i++) {
+        // 结构普查（60s 节流）：**放在重找分支外**（HE16）——缓存长期有效时重找分支整块
+        // 跳过，普查一次都打不出来，排查时完全是盲区。
+        if (debugLog) {
+            long now2 = android.os.SystemClock.elapsedRealtime();
+            if (now2 - nativeTreeDumpAtMs > 60000) {
+                nativeTreeDumpAtMs = now2;
+                StringBuilder sb = new StringBuilder("Native player tree (media marked *):\n");
+                dumpStackTree(notifications, 0, sb, cachedMediaHolder);
+                // 全窗口找充电/USB 卡的父链：找不到＝它们在独立窗口（不在锁屏窗口树里），
+                // 栈内怎么压都碰不到——那就是另一类问题（窗口级），方案完全不同。
+                StringBuilder foreign = new StringBuilder();
+                findForeignCards(windowRoot, 0, foreign);
+                if (foreign.length() == 0) foreign.append("  (none found in window tree → separate window)");
+                Log.i(TAG, sb.append(foreign).toString());
+                // 进程内所有窗口普查：充电统计卡/USB 通知若不在锁屏窗口树里，必然在
+                // WindowManagerGlobal 独立 addView 的别的窗口——枚举出来看它们住哪。
+                StringBuilder windows = new StringBuilder();
+                dumpProcessWindows(windows);
+                if (windows.length() > 0) Log.i(TAG, windows.toString());
+            }
+        }
+        for (int i = 0; i < notifications.getChildCount(); i++) {
             View child = notifications.getChildAt(i);
             if (child == null) continue;
-            if (child == mediaHolder) show(child); else hide(child);
+            if (child == cachedMediaHolder) show(child); else hide(child);
         }
-        if (debugLog) Log.i(TAG, "Native player: media card kept, " + (childCount - 1) + " other rows hidden");
+        applyNativeDisplacement();
+    }
+
+    private boolean nativeStackShifted;
+    /**
+     * 原生位移（HE16，zuige 反馈「原生播放器没有位移，位置跟展开通知一样」）：
+     * 把整个通知栈 translationY 平移，让原生媒体卡正好落在自制播放器卡槽上。
+     * 锚点 = playerCard 的 getTop()（showMusicNative 已把它改成 INVISIBLE 保布局，
+     * 位置与正常模式一致）；当前位 = 媒体卡的布局位（getTop 链到窗口根，不含 translation）。
+     * 每帧重算（守卫调 sweep）：系统动画可能随时改栈的 translationY，pre-draw 是最后一道。
+     * restore() 按 nativeStackShifted 复位，不动系统自己的动画值。
+     */
+    private void applyNativeDisplacement() {
+        if (playerCard == null || notifications == null || cachedMediaHolder == null) return;
+        float target = windowOffsetY(playerCard);
+        float current = windowOffsetY(cachedMediaHolder);
+        if (target <= 0 || current <= 0) return;   // 锚点还没布局（异常帧），按住不动
+        notifications.setTranslationY(target - current);
+        nativeStackShifted = true;
+    }
+
+    /** 视图沿父链到窗口根的布局位移之和（getTop 累加，**不含** translation）。 */
+    private float windowOffsetY(View view) {
+        float y = 0;
+        for (View v = view; v != null && v != windowRoot; v = v.getParent() instanceof View ? (View) v.getParent() : null) {
+            y += v.getTop();
+        }
+        return y;
+    }
+
+    /**
+     * 结构普查按需触发（ACTION_CENSUS_DUMP 广播）：无条件、无节流地把当前栈树、异物卡
+     * 扫描与进程窗口普查打到 logcat。与 sweep 的 60s 节流普查内容一致，区别只在触发
+     * 时机由排查方控制——日志缓冲被刷屏冲掉证据后，这是唯一可靠的取证通道。
+     */
+    public void dumpCensusNow() {
+        StringBuilder sb = new StringBuilder("CENSUS state:");
+        sb.append(" native=").append(fxNativePlayer)
+          .append(" notifications=").append(notifications == null ? "null" : notifications.getClass().getSimpleName()
+                  + " vis=" + notifications.getVisibility() + " children=" + notifications.getChildCount())
+          .append(" mediaHolder=").append(cachedMediaHolder == null ? "null" : cachedMediaHolder.getClass().getSimpleName());
+        Log.i(TAG, sb.toString());
+        if (notifications != null) {
+            StringBuilder tree = new StringBuilder("CENSUS stack tree (media marked *):\n");
+            dumpStackTree(notifications, 0, tree, cachedMediaHolder);
+            Log.i(TAG, tree.toString());
+        }
+        if (windowRoot != null) {
+            StringBuilder foreign = new StringBuilder();
+            findForeignCards(windowRoot, 0, foreign);
+            if (foreign.length() == 0) foreign.append("  (none found in window tree → separate window)");
+            Log.i(TAG, "CENSUS foreign cards:\n" + foreign);
+        }
+        StringBuilder windows = new StringBuilder();
+        dumpProcessWindows(windows);
+        if (windows.length() > 0) Log.i(TAG, "CENSUS " + windows);
+    }
+
+    /** 栈树普查（深度 ≤4，媒体卡标 *）。 */
+    private void dumpStackTree(ViewGroup group, int depth, StringBuilder sb, View media) {
+        if (depth > 4) return;
+        for (int i = 0; i < group.getChildCount(); i++) {
+            View c = group.getChildAt(i);
+            if (c == null) continue;
+            for (int pad = 0; pad < depth; pad++) sb.append("  ");
+            sb.append('[').append(depth).append('.').append(i).append(']')
+              .append(c == media ? "*" : "")
+              .append(c.getClass().getSimpleName())
+              .append(" vis=").append(c.getVisibility() == View.VISIBLE ? "V" : c.getVisibility() == View.INVISIBLE ? "I" : "G")
+              .append('\n');
+            if (c instanceof ViewGroup) dumpStackTree((ViewGroup) c, depth + 1, sb, media);
+        }
+    }
+
+    /** 全窗口递归找充电/USB/HUD 卡候选（类名或 id 含关键词），打印父链。深度 ≤16。 */
+    private void findForeignCards(View view, int depth, StringBuilder sb) {
+        if (view == null || depth > 16) return;
+        String cls = view.getClass().getName();
+        String lower = cls.toLowerCase(java.util.Locale.ROOT);
+        String idName = null;
+        if (depth >= 2) {   // 深层才查 id（省反查成本）
+            idName = resourceName(view);
+            if (idName != null) lower += " " + idName;
+        }
+        if (containsAny(lower, "charge", "power", "battery", "headsup", "usb")) {
+            StringBuilder chain = new StringBuilder();
+            for (View p = view; p != null && chain.length() < 400; p = p.getParent() instanceof View ? (View) p.getParent() : null) {
+                chain.insert(0, p.getClass().getSimpleName() + " < ");
+            }
+            sb.append("  HIT ").append(cls).append(" id=").append(idName)
+              .append(" vis=").append(view.getVisibility())
+              .append("\n    chain: ").append(chain).append('\n');
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) findForeignCards(group.getChildAt(i), depth + 1, sb);
+        }
+    }
+
+    private static boolean containsAny(String text, String... keys) {
+        for (String key : keys) if (text.contains(key)) return true;
+        return false;
+    }
+
+    /**
+     * 进程内所有窗口普查（反射 WindowManagerGlobal.mViews）：每窗口打根类名 + 树内
+     * 通知行/媒体卡计数——定位充电统计卡/USB 通知的真实宿主窗口（HE12 普查证明它们
+     * 不在锁屏窗口树里）。debug 门控 60s 节流，全树递归成本只在这一个瞬间承担。
+     */
+    private void dumpProcessWindows(StringBuilder sb) {
+        try {
+            Object global = Class.forName("android.view.WindowManagerGlobal").getMethod("getInstance").invoke(null);
+            // mViews 是私有字段：getField 只搜 public，HE13 实机 NoSuchFieldException——
+            // 必须 getDeclaredField + setAccessible（HE14 广播普查实测修复）。
+            java.lang.reflect.Field field = global.getClass().getDeclaredField("mViews");
+            field.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            java.util.ArrayList<View> views = (java.util.ArrayList<View>) field.get(global);
+            if (views == null) return;
+            sb.append("Process windows(").append(views.size()).append("):\n");
+            for (int i = 0; i < views.size(); i++) {
+                View root = views.get(i);
+                if (root == null) continue;
+                sb.append("  [").append(i).append("] ").append(root.getClass().getName())
+                  .append(" rows=").append(countTreeMatches(root, "ExpandableNotificationRow", 0))
+                  .append(" media=").append(countTreeMatches(root, "MiuiMediaHeaderView", 0))
+                  .append(" charge=").append(countTreeMatches(root, "PowerChart", 0))
+                  .append('\n');
+            }
+        } catch (Throwable error) {
+            sb.append("  window dump failed: ").append(error).append('\n');
+        }
+    }
+
+    /** 子树里类名含关键字的节点数（深度 ≤14，提前终止条件没有——计数用途）。 */
+    private int countTreeMatches(View view, String keyword, int depth) {
+        if (view == null || depth > 14) return 0;
+        int count = view.getClass().getName().contains(keyword) ? 1 : 0;
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) count += countTreeMatches(group.getChildAt(i), keyword, depth + 1);
+        }
+        return count;
+    }
+
+    /** 在栈的直接子级里找「子树含媒体卡」的那个容器；没有返回 null。 */
+    private View findMediaHolder() {
+        for (int i = 0; i < notifications.getChildCount(); i++) {
+            View child = notifications.getChildAt(i);
+            if (child != null && subtreeContainsMedia(child)) return child;
+        }
+        return null;
     }
 
     /** 子树（含自身）里有没有媒体卡（类名含 MediaHeader，与染色同一判定族）。 */
@@ -2296,6 +2497,14 @@ final class LockScreenOverlay {
         return idx >= 0 ? lyricLines[idx] : fallback;
     }
 
+    /** 副行文本：默认只有歌手；「歌词独占主行」(lyric_row) 开且有歌词时合并成「歌手 / 歌名」。 */
+    private String artistTextFor(MediaSource.Snapshot snapshot) {
+        String artistName = emptyAs(snapshot.artist, "未知艺术家");
+        // 无歌词时主行显示的就是歌名，副行再拼一遍等于同一句念两遍——只在歌名真被歌词顶掉时才补。
+        if (!fxLyricRow || lyricTimes.length == 0) return artistName;
+        return artistName + " / " + emptyAs(snapshot.title, "未知曲目");
+    }
+
     /** progressTicker 每 500ms 调：推进一步歌词（只在播放中换句，暂停冻结）。 */
     private void updateLyricLine() {
         if (title == null || shown == null || lyricTimes.length == 0 || !shown.playing) return;
@@ -2381,7 +2590,7 @@ final class LockScreenOverlay {
         if (notifications != null) { notifications.animate().cancel(); endNotificationsLayer(); notifications.setAlpha(1f); notifications.setTranslationY(0f); }
         unregisterGuard(); shown = null; shownArtwork = null; shownArtSignature = null; shownPlayGlyph = null;
         pendingGlyph = null; main.removeCallbacks(glyphCommit);
-        expanded = false; playerSceneVisible = false; restoreChangedViews();
+        expanded = false; playerSceneVisible = false; nativeStackShifted = false; restoreChangedViews();
         // 快照回放可能把暗屏期采到的瞬态（小时层 INVISIBLE）焊回原生时钟，策略还原兜底纠正。
         forceRestoreMainClock();
         if (foreground != null && foreground.getParent() == root) root.removeView(foreground);

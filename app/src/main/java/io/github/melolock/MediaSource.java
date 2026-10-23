@@ -93,6 +93,13 @@ final class MediaSource {
     private final ExecutorService artworkWorker = Executors.newSingleThreadExecutor();
     private final Listener listener;
     private MediaController current;
+    // 会话日志去重（2026-10-15）：sessions 每次刷新返回全新 MediaController 实例，
+    // 按引用比较 current != tracked 永远成立，Diag 环形缓冲被 "session -> pkg"
+    // 每秒 4 条刷爆，真正的事件全被挤掉——按包名去重，同包 10s 内只记一次。
+    private String lastSessionPkg;
+    private long lastSessionLogAtMs;
+    private String lastLoggedTitle;
+    private long lastPausedLogAtMs;
     private Snapshot lastReady;
     private String pendingArtworkUri;
     private MediaController pendingArtworkController;
@@ -248,7 +255,15 @@ final class MediaSource {
             if (current != null) current.registerCallback(controllerCallback, main);
             // 远程诊断核心行：会话跟踪目标的每次变化。「音乐 App 没勾选 / 没在播放」
             // 在报告里直接可见（pkg=none 或停在不允许的包上）。
-            Diag.log("session -> " + (tracked != null ? tracked.getPackageName() : "none"));
+            // 去重：实例每次刷新都换新，只能比包名；同包 10s 内不重复记（HE14 前的
+            // 报告被这行刷满 80 条环形缓冲，事件全丢）。
+            String trackedPkg = tracked != null ? tracked.getPackageName() : "none";
+            long nowLog = android.os.SystemClock.elapsedRealtime();
+            if (!trackedPkg.equals(lastSessionPkg) || nowLog - lastSessionLogAtMs > 10000) {
+                lastSessionPkg = trackedPkg;
+                lastSessionLogAtMs = nowLog;
+                Diag.log("session -> " + trackedPkg);
+            }
         }
         if (snapshot != null) {
             lastReady = snapshot;
@@ -256,7 +271,12 @@ final class MediaSource {
             pendingArtworkUri = null;
             pendingArtworkController = null;
             cancelGrace();
-            if (verboseLog) Log.i(TAG, "Media ready from bitmap in " + elapsed(refreshStart) + "ms title=" + snapshot.title);
+            // 同题去重（2026-10-15）：刷新每 2 秒一轮、每轮多条，主日志缓冲被冲得
+            // 只剩 ~2 分钟历史，排查全靠运气。同题续帧（未换歌）不打日志。
+            if (verboseLog && !snapshot.title.equals(lastLoggedTitle)) {
+                Log.i(TAG, "Media ready from bitmap in " + elapsed(refreshStart) + "ms title=" + snapshot.title);
+                lastLoggedTitle = snapshot.title;
+            }
             listener.onMedia(snapshot);
         } else if (selected != null && artworkUri != null) {
             final MediaController controller = selected;
@@ -322,7 +342,12 @@ final class MediaSource {
                         lastReady.durationMs, pausedState.getPlaybackSpeed(),
                         pausedState.getState() == PlaybackState.STATE_PLAYING, lastReady.lyrics);
             }
-            if (verboseLog) Log.i(TAG, "Session paused in " + elapsed(refreshStart) + "ms; keeping last frame");
+            // 暂停续帧每 2 秒走一次这里，同 session 日志一个去重套路：10s 一条足够。
+            long pausedLogNow = android.os.SystemClock.elapsedRealtime();
+            if (verboseLog && pausedLogNow - lastPausedLogAtMs > 10000) {
+                lastPausedLogAtMs = pausedLogNow;
+                Log.i(TAG, "Session paused in " + elapsed(refreshStart) + "ms; keeping last frame");
+            }
             cancelGrace();
             listener.onMedia(lastReady);
         } else if (lastReady != null) {

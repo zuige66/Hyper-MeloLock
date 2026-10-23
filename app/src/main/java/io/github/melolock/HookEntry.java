@@ -33,7 +33,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
         // 机型门禁已撤（2026-10-09，zuige 正在多机型测试）：任何 SystemUI 都尝试 hook，
         // 目标类找不到自然失败关闭、恢复原生锁屏。非澎湃 3 上的表现靠测试反馈收集。
         if (!"com.android.systemui".equals(param.packageName)) return;
-        Log.i(TAG, "HookEntry rev=HE10 (lyric ad-skip + native sweep recursive)");
+        Log.i(TAG, "HookEntry rev=HE17 (lyric_row: artist line shows \"artist / title\" when lyrics present)");
         try {
             Class<?> root = XposedHelpers.findClass(
                     "com.android.keyguard.widget.HyperOSKeyguardRootView", param.classLoader);
@@ -57,7 +57,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
                             catch (Throwable error) { Log.w(TAG, "Framework report spawn failed", error); }
                             // 封面壁纸化（2026-10-08）：SystemUI 侧把媒体封面下发给壁纸进程。
                             // 独立 try：它失败只损失「封面成为壁纸」，覆盖层不受影响。
-                            try { WallpaperCoverPush.install(attached.getContext()); }
+                            try { WallpaperCoverPush.install(attached.getContext(), attached); }
                             catch (Throwable error) { Log.w(TAG, "WallpaperCoverPush install failed", error); }
                                 }
                                 @Override public void onViewDetachedFromWindow(View detached) {
@@ -103,6 +103,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
      *  - ACTION_DIAG_REFRESH：App 刚写完 debug_log，立即重读并开关回传，不等 create()。
      *    打开时会把开机至今缓冲的全部历史一次性 flush（见 Diag.enable）。
      *  - ACTION_DIAG_CLEAR：清事件缓冲并回写空流。
+     *  - ACTION_CENSUS_DUMP：按需结构普查（栈树 + 异物卡 + 进程窗口）到 logcat。
      *  - ACTION_RESTART_SYSTEMUI：kill 自己完成作用域重启（无 root 方案）。
      */
     private static final BroadcastReceiver moduleReceiver = new BroadcastReceiver() {
@@ -121,6 +122,16 @@ public final class HookEntry implements IXposedHookLoadPackage {
             } else if (Config.ACTION_DIAG_CLEAR.equals(action)) {
                 Diag.clear();
                 Log.i(TAG, "Diagnostic report cleared via broadcast");
+            } else if (Config.ACTION_CENSUS_DUMP.equals(action)) {
+                // 结构普查按需触发：对所有存活覆盖层各 dump 一份（无覆盖层也要留痕，
+                // 否则「发了广播没反应」本身又成了悬案）。
+                LockScreenOverlay[] live = overlays.values().toArray(new LockScreenOverlay[0]);
+                Log.i(TAG, "Census dump requested via broadcast; live overlays=" + live.length);
+                for (LockScreenOverlay overlay : live) {
+                    try { overlay.dumpCensusNow(); } catch (Throwable error) {
+                        Log.w(TAG, "Census dump failed on overlay", error);
+                    }
+                }
             } else if (Config.ACTION_RESTART_SYSTEMUI.equals(action)) {
                 Log.i(TAG, "Restart requested via broadcast; killing SystemUI for a clean reload");
                 android.os.Process.killProcess(android.os.Process.myPid());
@@ -143,6 +154,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             IntentFilter actions = new IntentFilter();
             actions.addAction(Config.ACTION_DIAG_REFRESH);
             actions.addAction(Config.ACTION_DIAG_CLEAR);
+            actions.addAction(Config.ACTION_CENSUS_DUMP);
             actions.addAction(Config.ACTION_RESTART_SYSTEMUI);
             // RECEIVER_EXPORTED：广播来自另一个 uid（我们的 App），NOT_EXPORTED 收不到。
             app.registerReceiver(moduleReceiver, actions, Context.RECEIVER_EXPORTED);

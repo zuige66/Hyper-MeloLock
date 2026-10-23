@@ -64,6 +64,13 @@ public final class Config {
      * 「点了开始没反应」会被当成模块坏了。
      */
     public static final String ACTION_DIAG_REFRESH = "io.github.melolock.action.DIAG_REFRESH";
+    /**
+     * 结构普查按需触发（2026-10-15）：adb/任意端发本广播，SystemUI 侧把当前锁屏栈树、
+     * 异物卡扫描与进程内全部窗口一次性 dump 到 logcat。为什么需要它：普查原先挂在
+     * sweepNativePlayerStack 的 60s 节流上，而主日志缓冲被媒体刷新刷得只剩 ~2 分钟，
+     * 等人看完再拉日志，证据早被冲掉——现在抓取时机由排查方自己控制。
+     */
+    public static final String ACTION_CENSUS_DUMP = "io.github.melolock.action.CENSUS_DUMP";
     /** 广播的目标包：显式指定才能送达 SystemUI 进程里注册的接收器。 */
     public static final String SYSTEMUI_PACKAGE = "com.android.systemui";
 
@@ -214,6 +221,16 @@ public final class Config {
     public static final String MARQUEE_PAUSE = "marquee_pause";
 
     /**
+     * 歌词独占主行（外观页「播放器」分组，默认开）：
+     * 关＝历史行为，主行显示当前歌词句（无歌词时歌名），副行只显示歌手——有歌词时歌名被顶掉，
+     * 屏幕上只剩「歌词 + 歌手」两条信息。
+     * 开＝副行改成「歌手 / 歌名」，于是歌词、歌名、歌手三者同屏；无歌词时主行本来就是歌名，
+     * 副行不重复歌名（仍只显示歌手）。
+     * 只影响文字排版，不动歌词解析与跑马灯（副行变长后照旧由跑马灯处理溢出）。
+     */
+    public static final String LYRIC_ROW = "lyric_row";
+
+    /**
      * 调试日志开关（「设置」页底部「调试」分组，默认关）：
      * 开＝SystemUI 侧输出周期性细节日志（每轮媒体快照的 Session/Media ready、逐帧 render 跳过、
      * 逐句歌词的取色结果等）；关＝只留生命周期/状态变化/错误级日志。
@@ -327,6 +344,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(PLAYER_VECTOR_ICONS, 1);
         ELEMENT_DEFAULTS.put(MARQUEE_SPEED, 45);          // dp/s，20~120
         ELEMENT_DEFAULTS.put(MARQUEE_PAUSE, 15);          // 秒，5~60
+        ELEMENT_DEFAULTS.put(LYRIC_ROW, 1);               // 默认开（zuige 2026-10-23：装了就该看到三者同显）
         ELEMENT_DEFAULTS.put(DEBUG_LOG, 0);
         ELEMENT_DEFAULTS.put(HIDE_SHORTCUTS, 0);
         ELEMENT_DEFAULTS.put(HIDE_CHARGING, 1);           // 默认隐藏（zuige 2026-10-14：底部充电文案默认不要）
