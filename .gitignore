@@ -22,3 +22,6 @@ hmsc-*.png
 
 # Kotlin 编译错误日志（IDE 每次构建生成，曾被误提交进来）
 .kotlin/
+
+# 反编译取证用的临时 APK/dex 解包目录（aapt2/dexdump 分析用，不入库）
+docs/_apk/

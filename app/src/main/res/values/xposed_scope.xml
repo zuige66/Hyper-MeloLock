@@ -2,5 +2,10 @@
     <string-array name="xposed_scope">
         <item>com.android.systemui</item>
         <item>com.miui.miwallpaper</item>
+        <!-- 2026-10-25：网易云的「锁屏歌词」页 LockScreenActivity 跑在网易云自己的进程里，
+             SystemUI 侧碰不到它。把网易云纳入作用域才能在 onCreate 里把它 finish 掉
+             （见 HookEntry.installNetEaseLockScreenKill，开关 kill_lockscreen_activity）。
+             只挂这一个 Activity，不碰网易云的播放/通知/状态栏歌词。 -->
+        <item>com.netease.cloudmusic</item>
     </string-array>
 </resources>

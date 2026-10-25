@@ -302,6 +302,16 @@ final class LockScreenOverlay {
      */
     private final java.util.List<View> cachedClockViews = new java.util.ArrayList<>();
     private final java.util.List<View> cachedWallpaperViews = new java.util.ArrayList<>();
+    /**
+     * 锁屏原生媒体卡命中缓存（hide_native_media，2026-10-25 新增）。
+     *
+     * 目标是 HyperOS 锁屏小面板 `tiny_notif_list`（FlipRowContainer）里的媒体行
+     * `tiny_media_session_view`（id=tiny_media_session_container）——右划锁屏露出来的
+     * 「网易云页面」。RecyclerView 行会被系统 rebind 冲掉可见性，所以和时钟层一样
+     * 由 pre-draw 守卫每帧按住，命中列表按 1s TTL 缓存。
+     */
+    private final java.util.List<View> cachedMediaPageViews = new java.util.ArrayList<>();
+    private long mediaPageScanAtMs;
     private long clockScanAtMs;
     private long wallpaperScanAtMs;
     private static final long NATIVE_SCAN_TTL_MS = 1000;
@@ -401,6 +411,8 @@ final class LockScreenOverlay {
     private boolean fxLyricRow;
     /** 歌词信息行过滤（lyric_filter，默认开）：过滤 LRC 里的职员表行，见 {@link #isCreditLine}。 */
     private boolean fxLyricFilter;
+    /** 隐藏锁屏原生媒体卡（hide_native_media，默认开）：藏 FlipRowContainer 里的 tiny_media_session_view。 */
+    private boolean fxHideNativeMedia;
     /** 快捷栏容器缓存（见 applyShortcutRowVisibility）：避免每个 pre-draw 周期都全树按 id 找。 */
     private View cachedShortcutRow;
     private int shortcutRowLookups;
@@ -566,8 +578,8 @@ final class LockScreenOverlay {
         cachedShortcutRow = null;
         shortcutRowLookups = 0;
         // 原生层命中缓存同理：换树了必须重扫（见 cachedClockViews 注释）。
-        cachedClockViews.clear(); cachedWallpaperViews.clear();
-        clockScanAtMs = 0; wallpaperScanAtMs = 0;
+        cachedClockViews.clear(); cachedWallpaperViews.clear(); cachedMediaPageViews.clear();
+        clockScanAtMs = 0; wallpaperScanAtMs = 0; mediaPageScanAtMs = 0;
         keyguardGuard = () -> {
             if (suspended) {
                 // 解锁后场景已淡出并置 GONE，守卫必须完全放手：继续隐藏原生层会破坏，
@@ -600,6 +612,7 @@ final class LockScreenOverlay {
                 } else {
                     hideNativeWallpaperLayers(root);
                     hideNativeClockLayers(root);
+                    if (fxHideNativeMedia) hideNativeMediaPage(root);
                     applyShortcutRowVisibility();
                     applyIndicationVisibility();
                     // 通知栈的显隐完全由 expanded 决定：展开时它自己在淡入（由 show() 保证可见），
@@ -1108,6 +1121,7 @@ final class LockScreenOverlay {
         fxNativePlayer = elem(elements, Config.NATIVE_PLAYER) != 0;
         fxLyricRow = elem(elements, Config.LYRIC_ROW) != 0;
         fxLyricFilter = elem(elements, Config.LYRIC_FILTER) != 0;
+        fxHideNativeMedia = elem(elements, Config.HIDE_NATIVE_MEDIA) != 0;
         notifyCardTint = elem(elements, Config.NOTIFY_CARD_TINT) != 0;
         notifyBgConfig = elem(elements, Config.NOTIFY_CARD_BG);
         notifyBgPick = coercePick(elem(elements, Config.NOTIFY_CARD_BG_PICK));
@@ -1903,7 +1917,9 @@ final class LockScreenOverlay {
         if (fxNativePlayer) { showMusicNative(); return; }
         boolean animateIn = !playerSceneVisible;
         boolean returning = expanded;   // 从通知页返回：走共享元素的反向动画
-        expanded = false; hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility(); applyIndicationVisibility();
+        expanded = false; hideNativeWallpaperLayers(root); hideNativeClockLayers(root);
+        if (fxHideNativeMedia) hideNativeMediaPage(root);
+        applyShortcutRowVisibility(); applyIndicationVisibility();
         // 取消动画**只在真的发生页面切换时做**：showMusic() 是每次快照（约 2 秒一次）都被
         // render() 调一遍的，无条件 cancel 会把刚启动的组件动效（封面弹入）在画出第一帧前
         // 就掐掉，而且缩放会永远卡在动画起点 0.9 —— 真机表现就是「封面弹入没生效」。
@@ -1973,7 +1989,9 @@ final class LockScreenOverlay {
      */
     private void showMusicNative() {
         expanded = false; playerSceneVisible = true;
-        hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility(); applyIndicationVisibility();
+        hideNativeWallpaperLayers(root); hideNativeClockLayers(root);
+        if (fxHideNativeMedia) hideNativeMediaPage(root);
+        applyShortcutRowVisibility(); applyIndicationVisibility();
         foreground.setVisibility(View.VISIBLE); foreground.setAlpha(1f);
         cover.setVisibility(View.VISIBLE); cover.setAlpha(1f); cover.setTranslationY(0f);
         // INVISIBLE 而不是 GONE（HE16）：GONE 会折叠布局位，下面要拿 playerCard.getTop()
@@ -2109,6 +2127,42 @@ final class LockScreenOverlay {
         StringBuilder windows = new StringBuilder();
         dumpProcessWindows(windows);
         if (windows.length() > 0) Log.i(TAG, "CENSUS " + windows);
+        // 整棵锁屏视图树（2026-10-25 新增）：上面的栈树只到通知栈深度 4，而「右划露出来的
+        // 原生媒体卡 / 网易云锁屏页」这类问题要看的恰恰是锁屏根下面的小面板子树
+        // （tinyPanel / tinypanel / FlipRowContainer）。全量打一次，按需触发成本可忽略。
+        if (root != null) {
+            StringBuilder tree = new StringBuilder("CENSUS keyguard full tree (media/notif/tiny marked *):\n");
+            dumpFullTree(root, 0, tree);
+            Log.i(TAG, tree.toString());
+        }
+    }
+
+    /**
+     * 全量锁屏视图树（深度不限，但超过 12 层只打类名防刷屏）。
+     * 命中 tiny/tinypanel/flip/media/keyguard 字样的节点打 `*`，一眼定位小面板与媒体卡。
+     */
+    private void dumpFullTree(View view, int depth, StringBuilder sb) {
+        if (view == null || depth > 24) return;
+        StringBuilder pad = new StringBuilder();
+        for (int i = 0; i < depth && i < 12; i++) pad.append("  ");
+        if (depth >= 12) pad.append("…");
+        String cls = view.getClass().getName();
+        String idName = resourceName(view);
+        String lower = (cls + " " + idName).toLowerCase(java.util.Locale.ROOT);
+        boolean marked = lower.contains("tinypanel") || lower.contains("flip") || lower.contains("media")
+                || lower.contains("keyguard") || lower.contains("clock");
+        sb.append(pad)
+          .append('[').append(depth).append(']')
+          .append(marked ? "*" : "")
+          .append(cls.substring(cls.lastIndexOf('.') + 1))
+          .append(" vis=").append(view.getVisibility() == View.VISIBLE ? 'V' : view.getVisibility() == View.INVISIBLE ? 'I' : 'G')
+          .append(" w=").append(view.getWidth()).append('x').append(view.getHeight())
+          .append(" id=").append(idName.isEmpty() ? "-" : idName)
+          .append('\n');
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) dumpFullTree(group.getChildAt(i), depth + 1, sb);
+        }
     }
 
     /** 栈树普查（深度 ≤4，媒体卡标 *）。 */
@@ -4048,6 +4102,61 @@ final class LockScreenOverlay {
         wallpaperScanAtMs = now;
         collectWallpaperViews(view, cachedWallpaperViews);
         for (int i = 0; i < cachedWallpaperViews.size(); i++) hide(cachedWallpaperViews.get(i));
+    }
+
+    /**
+     * 隐藏锁屏原生媒体卡（hide_native_media，2026-10-25 新增）。
+     *
+     * 目标是 HyperOS 锁屏小面板里的媒体行：`com.android.notification.tinypanel.FlipRowContainer`
+     * （id=tiny_notif_list）的首行 `tiny_media_session_view`（id=tiny_media_session_container，
+     * 含专辑图 + 应用图标 + 歌名 + 播放控制）。dex/布局实锤见 Config.HIDE_NATIVE_MEDIA 注释。
+     * 沉浸锁屏上已有自制播放器，这块属于重复信息，且正是用户说的「右划解锁页面」。
+     *
+     * 实现与 {@link #hideNativeClockLayers} 同构：全树递归 + 1s TTL 命中缓存，每帧只对列表
+     * 按住。只压媒体卡自己，不碰 FlipRowContainer 里的通知行。复原走 changedViews 快照
+     * （hide()/restoreChangedViews()），场景销毁或换树时自动还原。
+     */
+    private void hideNativeMediaPage(View view) {
+        long now = android.os.SystemClock.elapsedRealtime();
+        // TTL 闸门必须**不看命中数是否为空**：媒体卡没播放时本来就不存在，若「空就重扫」
+        // 就会变成每帧一次全树递归 —— 正是 hideNativeClockLayers 当初踩过的性能坑。
+        if (now - mediaPageScanAtMs < NATIVE_SCAN_TTL_MS) {
+            for (int i = 0; i < cachedMediaPageViews.size(); i++) hide(cachedMediaPageViews.get(i));
+            return;
+        }
+        cachedMediaPageViews.clear();
+        mediaPageScanAtMs = now;
+        collectNativeMediaViews(view, cachedMediaPageViews);
+        // 小面板不一定挂在 HyperOSKeyguardRootView 子树里（TinyKeyguardPanelViewController 可能
+        // 把它单独 add 到窗口根）。root 里扫不到就退到窗口根再扫一遍，TTL 内只多这一次。
+        if (cachedMediaPageViews.isEmpty() && windowRoot != null && windowRoot != view) {
+            collectNativeMediaViews(windowRoot, cachedMediaPageViews);
+        }
+        for (int i = 0; i < cachedMediaPageViews.size(); i++) hide(cachedMediaPageViews.get(i));
+    }
+
+    /** 收集「原生锁屏媒体卡」候选（不改动任何状态），供 {@link #hideNativeMediaPage} 缓存复用。 */
+    private void collectNativeMediaViews(View view, java.util.List<View> out) {
+        if (view == null || view == foreground || view == background) return;
+        String className = view.getClass().getName().toLowerCase(java.util.Locale.ROOT);
+        String idName = resourceName(view);
+        // id 命中优先：tiny_media_session_container 是整张卡的根（ConstraintLayout），
+        // 压它等于压掉卡片全部内容。keyguard_media_container 是通知栈里那份媒体容器，
+        // 原生播放器模式要留着（见 showMusicNative），所以这里不收它。
+        boolean mediaCard = idName.equals("tiny_media_session_container")
+                || idName.equals("tiny_media_session_view")
+                || idName.equals("flip_media_row")
+                || className.contains("flipmediarowholder");
+        if (mediaCard) {
+            boolean first = !changedViews.containsKey(view);
+            out.add(view);
+            if (first) Log.i(TAG, "Hiding native media card: id=" + (idName.isEmpty() ? "-" : idName)
+                    + " class=" + view.getClass().getSimpleName());
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) collectNativeMediaViews(group.getChildAt(i), out);
+        }
     }
 
     private void collectWallpaperViews(View view, java.util.List<View> out) {

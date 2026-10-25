@@ -515,7 +515,7 @@ internal fun LockAppearancePage() {
         "sign" to listOf(Config.SIGN_ENABLED, Config.SIGN_SIZE, Config.SIGN_WEIGHT, Config.SIGN_COLOR, Config.SIGN_SPACING),
         "clock" to listOf(Config.CLOCK_SIZE, Config.CLOCK_SPACING, Config.CLOCK_WEIGHT, Config.CLOCK_COLOR, Config.CLOCK_ROUNDNESS, Config.CLOCK_STROKE),
         "cover" to listOf(Config.COVER_SCALE, Config.COVER_WIDTH, Config.COVER_HEIGHT, Config.COVER_SPACING, Config.COVER_POP),
-        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.NATIVE_PLAYER, Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.PLAYER_CARD_POP, Config.PLAYER_VECTOR_ICONS, Config.LYRIC_ROW, Config.LYRIC_FILTER, Config.HIDE_CARD_ART, Config.MARQUEE_SPEED, Config.MARQUEE_PAUSE),
+        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.NATIVE_PLAYER, Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.PLAYER_CARD_POP, Config.PLAYER_VECTOR_ICONS, Config.LYRIC_ROW, Config.LYRIC_FILTER, Config.HIDE_CARD_ART, Config.HIDE_NATIVE_MEDIA, Config.KILL_LOCKSCREEN_ACTIVITY, Config.MARQUEE_SPEED, Config.MARQUEE_PAUSE),
         "entry" to listOf(Config.ENTRY_BG, Config.ENTRY_BG_PICK),
         "debug" to listOf(Config.DEBUG_LOG),
     )
@@ -737,6 +737,20 @@ internal fun LockAppearancePage() {
                     icon = null,
                     checked = value(Config.HIDE_CARD_ART) != 0,
                     onCheckedChange = { update(Config.HIDE_CARD_ART, if (it) 1 else 0) },
+                )
+                PreferenceSwitch(
+                    title = "隐藏锁屏原生媒体卡",
+                    summary = "藏掉 HyperOS 锁屏小面板里的原生音乐卡。本机型没有这块面板时开关空转（正常）",
+                    icon = null,
+                    checked = value(Config.HIDE_NATIVE_MEDIA) != 0,
+                    onCheckedChange = { update(Config.HIDE_NATIVE_MEDIA, if (it) 1 else 0) },
+                )
+                PreferenceSwitch(
+                    title = "拦截网易云锁屏歌词页",
+                    summary = "网易云会在锁屏上盖一个全屏透明的 LockScreenActivity（右划露出歌词页），打开后它一创建就被关掉。需在框架里给本模块勾选「网易云音乐」作用域",
+                    icon = null,
+                    checked = value(Config.KILL_LOCKSCREEN_ACTIVITY) != 0,
+                    onCheckedChange = { update(Config.KILL_LOCKSCREEN_ACTIVITY, if (it) 1 else 0) },
                 )
                 PreferenceSwitch(
                     title = "圆润图标",

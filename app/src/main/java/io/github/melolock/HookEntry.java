@@ -32,8 +32,18 @@ public final class HookEntry implements IXposedHookLoadPackage {
     @Override public void handleLoadPackage(XC_LoadPackage.LoadPackageParam param) {
         // 机型门禁已撤（2026-10-09，zuige 正在多机型测试）：任何 SystemUI 都尝试 hook，
         // 目标类找不到自然失败关闭、恢复原生锁屏。非澎湃 3 上的表现靠测试反馈收集。
-        if (!"com.android.systemui".equals(param.packageName)) return;
-        Log.i(TAG, "HookEntry rev=HE17 (lyric_row: artist line shows \"artist / title\" when lyrics present)");
+        if (!"com.android.systemui".equals(param.packageName)) {
+            // 网易云音乐：只做一件事——拦住它盖在锁屏上的 LockScreenActivity（锁屏歌词页）。
+            // 2026-10-25 zuige「网易云的右划解锁页面这个不要了」；它跑在网易云自己的进程，
+            // 只有把该包纳入作用域才拦得到（见 res/values/xposed_scope.xml）。
+            if (Config.PACKAGE_NETEASE.equals(param.packageName)) {
+                installNetEaseLockScreenKill(param.classLoader);
+            }
+            return;
+        }
+        Log.i(TAG, "HookEntry rev=HE18 (lyric_row: artist line shows \"artist / title\" when lyrics present"
+                + "; kill_lockscreen_activity: 拦网易云 LockScreenActivity"
+                + "; hide_native_media: 藏锁屏原生媒体卡)");
         try {
             Class<?> root = XposedHelpers.findClass(
                     "com.android.keyguard.widget.HyperOSKeyguardRootView", param.classLoader);
@@ -421,6 +431,144 @@ public final class HookEntry implements IXposedHookLoadPackage {
         LockScreenOverlay[] live = overlays.values().toArray(new LockScreenOverlay[0]);
         for (LockScreenOverlay overlay : live) {
             try { overlay.onUnlockStarting(); } catch (Throwable error) { Log.w(TAG, "Unlock notify failed", error); }
+        }
+    }
+
+    /**
+     * 拦住网易云音乐的「锁屏歌词」页（2026-10-25 zuige：「网易云的右划解锁页面这个不要了」）。
+     *
+     * 实锤（`dumpsys activity activities` + dex）：
+     * ```
+     * Task{#3502 A=10350:com.netease.music.lockscreen.task visible=true}
+     *   Hist #0: com.netease.cloudmusic/.activity.LockScreenActivity
+     *   taskAffinity=com.netease.music.lockscreen.task launchMode=3(singleInstance)
+     *   excludeFromRecents=true，launchedFromPackage=com.netease.cloudmusic
+     * ```
+     * 息屏/锁屏出现时网易云自己把它拉起来，运行期 `setShowWhenLocked(true)` 盖在锁屏之上
+     * （主题半透明，`occludesParent=false`）。它在网易云进程里，SystemUI 侧的视图树扫描
+     * 与 pre-draw 守卫都碰不到——只有把该包纳入作用域后在这里拦。
+     *
+     * 拦法：`onCreate(Bundle)` 的 before 里 `finish()` + `overridePendingTransition(0,0)`。
+     * 在 super.onCreate 之前 finish 是 Xposed 的标准用法，Activity 不会走 setContentView，
+     * 用户看不到画面也没有过渡动画。`onResume` 再兜一次：个别 ROM 上提前 finish 仍会
+     * 走进 onResume，且 finish() 幂等，重复调无副作用。
+     *
+     * 开关 kill_lockscreen_activity 每次现读（ContentProvider 查询，只在 Activity 创建时
+     * 发生，成本可忽略）：App 里改完即时生效，不必重启网易云。读不到按默认值（开）处理，
+     * 与 Config 的整体语义一致。
+     */
+    private static void installNetEaseLockScreenKill(ClassLoader loader) {
+        final String target = "com.netease.cloudmusic.activity.LockScreenActivity";
+        try {
+            Class<?> type = XposedHelpers.findClass(target, loader);
+            XC_MethodHook finishNow = new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam hook) {
+                    suppressLockScreenActivity(hook);
+                }
+            };
+            // onCreate 用带 after 的版本：before 里 finish，after 里做歌词取证探针
+            // （finish() 不会中断 onCreate，setContentView 照跑，所以 after 时视图树已建好）。
+            XposedBridge.hookMethod(findLifecycle(type, "onCreate", android.os.Bundle.class), new XC_MethodHook() {
+                @Override protected void beforeHookedMethod(MethodHookParam hook) { suppressLockScreenActivity(hook); }
+                @Override protected void afterHookedMethod(MethodHookParam hook) { probeNetEaseLyricText(hook); }
+            });
+            XposedBridge.hookMethod(findLifecycle(type, "onResume"), finishNow);
+            Log.i(TAG, "NetEase LockScreenActivity killer armed on " + target);
+            Diag.log("netease lockscreen activity killer armed");
+        } catch (Throwable error) {
+            // 网易云改类名/改结构：失败关闭，绝不影响它自己的播放与通知。
+            Log.w(TAG, "NetEase LockScreenActivity killer unavailable: " + target + " (" + error + ")");
+            Diag.log("netease lockscreen activity killer unavailable: " + error);
+        }
+    }
+
+    /**
+     * 网易云歌词取证探针（2026-10-25，只在 debug_log 打开时跑）。
+     *
+     * 背景：标准通道全部实锤排除——MediaSession metadata 只有 11 个标准字段（没有 QQ 音乐那个
+     * 私有 key `ucar.media.metadata.LYRICS_WHOLE`）、通知 contentView=null、`android.text`
+     * 只有「歌手 - 歌名」、`queueTitle=null`、`MiniBarDataProvider`（authority
+     * `com.netease.cloudmusic.minibar`）未导出（content query 直接 SecurityException）。
+     * 网易云的歌词只活在它自己进程的 UI 里，锁屏歌词页 `LockScreenActivity` 就是其中之一。
+     *
+     * 既然为了拦这个页面已经把 com.netease.cloudmusic 纳入作用域，顺手在它 onCreate 之后
+     * 把整棵视图树里的文本打出来：能打出歌词就证明「hook 网易云进程」这条路可行，
+     * 后续可以按这里的类名/id 精确取当前句并转给 SystemUI。打不出来也不亏（零副作用）。
+     */
+    private static void probeNetEaseLyricText(XC_MethodHook.MethodHookParam hook) {
+        try {
+            android.app.Activity activity = (android.app.Activity) hook.thisObject;
+            if (!debugLogOn(activity)) return;
+            StringBuilder out = new StringBuilder("NetEase LockScreenActivity text probe:");
+            int[] budget = { 60 };
+            collectTextViews(activity.getWindow().getDecorView(), activity, 0, out, budget);
+            Log.i(TAG, out.toString());
+        } catch (Throwable error) {
+            Log.w(TAG, "NetEase lyric text probe failed", error);
+        }
+    }
+
+    /** 递归收集 TextView 文本（含 id/类名），深度 ≤14、条数 ≤budget[0]。 */
+    private static void collectTextViews(View view, android.app.Activity host, int depth,
+                                         StringBuilder out, int[] budget) {
+        if (view == null || budget[0] <= 0 || depth > 14) return;
+        String text = null;
+        if (view instanceof android.widget.TextView) {
+            CharSequence raw = ((android.widget.TextView) view).getText();
+            if (raw != null && raw.length() > 0) text = raw.toString();
+        }
+        if (text != null) {
+            budget[0]--;
+            String idName = "";
+            try {
+                if (view.getId() != View.NO_ID) {
+                    idName = host.getResources().getResourceEntryName(view.getId());
+                }
+            } catch (Throwable ignored) { }
+            out.append("\n  ").append(view.getClass().getSimpleName())
+               .append(idName.isEmpty() ? "" : "#" + idName)
+               .append(" vis=").append(view.getVisibility() == View.VISIBLE ? 'V'
+                       : view.getVisibility() == View.INVISIBLE ? 'I' : 'G')
+               .append(" text=").append(text.length() > 120 ? text.substring(0, 120) + "…" : text);
+        }
+        if (view instanceof android.view.ViewGroup) {
+            android.view.ViewGroup group = (android.view.ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                collectTextViews(group.getChildAt(i), host, depth + 1, out, budget);
+            }
+        }
+    }
+
+    /** 按声明签名取生命周期方法（父类也找，LockScreenActivity 可能继承自某个基类）。 */
+    private static java.lang.reflect.Method findLifecycle(Class<?> type, String name, Class<?>... params)
+            throws NoSuchMethodException {
+        for (Class<?> level = type; level != null && level != Object.class; level = level.getSuperclass()) {
+            try { return level.getDeclaredMethod(name, params); }
+            catch (NoSuchMethodException ignored) { }
+        }
+        throw new NoSuchMethodException(name);
+    }
+
+    /** 真正执行「关掉网易云锁屏歌词页」的动作；开关关着时什么都不做。 */
+    private static void suppressLockScreenActivity(XC_MethodHook.MethodHookParam hook) {
+        if (!killLockScreenActivityEnabled(hook)) return;
+        android.app.Activity activity = (android.app.Activity) hook.thisObject;
+        Log.i(TAG, "NetEase LockScreenActivity suppressed (kill_lockscreen_activity=on)");
+        try { activity.finish(); } catch (Throwable ignored) { }
+        // 去掉默认的 Activity 过渡动画：否则每次息屏仍会闪一下网易云的页面。
+        try { activity.overridePendingTransition(0, 0); } catch (Throwable ignored) { }
+    }
+
+    /** 现读 kill_lockscreen_activity；读不到（Provider 不在/异常）按默认的开。 */
+    private static boolean killLockScreenActivityEnabled(XC_MethodHook.MethodHookParam hook) {
+        try {
+            Object thiz = hook.thisObject;
+            if (!(thiz instanceof android.content.Context)) return true;
+            Integer value = Config.elementValues((android.content.Context) thiz)
+                    .get(Config.KILL_LOCKSCREEN_ACTIVITY);
+            return value == null || value != 0;
+        } catch (Throwable error) {
+            return true;
         }
     }
 

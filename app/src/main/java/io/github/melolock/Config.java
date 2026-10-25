@@ -14,6 +14,8 @@ import java.util.Set;
 
 public final class Config {
     static final String PACKAGE = "io.github.melolock";
+    /** 网易云音乐包名：本模块唯一纳入作用域的音乐 App（拦它的锁屏歌词 Activity）。 */
+    static final String PACKAGE_NETEASE = "com.netease.cloudmusic";
     static final String AUTHORITY = PACKAGE + ".config";
     static final Uri URI = Uri.parse("content://" + AUTHORITY + "/state");
     static final Uri ELEMENTS_URI = Uri.parse("content://" + AUTHORITY + "/elements");
@@ -249,6 +251,42 @@ public final class Config {
     public static final String LYRIC_FILTER = "lyric_filter";
 
     /**
+     * 拦截网易云音乐的「锁屏歌词」页（外观页「播放器」分组，默认开）。
+     *
+     * 2026-10-25 zuige 反馈「锁屏上还有网易云的右划解锁页面」。dex 实锤：网易云有个
+     * `com.netease.cloudmusic.activity.LockScreenActivity`，独立 taskAffinity
+     * `com.netease.music.lockscreen.task`、excludeFromRecents、launchMode=singleInstance，
+     * 运行期 `setShowWhenLocked(true)` 盖在锁屏之上（`dumpsys activity activities` 里
+     * `Task{#3502 A=10350:com.netease.music.lockscreen.task visible=true}`，息屏即被拉起）。
+     * 它在网易云自己的进程里，SystemUI 侧碰不到——只有把 com.netease.cloudmusic 也纳入
+     * 作用域才能拦（见 HookEntry.installNetEaseLockScreenKill）。
+     *
+     * 开＝LockScreenActivity 一创建就 finish() + 无动画，锁屏只剩本模块的场景；
+     * 关＝放行，网易云锁屏歌词页照旧显示（它自己的「锁屏歌词」设置也仍有效）。
+     * 只影响那一个 Activity，不动网易云的播放/通知/状态栏歌词。
+     */
+    public static final String KILL_LOCKSCREEN_ACTIVITY = "kill_lockscreen_activity";
+
+    /**
+     * 隐藏锁屏原生媒体卡片（外观页「播放器」分组，默认开）。
+     *
+     * 目标是 HyperOS 锁屏「小面板」里的媒体行：`TinyKeyguardPanelView`（布局
+     * tiny_keyguard_panel.xml）→ `tiny_notif_list`（FlipRowContainer）→ 首行
+     * `tiny_media_session_view`（id=tiny_media_session_container，含专辑图/应用图标/
+     * 歌名/播放控制）。沉浸锁屏上已有自制播放器，这块属于重复信息。
+     *
+     * **注意（2026-10-25 本机实测）**：本机型（OS3 16.03）锁屏视图树里**没有**这块小面板
+     * ——全树普查只有 KeyguardPanelView 那套（clock/background/foreground/info layer），
+     * 原生媒体卡实际是通知栈里的 `MiuiMediaHeaderView`（native_player 模式要靠它，不能动）。
+     * 所以本开关在本机是空转；留着是为了别的 HyperOS 版本/锁屏主题真有小面板时能直接命中，
+     * 命中/不命中都不影响其他功能。真正解决「网易云右划页面」的是 KILL_LOCKSCREEN_ACTIVITY。
+     *
+     * 开＝按 id/类名把该卡片子树压成 INVISIBLE（每帧守卫 + 1s TTL 缓存，同
+     * hideNativeClockLayers），复原走 changedViews 快照；关＝不动原生媒体卡。
+     */
+    public static final String HIDE_NATIVE_MEDIA = "hide_native_media";
+
+    /**
      * 调试日志开关（「设置」页底部「调试」分组，默认关）：
      * 开＝SystemUI 侧输出周期性细节日志（每轮媒体快照的 Session/Media ready、逐帧 render 跳过、
      * 逐句歌词的取色结果等）；关＝只留生命周期/状态变化/错误级日志。
@@ -368,6 +406,8 @@ public final class Config {
         ELEMENT_DEFAULTS.put(DEBUG_LOG, 0);
         ELEMENT_DEFAULTS.put(HIDE_SHORTCUTS, 0);
         ELEMENT_DEFAULTS.put(HIDE_CHARGING, 1);           // 默认隐藏（zuige 2026-10-14：底部充电文案默认不要）
+        ELEMENT_DEFAULTS.put(KILL_LOCKSCREEN_ACTIVITY, 1); // 默认拦网易云锁屏歌词页（zuige 2026-10-25：这个不要了）
+        ELEMENT_DEFAULTS.put(HIDE_NATIVE_MEDIA, 1);       // 默认藏锁屏原生媒体卡（右划露出来的那块）
         ELEMENT_DEFAULTS.put(NATIVE_PLAYER, 0);
         ELEMENT_DEFAULTS.put(STAY_AWAKE, 0);
         ELEMENT_DEFAULTS.put(NOTIFY_CARD_TINT, 1);

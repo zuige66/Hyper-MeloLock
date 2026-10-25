@@ -800,15 +800,22 @@ adb -s 1b3a7d8 reboot
 - **问题**：K60 Pro 用户「下载报错」——检查更新若走 GitHub 源，APK 直链是 GitHub 的（实际落在 objects.githubusercontent.com），国内直连基本必挂；blog 回退只覆盖「检查更新」一步，下载没有回退。
 - **修复**：`AppUpdate` 增加 `fallbackApkUrl`——GitHub 检查成功后顺带拉一次 blog 的 `latest.json`（5s 短超时，失败忽略）取其 `apkUrl`；`UpdateDialogHost.onDownload` 签名改为 `(主链, 备用链)`；`UpdateDownloadService` 收 `EXTRA_FALLBACK_URL`，主源下载失败自动清掉半成品换备用重试一次。`ApkInstaller.downloadAndInstall` 相应加参数。
 
-## Xposed 作用域：现在是两项（v0.3.1 起）
+## Xposed 作用域：现在是三个包（v0.3.7 起）
 
-`assets/xposed_init` 有三个入口，对应两个进程：
+`assets/xposed_init` 有三个入口，覆盖三个进程：
 
 | 入口 | 目标进程 | 作用域 | 作用 |
 | --- | --- | --- | --- |
 | `HookEntry` | `com.android.systemui` | 必勾 | 锁屏覆盖层主体 |
 | `ShortcutAnimBackdrop` | `com.android.systemui` | 必勾 | 手电筒 / 相机转场遮罩换封面 |
-| `WallpaperCover` | `com.miui.miwallpaper` | **新增** | 封面壁纸化（GL 纹理替换） |
+| `WallpaperCover` | `com.miui.miwallpaper` | **v0.3.1 加** | 封面壁纸化（GL 纹理替换） |
+| `HookEntry`（同入口，另一分支） | `com.netease.cloudmusic` | **v0.3.7 加** | 拦掉网易云的锁屏歌词页 `LockScreenActivity`（`kill_lockscreen_activity`） |
+
+**`com.netease.cloudmusic` 是 v0.3.7 新加的**（2026-10-25）。网易云在息屏/锁屏时会自己拉起
+`LockScreenActivity`（全屏 + `TRANSPARENT` + showWhenLocked），把整个 keyguard 置为 `mKeyguardOccluded=true`
+——我们的沉浸场景被它盖住，用户右划就能滑出网易云的歌词页。它在网易云自己的进程里，SystemUI 侧
+（视图扫描 / pre-draw 守卫 / 窗口反射）**一律碰不到**，只能在该进程里 hook 它的 `onCreate` 把它 finish 掉。
+不勾这一项时模块照常工作，只是锁屏上仍会出现网易云那个页面。
 
 **`com.miui.miwallpaper` 是 v0.3.1 新加的**（`97fd449`，rev `WCV-1`）。只勾 SystemUI 时模块照常工作，但没有壁纸化：
 锁屏观感退回「在 SystemUI 里叠一层」，MIUI 液态玻璃时钟与通知卡模糊采样的仍是系统壁纸。
@@ -1728,6 +1735,25 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
 
     - 新增 `Config.HIDE_CARD_ART`（默认 1＝开）：`cardArt` 与右侧 `iconWave` 置 GONE、`labels` 左边距归零；居中由 `MarqueeController.setCentered()` 在「文本放得下」时平移 `(clipW-textW)/2` 实现，溢出跑马灯仍左对齐起滚。详见「最近改动补充」2026-10-23（zuige·二）条。
     - **副行文案依赖 `lyric_row`**：副行的「歌手 / 歌名」由上一个开关决定，本开关只管「封面在不在 + 文字居中不居中」，两者独立。
+
+71. 2026-10-25 **HE18：拦掉网易云的锁屏歌词页（`kill_lockscreen_activity`）＋结构普查全树 dump**：
+
+    - **根因实锤**：zuige「锁屏上还有网易云的右划解锁页面」。`dumpsys window windows` + `dumpsys activity activities` 抓到：
+      ```
+      isKeyguardShowing=true  mKeyguardOccluded=true
+      Window #11 com.netease.cloudmusic/.activity.LockScreenActivity
+        ty=BASE_APPLICATION fmt=TRANSPARENT sysuil=true vsysui=IMMERSIVE_STICKY
+        mHasSurface=true isReadyForDisplay()=true frame=[0,0][1080,2400]
+      Task{#3502 A=10350:com.netease.music.lockscreen.task visible=true}
+        launchMode=3(singleInstance) excludeFromRecents=true
+      ```
+      即：网易云在息屏/锁屏时自己拉起 `LockScreenActivity`（**全屏 + TRANSPARENT + showWhenLocked**），把整个 keyguard 置为 occluded，我们的沉浸场景被它盖住；因为窗口透明，用户看到的是「我们的锁屏 + 右划能滑出网易云的歌词页」。它在网易云自己的进程里，SystemUI 侧的视图扫描/pre-draw 守卫一律碰不到。
+    - **修法**：把 `com.netease.cloudmusic` 加进 `res/values/xposed_scope.xml`，`HookEntry.installNetEaseLockScreenKill()` 在网易云进程里 hook `LockScreenActivity.onCreate(Bundle)` 的 before → `finish()` + `overridePendingTransition(0,0)`，`onResume` 再兜一次（finish 幂等）。开关 `kill_lockscreen_activity` 每次现读 ContentProvider，App 里改完即时生效。类找不到则失败关闭，不影响网易云的播放/通知。
+    - **`hide_native_media`（同批加的第二个开关）本机空转**：原本猜「右划页」是 HyperOS 小面板 `TinyKeyguardPanelView → tiny_notif_list(FlipRowContainer) → tiny_media_session_view(id=tiny_media_session_container)` 那块媒体卡（dex 与 `res/layout/tiny_keyguard_panel.xml`/`tiny_media_session_view.xml` 都已核实存在）。但**全树普查证明本机型锁屏视图树里没有小面板**，原生媒体卡实际是通知栈里的 `MiuiMediaHeaderView`（native_player 模式要用，不能动）。开关保留（别的 HyperOS 版本/主题真有小面板时可直接命中，TTL 缓存 + 失败关闭），但本机无效属预期。
+    - **结构普查增强**：`dumpCensusNow()` 新增「keyguard full tree」——从 `HyperOSKeyguardRootView` 递归打**整棵树**（类名 + id + vis + 宽高，深度不限），命中 tiny/flip/media/keyguard/clock 的节点打 `*`。原来只有通知栈深度 4 的栈树，看不到锁屏根下面的小面板子树，这次就是靠它排除「小面板」假设的。
+    - **网易云歌词取证探针**：既然为了拦锁屏页已经把网易云纳入作用域，顺手在 `LockScreenActivity.onCreate` 的 after 里（debug_log 开时）把整棵视图树的 TextView 文本打到 logcat（`NetEase LockScreenActivity text probe`）。能打出歌词 → 「hook 网易云进程转歌词」这条路可行；打不出也不亏（零副作用）。背景见下条。
+    - **网易云歌词通道最终结论（穷尽排查）**：MediaSession metadata 只有 11 个标准字段（**没有** QQ 音乐那个 `ucar.media.metadata.LYRICS_WHOLE`）；通知 `contentView=null`、`android.text` 只有「歌手 - 歌名」、`"lyric"` extra 是 PendingIntent；`queueTitle=null`、无 extras；`PlaybackState` 里只有自定义动作 `Action:mName='lyric'`（点了让网易云自己弹桌面歌词）；`MiniBarDataProvider`（authority `com.netease.cloudmusic.minibar`）**未导出**，`content query` 直接 `SecurityException: not exported from UID 10350`。网易云的歌词 UI 全部在它自己进程内（`LockScreenActivity` / `module.lyric.statuslyric.*` / `module.lyric.floatlyric.*`）。→ 结论：**不 hook 网易云进程（或读它私有数据）就拿不到**。
+    - rev HE17→HE18，versionCode 16→17 / 0.3.6→0.3.7。
 
 
 
