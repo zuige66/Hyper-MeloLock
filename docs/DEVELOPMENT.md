@@ -36,6 +36,24 @@
 
 ## 最近改动补充
 
+2026-10-25（zuige·三）：**网易云歌词实锤「没有数据源」+ 三处修复（HE17·三）**。
+
+**网易云歌词的结论（别再排查了）**：用 `cmd media_session dispatch next com.netease.cloudmusic` 触发切歌、借 `MediaSource.dumpMetadataProbe` 抓到网易云**全部 11 个字段**——`ALBUM_ART / ART / DISPLAY_ICON`（Bitmap 500x500）、`ARTIST`、`DISPLAY_SUBTITLE`、`DURATION`、`USER_RATING`、`DISPLAY_TITLE`、`MEDIA_ID`、`ALBUM`、`TITLE`，**没有一个带歌词**。通知侧也查过：`android.text` 只有「歌手 - 歌名」，那个叫 `"lyric"` 的 extra 是 **PendingIntent**（点了让网易云自己显示桌面歌词），不是歌词文本。所以「网易云放歌时锁屏没有逐句歌词」**不是 bug，是它不通过任何公开通道暴露歌词**。QQ 音乐之所以有，是它把整篇 LRC 塞在自定义 key `ucar.media.metadata.LYRICS_WHOLE` 里。要支持网易云只剩三条路，都不做：读它私有数据库（越权）、接它的桌面歌词窗口（脆弱）、联网查歌词 API（模块不该联网、也不稳定）。
+
+**探针本身的一个盲点已修**：`dumpMetadataProbe` 原先只调 `metadata.getString(field)`，而 `MediaDescription` 的 title/subtitle 是 **CharSequence**，`getString` 对它们返回 null —— 播放器若把歌词放在 CharSequence 字段里，整行漏掉、白采一轮。现改为 `getString` 取不到再 `getText`，仍取不到的记 `<非文本字段>`，Bitmap 记尺寸。
+
+**修复一：歌词职员表行过滤（新开关 `lyric_filter`，默认开）**。LRC 里常混「编曲: 钱雷」「录音工程师 Recording」「次中音萨克斯：刘晓光」这类职员表行，它们带时间戳又落在开头几秒之后，会把主行占满（zuige 截图里出现过两次）。`isCreditLine()` 认两种形态：① **角色词 + 冒号**，冒号前片段 ≤6 字且**以角色词开头或结尾**；② **含英文制作词**（Recording/Mixing/Mastered…）且整行 ≤40 字。三个约束都是为了不误杀真歌词，样本验证 10 命中 / 13 保留全对：
+- 角色词要求贴**首尾**而非「包含」——「包含」会命中「制作一个礼物送给你：好吗」；
+- 片段长度上限从 12 **收紧到 6**——「制作一个礼物送给你」以「制作」开头，12 字放它过；
+- 单字角色词（「鼓」）不进表——「鼓励：自己」会被误杀，改收「鼓手」「打击乐」。
+被过滤的行在 debug_log 开时打 `Lyrics: credit line skipped: <原文>`，方便核对；开关在「播放器」分组，关了完全不过滤。
+
+**修复二：居中态切到跑马灯的抽动**。`hide_card_art` 开着时，文本先放得下（居中显示），下一句变长到要滚时，`measure` 只处理「放得下」分支，位移还停在居中值，直到 `cycle` 里才 `setTranslationX(0)` —— 用户看到文字从中间突然跳到左边再起滚。修法：`measure` 的**溢出分支也归零**，且这一刻文字正被 `applyTextWithFade` 淡出到 alpha 0，归零发生在隐形期，看不见。
+
+**修复三：空文本瞬间偏右**。`centeredOffset()` 在 `tv.getWidth()==0`（切歌瞬间文本被清空那几帧）会算出半个裁剪框的位移，文字闪到右侧再回来。加 `textW == 0 → 0` 短路。
+
+**本机构建环境变化（重要）**：本机原来的 JDK 21 已丢失（`C:\Program Files\Common Files\Oracle\Java\javapath` 只剩 4 个 exe 的坏壳，`~/.jdks` 只有 JDK 17），而项目 `sourceCompatibility = 21`，Gradle 的 toolchain 自动下载又走不通（`api.foojay.io` 连不上）。已从 Adoptium 装 **Temurin 21.0.12.1** 到 `C:\Users\lirui\.jdks\jdk-21.0.12.1+1`，构建前 `export JAVA_HOME` 指过去即可（细节见 AGENTS.md「构建发布包」条）。
+
 2026-10-23（zuige·二）：**隐藏播放器小封面 + 文字两行居中（新开关 `hide_card_art`）**。新增 `Config.HIDE_CARD_ART`（默认 1＝开）：开＝`cardArt` 置 GONE（**仍挂进树**，只是不占位不绘制——`render()` 的交叉淡入与 `applyCardColors()` 的取色回填都按「视图在树上」写，少一个 parent 就多一类 NPE 风险），`labels` 左边距归零，同时把右侧 `iconWave` 也置 GONE（那块 38dp 占位不让掉的话，「居中」只是在小半屏里居中，视觉上偏左约 19dp）。文字居中由 `MarqueeController.setCentered(true)` 完成：**只在文本放得下时**把 `translationX` 设成 `(clipW - textW)/2`，溢出要跑马灯时仍从左侧 0 起滚——否则「从中间开始滚」既看不出头尾，也丢掉「读到大半才启动滚动」的暗示。代价：点小封面跳音乐 App 的入口随封面一起消失（开关 summary 已写明）。设置入口：外观页「播放器」分组 →「隐藏专辑封面」。真机验收：封面与右侧波形图标消失，主行歌词、副行「歌手 / 歌名」水平居中。
 
 2026-10-23（zuige）：**歌词不再顶掉歌名（新开关 `lyric_row`，HE17）**。原行为：`titleTextFor()` 在有歌词时把主行（歌名位置）换成当前歌词句，副行（`artist`）只显示歌手 → 有歌词时屏幕上只剩「歌词 + 歌手」，**歌名消失**（真机取证：《孤勇者》播放中主行是「编曲: 钱雷」、副行「陈奕迅」，看不到歌名）。新增 `Config.LYRIC_ROW`（`lyric_row`，默认 **1＝开**；zuige 反馈「装了怎么没变」后由默认 0 改为 1，只对新装/未设置过该键的用户生效，存量配置不受影响）：开＝副行改由新方法 `artistTextFor()` 生成 **「歌手 / 歌名」**，主行仍是歌词（无歌词时回退歌名），于是歌词、歌名、歌手三者同屏；**无歌词时副行不拼歌名**（主行本来就是歌名，拼上去等于同一句念两遍）。设置入口：外观页「播放器」分组 →「歌词不顶掉歌名」。改完 120ms 防抖重建（`applyPendingConfig`），不需要重启 SystemUI。副行变长后的溢出照旧交给 `MarqueeController`（它用 TextWatcher 感知换文本，无需额外通知）。真机验收：主行「次中音萨克斯：刘晓光」+ 副行「易烊千玺 / 冷屁股」同屏，与目标样式一致。

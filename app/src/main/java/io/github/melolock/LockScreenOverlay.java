@@ -399,6 +399,8 @@ final class LockScreenOverlay {
      * 关＝历史行为（副行只有歌手，有歌词时歌名被歌词顶掉）。
      */
     private boolean fxLyricRow;
+    /** 歌词信息行过滤（lyric_filter，默认开）：过滤 LRC 里的职员表行，见 {@link #isCreditLine}。 */
+    private boolean fxLyricFilter;
     /** 快捷栏容器缓存（见 applyShortcutRowVisibility）：避免每个 pre-draw 周期都全树按 id 找。 */
     private View cachedShortcutRow;
     private int shortcutRowLookups;
@@ -1105,6 +1107,7 @@ final class LockScreenOverlay {
         fxHideIndication = elem(elements, Config.HIDE_CHARGING) != 0;
         fxNativePlayer = elem(elements, Config.NATIVE_PLAYER) != 0;
         fxLyricRow = elem(elements, Config.LYRIC_ROW) != 0;
+        fxLyricFilter = elem(elements, Config.LYRIC_FILTER) != 0;
         notifyCardTint = elem(elements, Config.NOTIFY_CARD_TINT) != 0;
         notifyBgConfig = elem(elements, Config.NOTIFY_CARD_BG);
         notifyBgPick = coercePick(elem(elements, Config.NOTIFY_CARD_BG_PICK));
@@ -2422,6 +2425,56 @@ final class LockScreenOverlay {
      *  跳过后第一句真歌词之前自然显示歌名。真歌词极少在 3 秒内开始（前奏未完）。 */
     private static final long LYRIC_MIN_START_MS = 3000;
 
+    /** 职员表角色词（冒号前的片段含其中一个即算）。「鼓」这类单字不列——「鼓励：自己」会误杀。 */
+    private static final String[] CREDIT_ROLES = {
+            "编曲", "作曲", "作词", "填词", "录音", "混音", "母带", "制作人", "制作", "鼓手", "打击乐",
+            "吉他", "贝斯", "键盘", "合成器", "弦乐", "和声", "和音", "配唱", "监制", "企划", "统筹",
+            "工程", "出品", "出版", "设计", "封面", "钢琴", "小提琴", "中提琴", "大提琴", "萨克斯",
+            "小号", "长号", "圆号", "长笛", "单簧管", "双簧管", "手风琴", "口琴",
+            "录音师", "混音师", "母带师", "调音师", "工程师",
+            "programming", "arrangement", "arranged", "written", "performed",
+    };
+    /** 英文制作职位的关键词：整行含其中一个且不太长，即算职员表（中文歌词里几乎不会出现这些词）。 */
+    private static final String[] CREDIT_ENGLISH = {
+            "recording", "mixing", "mastering", "producer", "engineer", "arranger",
+            "composer", "lyricist", "guitar", "bass", "drum", "keyboard", "strings",
+            "backing vocal", "studio", "mastered", "mixed",
+    };
+
+    /**
+     * 判断一行歌词文本是不是 LRC 里的职员表（制作信息）行。
+     *
+     * 两种形态，都是「短行 + 强特征」，尽量不碰真歌词：
+     * ① **角色词 + 冒号**：冒号前的片段不超过 12 字，且**以角色词开头或以角色词结尾**。
+     *    命中「编曲: 钱雷」「吉他：李延亮」「次中音萨克斯：刘晓光」；不命中「制作一个礼物
+     *    送给你：好吗」（角色词在句子中间，那是歌词不是职员表）。
+     * ② **含英文制作词**：整行不超过 40 字且含 {@link #CREDIT_ENGLISH} 之一。
+     *    命中「录音工程师 Recording」「Mixed by Tom Coyne」。
+     *
+     * 角色词要求贴在片段首尾而不是「包含」——「包含」会把「制作一个礼物送给你」这类
+     * 正常歌词当职员表过滤掉（2026-10-25 由包含改首尾）。
+     *
+     * 宁可漏过也不误杀：过滤只认这两种形态，别的行一律当真歌词。开关关掉时完全不过滤。
+     */
+    private static boolean isCreditLine(String text) {
+        if (text == null || text.isEmpty() || text.length() > 40) return false;
+        String lower = text.toLowerCase(java.util.Locale.ROOT);
+        for (String word : CREDIT_ENGLISH) {
+            if (lower.contains(word)) return true;
+        }
+        int colon = text.indexOf(':');
+        if (colon < 0) colon = text.indexOf('：');
+        // 角色片段不超过 6 字：职员表的角色名都很短（编曲/次中音萨克斯/后期制作），
+        // 而「制作一个礼物送给你」这类以角色词开头的正常歌词会被这一条挡掉
+        // （2026-10-25：由 12 收紧到 6，样本验证见 docs/DEVELOPMENT.md）。
+        if (colon <= 0 || colon > 6) return false;
+        String head = text.substring(0, colon).trim();
+        for (String role : CREDIT_ROLES) {
+            if (head.startsWith(role) || head.endsWith(role)) return true;
+        }
+        return false;
+    }
+
     /**
      * 解析当前歌的 LRC（QQ＝metadata 自定义 key，见 MediaSource.lyricsOf）。
      * 歌词存在时歌名位置显示当前句（跟随播放进度），无歌词/第一句前回退显示歌名。
@@ -2460,6 +2513,12 @@ final class LockScreenOverlay {
             if (stamps.isEmpty() || lastEnd == 0) continue;   // [ti:]/[ar:] 等元数据标签跳过
             String text = line.substring(lastEnd).trim();
             if (text.isEmpty()) continue;
+            // 职员表行（「编曲: 钱雷」「录音工程师 Recording」）不进歌词表：它们带时间戳又落在
+            // 开头几秒之后，不拦就会把主行占满（zuige 截图里出现过两次）。
+            if (fxLyricFilter && isCreditLine(text)) {
+                if (debugLog) Log.i(TAG, "Lyrics: credit line skipped: " + text);
+                continue;
+            }
             for (Long stamp : stamps) {
                 long t = stamp - offset;
                 if (t < LYRIC_MIN_START_MS) continue;   // 开头 3 秒内的行（QQ 广告句）不进歌词表：第一句前显示歌名
@@ -4231,6 +4290,11 @@ final class LockScreenOverlay {
                     scheduleCycle(nextDelayMs());
                     return;
                 }
+                // 溢出（要跑马灯）：先把位移归零。此刻文字正被 applyTextWithFade 淡出到 alpha 0
+                // （换字动效），归零用户看不见；若不归零，下一句从居中位突然跳到左对齐起滚，
+                // 观感就是「抽一下」（2026-10-25 修：hide_card_art 开启时的居中/滚动切换）。
+                cancelAnim();
+                tv.setTranslationX(0f);
                 if (verbose) Log.i(TAG, "Marquee: overflow=" + overflow + "px, first scroll in " + nextDelayMs() + "ms");
                 scheduleCycle(nextDelayMs());
             }
@@ -4268,7 +4332,11 @@ final class LockScreenOverlay {
         /** 居中位移量：仅在 centered 且文本比裁剪框窄时非 0（负数截断为 0＝左对齐）。 */
         private float centeredOffset() {
             if (!centered || tv == null || clip == null) return 0f;
-            int offset = (clip.getWidth() - tv.getWidth()) / 2;
+            int textW = tv.getWidth();
+            // 切歌瞬间文本被清空的那几帧宽度是 0：不拦住就会算出半个裁剪框的位移，
+            // 文字闪到右侧再回来（2026-10-25 修）。
+            if (textW == 0) return 0f;
+            int offset = (clip.getWidth() - textW) / 2;
             return offset > 0 ? offset : 0f;
         }
     }

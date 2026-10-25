@@ -240,6 +240,15 @@ public final class Config {
     public static final String HIDE_CARD_ART = "hide_card_art";
 
     /**
+     * 歌词信息行过滤（外观页「播放器」分组，默认开）：
+     * LRC 文件里常混有职员表行——「编曲: 钱雷」「录音工程师 Recording」「次中音萨克斯：刘晓光」。
+     * 它们带时间戳又落在开头几秒之后，会被当歌词逐句显示，主行被这些占满。
+     * 开＝按「角色词 + 冒号」与「含英文制作词」两种形态过滤；关＝如实显示 LRC 原文。
+     * 误杀风险与规则细节见 LockScreenOverlay.isCreditLine()。
+     */
+    public static final String LYRIC_FILTER = "lyric_filter";
+
+    /**
      * 调试日志开关（「设置」页底部「调试」分组，默认关）：
      * 开＝SystemUI 侧输出周期性细节日志（每轮媒体快照的 Session/Media ready、逐帧 render 跳过、
      * 逐句歌词的取色结果等）；关＝只留生命周期/状态变化/错误级日志。
@@ -355,6 +364,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(MARQUEE_PAUSE, 15);          // 秒，5~60
         ELEMENT_DEFAULTS.put(LYRIC_ROW, 1);               // 默认开（zuige 2026-10-23：装了就该看到三者同显）
         ELEMENT_DEFAULTS.put(HIDE_CARD_ART, 1);           // 默认开（zuige 2026-10-23：装了就要看到封面隐藏+文字居中）
+        ELEMENT_DEFAULTS.put(LYRIC_FILTER, 1);            // 默认过滤 LRC 里的职员表行（编曲/录音等）
         ELEMENT_DEFAULTS.put(DEBUG_LOG, 0);
         ELEMENT_DEFAULTS.put(HIDE_SHORTCUTS, 0);
         ELEMENT_DEFAULTS.put(HIDE_CHARGING, 1);           // 默认隐藏（zuige 2026-10-14：底部充电文案默认不要）

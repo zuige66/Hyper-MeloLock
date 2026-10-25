@@ -39,9 +39,25 @@ final class MediaSource {
         try {
             StringBuilder text = new StringBuilder("metadata probe pkg=").append(controller.getPackageName());
             for (String field : metadata.keySet()) {
+                // 先按 String 取，取不到再按 CharSequence 取（MediaDescription 的 title/subtitle
+                // 是 CharSequence，getString 对它们返回 null——早年只打 String 时，播放器把歌词放
+                // 在 CharSequence 字段里就整行漏掉，白采一轮）。仍取不到的只留字段名与类型线索，
+                // 这样「歌词藏在 long / Bitmap 字段」也至少看得见键名。
                 String value = metadata.getString(field);
-                if (value == null || value.length() == 0) continue;
-                text.append(" | ").append(field).append('=').append(value);
+                if (value == null || value.length() == 0) {
+                    CharSequence cs = metadata.getText(field);
+                    if (cs != null) value = cs.toString();
+                }
+                if (value == null || value.length() == 0) {
+                    android.graphics.Bitmap bmp = metadata.getBitmap(field);
+                    text.append(" | ").append(field).append('=')
+                            .append(bmp != null ? "<Bitmap " + bmp.getWidth() + "x" + bmp.getHeight() + ">" : "<non-text>");
+                    continue;
+                }
+                // 值可能很长（整篇 LRC）：截断到 400 字，够认出「这是不是歌词」即可，
+                // 别把 logcat 主缓冲一行撑爆（排查时被冲掉的教训，2026-10-10）。
+                text.append(" | ").append(field).append('=')
+                        .append(value.length() > 400 ? value.substring(0, 400) + "…(" + value.length() + " chars)" : value);
             }
             Log.i(TAG, text.toString());
         } catch (Throwable error) { Log.w(TAG, "metadata probe failed", error); }

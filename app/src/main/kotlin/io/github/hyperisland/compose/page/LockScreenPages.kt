@@ -515,7 +515,7 @@ internal fun LockAppearancePage() {
         "sign" to listOf(Config.SIGN_ENABLED, Config.SIGN_SIZE, Config.SIGN_WEIGHT, Config.SIGN_COLOR, Config.SIGN_SPACING),
         "clock" to listOf(Config.CLOCK_SIZE, Config.CLOCK_SPACING, Config.CLOCK_WEIGHT, Config.CLOCK_COLOR, Config.CLOCK_ROUNDNESS, Config.CLOCK_STROKE),
         "cover" to listOf(Config.COVER_SCALE, Config.COVER_WIDTH, Config.COVER_HEIGHT, Config.COVER_SPACING, Config.COVER_POP),
-        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.NATIVE_PLAYER, Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.PLAYER_CARD_POP, Config.PLAYER_VECTOR_ICONS, Config.LYRIC_ROW, Config.HIDE_CARD_ART, Config.MARQUEE_SPEED, Config.MARQUEE_PAUSE),
+        "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.NATIVE_PLAYER, Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.PLAYER_CARD_POP, Config.PLAYER_VECTOR_ICONS, Config.LYRIC_ROW, Config.LYRIC_FILTER, Config.HIDE_CARD_ART, Config.MARQUEE_SPEED, Config.MARQUEE_PAUSE),
         "entry" to listOf(Config.ENTRY_BG, Config.ENTRY_BG_PICK),
         "debug" to listOf(Config.DEBUG_LOG),
     )
@@ -723,6 +723,13 @@ internal fun LockAppearancePage() {
                     icon = null,
                     checked = value(Config.LYRIC_ROW) != 0,
                     onCheckedChange = { update(Config.LYRIC_ROW, if (it) 1 else 0) },
+                )
+                PreferenceSwitch(
+                    title = "过滤歌词信息行",
+                    summary = "过滤「编曲: 钱雷」「录音工程师 Recording」这类职员表行，不占歌词位置",
+                    icon = null,
+                    checked = value(Config.LYRIC_FILTER) != 0,
+                    onCheckedChange = { update(Config.LYRIC_FILTER, if (it) 1 else 0) },
                 )
                 PreferenceSwitch(
                     title = "隐藏专辑封面",
