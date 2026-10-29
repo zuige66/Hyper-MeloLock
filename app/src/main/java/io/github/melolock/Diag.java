@@ -122,6 +122,18 @@ final class Diag {
         main.postDelayed(flushTask, FLUSH_DELAY_MS);
     }
 
+    /**
+     * 立即回写（2026-10-29）：绕过 2 秒节流，把刚写进去的行尽快送到 App 侧。
+     *
+     * 唯一调用点是「媒体现场取证」（{@link Config#ACTION_MEDIA_PROBE}）——App 点「复制报告」
+     * 时会等这份数据，节流 2 秒会让它读到上一版报告。可跨线程调用（事件/快照访问都加锁）。
+     */
+    static void flushNow() {
+        if (!enabled) return;
+        dirty = true;
+        flush();
+    }
+
     private static void flush() {
         if (!enabled || !dirty) return;
         dirty = false;

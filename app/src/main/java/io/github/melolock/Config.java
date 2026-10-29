@@ -73,6 +73,16 @@ public final class Config {
      * 等人看完再拉日志，证据早被冲掉——现在抓取时机由排查方自己控制。
      */
     public static final String ACTION_CENSUS_DUMP = "io.github.melolock.action.CENSUS_DUMP";
+    /**
+     * 媒体现场取证（2026-10-29，HE19）：App 端「复制报告」前发本广播，SystemUI 侧立刻把
+     * **此刻**的会话清单（包名 / 播放状态 / 有没有封面 / 是否被模块名单挡掉 / 枚举异常原文）
+     * 写进诊断报告并立即回写。
+     *
+     * 为什么必须按需取证：诊断事件是「变化时记录」，而用户报问题往往在「什么都没发生」的
+     * 状态（锁屏上没东西、报告里只有一句 no active sessions）——分不清「枚举坏了」还是
+     * 「截取时本来就没歌」。平板首份报告就卡在这里（2026-10-29）。
+     */
+    public static final String ACTION_MEDIA_PROBE = "io.github.melolock.action.MEDIA_PROBE";
     /** 广播的目标包：显式指定才能送达 SystemUI 进程里注册的接收器。 */
     public static final String SYSTEMUI_PACKAGE = "com.android.systemui";
 

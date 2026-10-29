@@ -36,6 +36,34 @@
 
 ## 最近改动补充
 
+2026-10-29（平板适配第一轮）：**诊断报告「不可判读」的根因 + 媒体现场取证（HE19）**。
+
+**问题**：用户报「平板（Xiaomi Pad 5 Pro / `elish` / Android 16 移植 ROM / `16.03.251211.r`）上不生效」，附的诊断报告只有 9 条事件、跨 4 秒：
+
+```
+12:27:58.653 systemui root constructor hook installed
+12:28:00.259 no active sessions
+12:28:02.378 diag enabled (debug_log on)
+12:28:02.380 keyguard root attached
+12:28:02.385 versions systemui=16.03.251211.r plugin=17.1.4.22.1 (gate removed)
+12:28:02.386 observing module switch
+12:28:02.389 module enabled=true
+12:28:02.389 render skipped: no-session
+12:28:02.389 restore: render-no-session
+```
+
+**判读**：hook 装上了、根视图找到了、模块开着、版本门禁已撤——**链路上游全通**，唯一断点是媒体层：`getActiveSessions` 返回空，`render(null)` 走 `skip("no-session")` + `restore("render-no-session")`，场景从未被创建过（没有 `create ok`）。而这份报告截取于 SystemUI 重启后 4 秒内，所以**它证明不了「枚举坏了」**——同样可能是那一刻确实没有歌在放。旧诊断把「枚举返回空」和「枚举抛异常」都写成同一句 `no active sessions`，远程侧无法区分，这就是这轮要补的洞。
+
+**改动（全部是取证，不改渲染行为）**：
+
+1. `MediaSource.probe(Context, String)`：按需把**此刻**的会话清单写进报告——`allowlist=n [包名…]`、`sessions=n`、每个会话的 `state / meta / art=WxH / allowed / title`，以及 `getActiveSessions` 抛出的**异常类名与消息**。一份报告即可分辨四种病因：没会话 / 有会话但没勾选 / 勾了但暂停 / 枚举抛异常。
+2. `Config.ACTION_MEDIA_PROBE` + `HookEntry.probeMedia()`：App 点「复制报告」时发广播 → SystemUI 在**独立线程**取证 → `Diag.flushNow()` 绕过 2 秒节流立即回写 → App 等 700ms 再读。事件流水只在「状态变化」时记录，用户报的恰恰是「什么都没发生」，必须能按需抓现场。
+3. `refresh()`：`getActiveSessions` 的异常单独记一条（`getActiveSessions threw SecurityException: …`，同因去重），并在会话总数变化时记 `active sessions=0/1`——报告里能看出「播歌前 0、播歌后 1」的时间线。
+4. `start()`：监听注册失败不再静默吞掉（旧写法与「没歌」同形）。失败时记一条 + **每 5s 自愈重试**（`retryStart`，`stop()` 里撤销，避免模块关掉后被重试重新装上）。这条针对「该 ROM 上 `addOnActiveSessionsChangedListener` 抛异常 → 模块永远收不到会话回调」这一平板怀疑项。
+5. rev HE18→HE19，versionCode 17→18 / 0.3.7→0.3.8。
+
+**排查结论（给平板用户的判据）**：报告里出现 `probe(report) sessions=0` → 系统侧真没有会话（播放器没建 MediaSession / 没在放）；`sessions=1 … allowed=false` → 模块「音乐应用」里没勾选那个播放器（新装设备默认全不勾，**这是远程适配最高发的原因**）；`sessions=1 state=3 art=WxH allowed=true` 但仍不显示 → 才轮到渲染链路（此时看有没有 `create ok` / `native views missing`）。
+
 2026-10-25（zuige·三）：**网易云歌词实锤「没有数据源」+ 三处修复（HE17·三）**。
 
 **网易云歌词的结论（别再排查了）**：用 `cmd media_session dispatch next com.netease.cloudmusic` 触发切歌、借 `MediaSource.dumpMetadataProbe` 抓到网易云**全部 11 个字段**——`ALBUM_ART / ART / DISPLAY_ICON`（Bitmap 500x500）、`ARTIST`、`DISPLAY_SUBTITLE`、`DURATION`、`USER_RATING`、`DISPLAY_TITLE`、`MEDIA_ID`、`ALBUM`、`TITLE`，**没有一个带歌词**。通知侧也查过：`android.text` 只有「歌手 - 歌名」，那个叫 `"lyric"` 的 extra 是 **PendingIntent**（点了让网易云自己显示桌面歌词），不是歌词文本。所以「网易云放歌时锁屏没有逐句歌词」**不是 bug，是它不通过任何公开通道暴露歌词**。QQ 音乐之所以有，是它把整篇 LRC 塞在自定义 key `ucar.media.metadata.LYRICS_WHOLE` 里。要支持网易云只剩三条路，都不做：读它私有数据库（越权）、接它的桌面歌词窗口（脆弱）、联网查歌词 API（模块不该联网、也不稳定）。
@@ -1758,3 +1786,8 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
 
 
 
+72. 2026-10-29 **HE19：媒体现场取证（平板适配第一轮）**：
+
+    - **背景**：平板（`elish` / Android 16 / `16.03.251211.r`）报告只有 4 秒 9 条事件，链路到「媒体层」为止——`no active sessions` → `render skipped: no-session` → `restore: render-no-session`，`create ok` 从未出现。旧诊断把「枚举返回空」与「枚举抛异常」写成同一句，报告不可判读。
+    - **取证**：`MediaSource.probe()`（会话清单 + 名单 + 异常原文）、`ACTION_MEDIA_PROBE`（「复制报告」前按需取证 + `Diag.flushNow()` 立即回写）、`refresh()` 记会话总数变化与枚举异常、`start()` 注册失败留痕 + 5s 自愈重试。
+    - **不改渲染行为**：本轮只补证据链；判据见「最近改动补充」2026-10-29 条。rev HE18→HE19，0.3.7→0.3.8。

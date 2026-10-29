@@ -41,9 +41,9 @@ public final class HookEntry implements IXposedHookLoadPackage {
             }
             return;
         }
-        Log.i(TAG, "HookEntry rev=HE18 (lyric_row: artist line shows \"artist / title\" when lyrics present"
-                + "; kill_lockscreen_activity: 拦网易云 LockScreenActivity"
-                + "; hide_native_media: 藏锁屏原生媒体卡)");
+        Log.i(TAG, "HookEntry rev=HE19 (media probe: 会话清单/枚举异常进诊断报告"
+                + "; session listener retry: 注册失败 5s 自愈"
+                + "; 平板适配取证) rev-prev=HE18");
         try {
             Class<?> root = XposedHelpers.findClass(
                     "com.android.keyguard.widget.HyperOSKeyguardRootView", param.classLoader);
@@ -109,9 +109,10 @@ public final class HookEntry implements IXposedHookLoadPackage {
      * 作用域」全部落空，用户侧零反馈。现在挂在 SystemUI 应用上下文上，活到进程死，
      * 与覆盖层生命周期彻底解耦。
      *
-     * 三个 action：
+     * 五个 action：
      *  - ACTION_DIAG_REFRESH：App 刚写完 debug_log，立即重读并开关回传，不等 create()。
-     *    打开时会把开机至今缓冲的全部历史一次性 flush（见 Diag.enable）。
+     *    打开时会把开机至今缓冲的全部历史一次性 flush（见 Diag.enable），并附一份媒体现场。
+     *  - ACTION_MEDIA_PROBE：按需媒体现场取证（「复制报告」前发），见 {@link #probeMedia}。
      *  - ACTION_DIAG_CLEAR：清事件缓冲并回写空流。
      *  - ACTION_CENSUS_DUMP：按需结构普查（栈树 + 异物卡 + 进程窗口）到 logcat。
      *  - ACTION_RESTART_SYSTEMUI：kill 自己完成作用域重启（无 root 方案）。
@@ -129,6 +130,11 @@ public final class HookEntry implements IXposedHookLoadPackage {
                     try { overlay.setDebugLog(on); } catch (Throwable ignored) { }
                 }
                 Log.i(TAG, "Diag toggled via broadcast: " + on);
+                // 开始记录时顺手取一份媒体现场：报告第一行就能看到「此刻几个会话」。
+                if (on) probeMedia(context, "diag-on");
+            } else if (Config.ACTION_MEDIA_PROBE.equals(action)) {
+                // 「复制报告」前调用：把此刻的会话清单写进报告并立即回写（见 MediaSource.probe）。
+                probeMedia(context, "report");
             } else if (Config.ACTION_DIAG_CLEAR.equals(action)) {
                 Diag.clear();
                 Log.i(TAG, "Diagnostic report cleared via broadcast");
@@ -151,6 +157,24 @@ public final class HookEntry implements IXposedHookLoadPackage {
     private static volatile boolean moduleReceiverOn;
 
     /**
+     * 媒体现场取证（HE19，2026-10-29）：把「此刻有几个媒体会话、每个长什么样」写进诊断报告。
+     *
+     * 必须独立线程：{@code getActiveSessions} 是 binder 调用、{@code Config.allowedPackages}
+     * 还要读 ContentProvider，而这里是从广播接收器（主线程）进来的——诊断路径绝不能拖慢锁屏。
+     * 取完立刻 {@link Diag#flushNow()}，App 侧「复制报告」等这份数据。
+     */
+    private static void probeMedia(Context context, String why) {
+        if (context == null) return;
+        final Context target = context.getApplicationContext() != null
+                ? context.getApplicationContext() : context;
+        new Thread(() -> {
+            try { MediaSource.probe(target, why); }
+            catch (Throwable error) { Diag.log("probe failed: " + error); }
+            Diag.flushNow();
+        }, "melolock-media-probe").start();
+    }
+
+    /**
      * 用 SystemUI 应用上下文注册 {@link #moduleReceiver}。legacy Xposed 的
      * handleLoadPackage 拿不到 Context，走 {@code ActivityThread.currentApplication()}。
      * 幂等：重复调用直接返回（Vector 对同包回调两次，两个 classLoader 都会走到这里）。
@@ -165,6 +189,7 @@ public final class HookEntry implements IXposedHookLoadPackage {
             actions.addAction(Config.ACTION_DIAG_REFRESH);
             actions.addAction(Config.ACTION_DIAG_CLEAR);
             actions.addAction(Config.ACTION_CENSUS_DUMP);
+            actions.addAction(Config.ACTION_MEDIA_PROBE);
             actions.addAction(Config.ACTION_RESTART_SYSTEMUI);
             // RECEIVER_EXPORTED：广播来自另一个 uid（我们的 App），NOT_EXPORTED 收不到。
             app.registerReceiver(moduleReceiver, actions, Context.RECEIVER_EXPORTED);

@@ -145,6 +145,15 @@ final class MediaSource {
      */
     private static volatile String lastNoSessionDiag;
 
+    /**
+     * 会话枚举异常的去重键（HE19，2026-10-29）：旧写法把 getActiveSessions 抛的异常直接吞成
+     * 「no active sessions」，与「真的没歌在放」在报告里长得一模一样——平板那份报告就是卡在
+     * 这里，无法判断到底是枚举坏了还是当时没歌。现在把异常类名/消息单独打一条，同因只报一次。
+     */
+    private static volatile String lastQueryErrorDiag;
+    /** 上一次看到的会话总数，用于在报告里留下「0 → 1」这种时间线（会话进出各一条）。 */
+    private static volatile int lastSessionCount = -1;
+
     private static boolean packageAllowed(Context context, String packageName) {
         long now = android.os.SystemClock.elapsedRealtime();
         Set<String> allowed = cachedAllowed;
@@ -179,16 +188,52 @@ final class MediaSource {
         this.manager = context.getSystemService(MediaSessionManager.class);
         this.listener = listener;
     }
+    /**
+     * 是否「希望处于监听状态」。{@link #stop()} 置否，自愈重试据此止损——否则模块被关掉后
+     * 一个还在排队的重试会把监听重新装上，模块看起来「关了还生效」。
+     */
+    private boolean wanted;
+    /** 重试 Runnable 必须持有同一个实例，removeCallbacks 才删得掉（方法引用每次都是新对象）。 */
+    private final Runnable retryStart = this::retryStartNow;
+    /** 监听注册失败后的重试间隔：注册失败＝永远收不到会话回调，模块会彻底哑掉，必须自愈。 */
+    private static final long LISTENER_RETRY_MS = 5000;
+    /** 注册失败原因去重：一直失败时每 5s 一条会把 80 条环形缓冲冲光。 */
+    private static volatile String lastListenerErrorDiag;
+
     void start() {
+        wanted = true;
         if (started) { refresh(); return; }
-        if (manager == null) { listener.onMedia(null); return; }
+        if (manager == null) {
+            Diag.log("media session manager missing (context=" + context.getPackageName() + ")");
+            listener.onMedia(null);
+            return;
+        }
         try {
             manager.addOnActiveSessionsChangedListener(sessionsListener, null, main);
             started = true;
+            Diag.log("session listener registered");
             refresh();
-        } catch (RuntimeException error) { listener.onMedia(null); }
+        } catch (RuntimeException error) {
+            // 失败关闭，但必须留证据 + 自愈重试：旧写法静默吞掉，报告里与「没歌」完全同形，
+            // 一旦这个 ROM 上注册失败，模块会永远收不到会话回调（平板怀疑项之一，2026-10-29）。
+            String detail = error.getClass().getSimpleName() + ": " + error.getMessage();
+            if (!detail.equals(lastListenerErrorDiag)) {
+                lastListenerErrorDiag = detail;
+                Diag.log("session listener failed " + detail + " (retry every " + LISTENER_RETRY_MS + "ms)");
+            }
+            Log.w(TAG, "Session listener registration failed", error);
+            listener.onMedia(null);
+            main.removeCallbacks(retryStart);
+            main.postDelayed(retryStart, LISTENER_RETRY_MS);
+        }
+    }
+    private void retryStartNow() {
+        if (!wanted || started) return;
+        start();
     }
     void stop() {
+        wanted = false;
+        main.removeCallbacks(retryStart);
         generation++;
         if (started && manager != null) manager.removeOnActiveSessionsChangedListener(sessionsListener);
         started = false;
@@ -215,6 +260,12 @@ final class MediaSource {
         String blockedByAllow = null;
         try {
             sessions = manager.getActiveSessions(null);
+            // 会话总数的变化进报告（0→1 / 1→0）：远程排查时能直接看出「歌在放但枚举不到」
+            // 还是「报告截取时本来就没歌」。只在数量变化时写一条，不刷缓冲。
+            if (sessions.size() != lastSessionCount) {
+                lastSessionCount = sessions.size();
+                Diag.log("active sessions=" + lastSessionCount);
+            }
             for (MediaController candidate : sessions) {
                 if (!packageAllowed(context, candidate.getPackageName())) {
                     if (blockedByAllow == null) blockedByAllow = candidate.getPackageName();
@@ -248,7 +299,17 @@ final class MediaSource {
                         lyricsOf(metadata));
                 break;
             }
-        } catch (RuntimeException error) { snapshot = null; selected = null; }
+        } catch (RuntimeException error) {
+            snapshot = null; selected = null;
+            // 枚举本身抛异常（SecurityException 最常见：MEDIA_CONTENT_CONTROL / 通知使用权
+            // 在个别 ROM 上没授给 SystemUI）必须单独留痕，否则报告里只剩一句 no active sessions。
+            String detail = error.getClass().getSimpleName() + ": " + error.getMessage();
+            if (!detail.equals(lastQueryErrorDiag)) {
+                lastQueryErrorDiag = detail;
+                Diag.log("getActiveSessions threw " + detail);
+            }
+            Log.w(TAG, "getActiveSessions failed", error);
+        }
         // 暂停时也要继续跟踪会话：否则会注销回调，用户点「播放」后锁屏不会更新。
         MediaController tracked = selected != null ? selected : pausedSession;
         if (tracked == null && lastReady != null && lastReady.controller != null && sessions != null) {
@@ -418,6 +479,62 @@ final class MediaSource {
         return reason;
     }
     private static long elapsed(long start) { return android.os.SystemClock.elapsedRealtime() - start; }
+
+    /**
+     * 现场取证（HE19，2026-10-29）：把「此刻系统里到底有几个媒体会话、长什么样」整份写进诊断报告。
+     *
+     * 动机（平板 Pad 5 Pro / Android 16 移植 ROM 的首份报告）：整份报告只有一句
+     * {@code no active sessions}，而它截取于 SystemUI 刚重启 4 秒内——既可能是「枚举坏了」，
+     * 也可能只是「当时没有歌在放」，两种病因在报告里完全同形，等于白跑一轮。
+     * 之后用户点「开始记录 / 停止记录」（App 侧发 {@code ACTION_DIAG_REFRESH}）时，
+     * 这里立刻打一份现场，一份报告即可定性：
+     *   - {@code sessions=0} → 系统侧真的没有会话（歌没在放 / 播放器没建 MediaSession）；
+     *   - {@code sessions=n} 但每个都 {@code allowed=false} → 模块「音乐应用」里没勾选它；
+     *   - {@code sessions=n} 且 {@code allowed=true} 但 {@code state≠3} → 只是暂停；
+     *   - {@code getActiveSessions threw ...} → 权限/ROM 问题，异常原文直接给出来。
+     * 只读、无副作用；调用方负责放到工作线程（getActiveSessions 是 binder 调用）。
+     */
+    static void probe(Context context, String why) {
+        if (context == null) return;
+        StringBuilder out = new StringBuilder("probe(").append(why).append(')');
+        try {
+            MediaSessionManager manager = context.getSystemService(MediaSessionManager.class);
+            if (manager == null) {
+                Diag.log(out.append(" session manager=null").toString());
+                return;
+            }
+            Set<String> allowed = Config.allowedPackages(context);
+            out.append(" allowlist=").append(allowed.size());
+            if (!allowed.isEmpty()) out.append(' ').append(allowed);
+            List<MediaController> sessions = manager.getActiveSessions(null);
+            out.append(" sessions=").append(sessions.size());
+            int shown = 0;
+            for (MediaController controller : sessions) {
+                if (shown++ >= 5) { out.append(" …"); break; }
+                PlaybackState state = null;
+                MediaMetadata metadata = null;
+                try { state = controller.getPlaybackState(); } catch (Throwable ignored) { }
+                try { metadata = controller.getMetadata(); } catch (Throwable ignored) { }
+                Bitmap art = null;
+                if (metadata != null) {
+                    art = metadata.getBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART);
+                    if (art == null) art = metadata.getBitmap(MediaMetadata.METADATA_KEY_ART);
+                }
+                String title = metadata == null ? "" : text(metadata.getText(MediaMetadata.METADATA_KEY_TITLE));
+                out.append(" [").append(controller.getPackageName())
+                        .append(" state=").append(state == null ? "null" : String.valueOf(state.getState()))
+                        .append(" meta=").append(metadata != null)
+                        .append(" art=").append(art == null ? "none" : art.getWidth() + "x" + art.getHeight())
+                        .append(" allowed=").append(allowed.contains(controller.getPackageName()));
+                if (!title.isEmpty()) out.append(" title=").append(title.length() > 24 ? title.substring(0, 24) + "…" : title);
+                out.append(']');
+            }
+        } catch (Throwable error) {
+            out.append(" getActiveSessions threw ").append(error.getClass().getSimpleName())
+                    .append(": ").append(error.getMessage());
+        }
+        Diag.log(out.toString());
+    }
     private Bitmap loadArt(String uriText) {
         Uri uri = Uri.parse(uriText);
         String target = (uri.getScheme() == null ? "?" : uri.getScheme()) + "://" + uri.getAuthority();

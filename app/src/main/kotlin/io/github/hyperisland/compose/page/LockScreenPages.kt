@@ -108,6 +108,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlin.coroutines.cancellation.CancellationException
@@ -1803,8 +1804,18 @@ private fun DiagnosticReportCard(debugLogOn: Boolean, onToggleDebugLog: (Boolean
                         title = "复制报告",
                         summary = "复制全部状态与事件，通过微信等发给开发者",
                         onClick = {
-                            // 复制前重读一次：确保拿到的是最新现场，而不是展开时的旧快照。
+                            // 复制前先让 SystemUI 侧打一份**此刻**的媒体现场（会话清单 / 播放状态 /
+                            // 封面 / 名单拦截 / 枚举异常原文），等它回写落盘再重读。
+                            // 为什么必须按需取证：事件流水只在「状态变化」时记录，用户报的往往是
+                            // 「什么都没发生」（锁屏上没东西、报告里只有一句 no active sessions），
+                            // 分不清是枚举坏了还是截取时本来就没歌——平板首份报告就卡在这（2026-10-29）。
                             scope.launch {
+                                try {
+                                    context.sendBroadcast(
+                                        Intent(Config.ACTION_MEDIA_PROBE).setPackage(Config.SYSTEMUI_PACKAGE)
+                                    )
+                                } catch (_: Throwable) { }
+                                delay(700)   // 取证线程 + 跨进程回写，留足 700ms（实测远快于此）
                                 val fresh = withContext(Dispatchers.IO) { loadDiagReport(context) }
                                 if (fresh != null) report = fresh
                                 val text = report?.copyText()
