@@ -74,7 +74,7 @@
 - 酷安：`docs/COOLAPK-v0.3.9.md`（含发布前检查项与备选短版）
 - README 下载直链已同步到 v0.3.9；适配表与安装说明已补上第三个可选作用域 `com.netease.cloudmusic`
 
-## 发布四步清单（逐条打勾后才动线上）
+## 发布四步清单（2026-11-15 22:26 全部完成）
 
 1. **代码侧**：bump ✓ / `assembleRelease` ✓ / `apksigner` ✓ / dex 特征串 ✓ / **装机 ✓（2026-11-15 22:06，覆盖装；签名一致未卸载，配置保留）**：
    - `dumpsys package io.github.melolock` → `versionCode=19 versionName=0.3.9` ✓
@@ -90,6 +90,18 @@
 4. **文章与文案**：常青文追加 v0.3.9 一节；`docs/COOLAPK-v0.3.9.md` 发布到酷安
 
 **两个源发布后都要回到同一版本 `0.3.9` / code 19**，这是本轮「对齐发布」的验收标准。
+
+### 最终验收（全部实测）
+
+| 项 | 结果 |
+| --- | --- |
+| GitHub `releases/latest` | `v0.3.9`，asset `Hyper-MeloLock-v0.3.9.apk` 3,733,006 字节 |
+| GitHub 直链 | HTTP 200，下载 3,733,006 字节 |
+| blog `latest.json` | `versionCode 19` / `versionName 0.3.9`，`apkUrl` 指向 v0.3.9 |
+| blog APK 直链 | HTTP 200，Content-Length 3,733,006 |
+| 常青文 | 国内直链改指 v0.3.9，文末「五、v0.3.9 更新说明」已上线 |
+| 主仓库 | main `44e19fd`；tag `v0.3.9` → `41a3251`（发布后追加的 3 个文档修正在 tag 之后，不影响 APK / Release 资产） |
+| hexo 源码 | main `9a66e8c`（机器人随后推 `53a2709` 刷新朋友圈数据）；gh-pages 由 Actions `Circle Feed Update & Deploy` 构建成功 |
 
 ## 待办（非本轮）
 
