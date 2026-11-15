@@ -517,7 +517,7 @@ internal fun LockAppearancePage() {
         "clock" to listOf(Config.CLOCK_SIZE, Config.CLOCK_SPACING, Config.CLOCK_WEIGHT, Config.CLOCK_COLOR, Config.CLOCK_ROUNDNESS, Config.CLOCK_STROKE),
         "cover" to listOf(Config.COVER_SCALE, Config.COVER_WIDTH, Config.COVER_HEIGHT, Config.COVER_SPACING, Config.COVER_POP),
         "card" to listOf(Config.CARD_SCALE, Config.CARD_WIDTH, Config.CARD_HEIGHT, Config.CARD_RADIUS, Config.CARD_SPACING, Config.CARD_BG, Config.CARD_BG_PICK, Config.NATIVE_PLAYER, Config.BUTTON_FEEDBACK, Config.SMOOTH_PROGRESS, Config.PLAYER_CARD_POP, Config.PLAYER_VECTOR_ICONS, Config.LYRIC_ROW, Config.LYRIC_FILTER, Config.HIDE_CARD_ART, Config.HIDE_NATIVE_MEDIA, Config.KILL_LOCKSCREEN_ACTIVITY, Config.MARQUEE_SPEED, Config.MARQUEE_PAUSE),
-        "entry" to listOf(Config.ENTRY_BG, Config.ENTRY_BG_PICK),
+        "entry" to listOf(Config.HIDE_ENTRY, Config.ENTRY_BG, Config.ENTRY_BG_PICK),
         "debug" to listOf(Config.DEBUG_LOG),
     )
     fun resetSection(key: String) {
@@ -804,6 +804,15 @@ internal fun LockAppearancePage() {
         }
         item {
             CollapsibleSection("通知入口", "entry", MiuixIcons.Messages, expandedSections, ::toggleSection, { resetSection("entry") }) {
+                // 主开关置顶（组内排序约定）。隐藏后沉浸式两页切换入口一并消失，
+                // summary 只讲效果、不写实现；完整限制写在 docs/DEVELOPMENT.md。
+                PreferenceSwitch(
+                    title = "隐藏通知入口",
+                    summary = "隐藏底部胶囊，让开指纹区",
+                    icon = null,
+                    checked = value(Config.HIDE_ENTRY) != 0,
+                    onCheckedChange = { update(Config.HIDE_ENTRY, if (it) 1 else 0) },
+                )
                 // 文字颜色档已删（2026-10-11 zuige）：文字永远按胶囊底色亮度算法黑白，无需手选。
                 PreferenceDropdown(
                     title = "胶囊背景",

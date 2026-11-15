@@ -403,6 +403,7 @@ final class LockScreenOverlay {
      */
     private boolean hideShortcuts;
     private boolean fxHideIndication;   // 隐藏锁屏底部充电/提示文案（hide_charging，默认开）
+    private boolean fxHideEntry;        // 隐藏底部「展开通知」胶囊（hide_entry，默认关；让开屏下指纹区）
     private boolean fxNativePlayer;     // 原生播放器模式（native_player）：不建自制卡片，直接显示原生通知栈
     /**
      * 歌词独占主行（lyric_row，默认关）：开＝副行合并成「歌手 / 歌名」，歌词+歌名+歌手三者同屏；
@@ -1100,6 +1101,7 @@ final class LockScreenOverlay {
         signColorFollow = elem(elements, Config.SIGN_COLOR) == 0;
         entryBgFollow = elem(elements, Config.ENTRY_BG) == 0;
         entryBgConfig = elem(elements, Config.ENTRY_BG);   // 胶囊手动底色（0=跟随封面），entryFollowColor 用
+        fxHideEntry = elem(elements, Config.HIDE_ENTRY) != 0;
         cardBgPick = coercePick(elem(elements, Config.CARD_BG_PICK));
         clockPick = coercePick(elem(elements, Config.CLOCK_PICK));
         datePick = coercePick(elem(elements, Config.DATE_PICK));
@@ -1204,6 +1206,7 @@ final class LockScreenOverlay {
         // 而把入口落到左上角；底部位置低于充电文案。
         FrameLayout.LayoutParams entry = new FrameLayout.LayoutParams(-2, dp(48), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL); entry.bottomMargin = dp(10);
         foreground.addView(notificationButton, entry);
+        syncEntryVisibility();   // addView 默认 VISIBLE；开隐藏时必须当场压成 GONE
         // 诊断用：一眼看出本次创建实际用了哪套参数，避免把“未重启 SystemUI”误判成代码问题。
         Log.i(TAG, "Elements: clock=" + elem(elements, Config.CLOCK_SIZE) + "sp w" + elem(elements, Config.CLOCK_WEIGHT)
                 + " round" + elem(elements, Config.CLOCK_ROUNDNESS) + " color" + elem(elements, Config.CLOCK_COLOR)
@@ -1217,7 +1220,8 @@ final class LockScreenOverlay {
                 + "sp | sign=" + (elem(elements, Config.SIGN_ENABLED) != 0) + " len=" + signatureText.length()
                 + " | pick(0muted 1vivid 2vivid+): card" + cardBgPick + " clock" + clockPick + " date" + datePick
                 + " sign" + signPick + " entryBg" + entryBgPick
-                + " | swatch=" + (swatchPickMode == 2 ? "family" : swatchPickMode == 1 ? "dominant" : "vibrant"));
+                + " | swatch=" + (swatchPickMode == 2 ? "family" : swatchPickMode == 1 ? "dominant" : "vibrant")
+                + " | hideEntry=" + fxHideEntry);
         Log.i(TAG, "Custom media card overlay created in " + createAttempts + " attempt(s)");
         Diag.log("create ok in " + createAttempts + " attempt(s)");
         createAttempts = 0;
@@ -2317,7 +2321,7 @@ final class LockScreenOverlay {
             background.setAlpha(1f);
             background.setVisibility(View.VISIBLE);
         }
-        if (notificationButton != null) notificationButton.setVisibility(View.VISIBLE);
+        syncEntryVisibility();   // 隐藏开关打开时不许预显/复用把胶囊摆回来（HE20）
         ensureBackgroundOrder();
         if (root != null) { hideNativeWallpaperLayers(root); hideNativeClockLayers(root); applyShortcutRowVisibility(); }
     }
@@ -3082,7 +3086,7 @@ final class LockScreenOverlay {
             background.setAlpha(1f);
             background.setVisibility(View.VISIBLE);
         }
-        if (notificationButton != null) notificationButton.setVisibility(View.VISIBLE);
+        syncEntryVisibility();   // 隐藏开关打开时不许预显/复用把胶囊摆回来（HE20）
         ensureBackgroundOrder();
         if (marqueeTitle != null) marqueeTitle.start();
         if (marqueeArtist != null) marqueeArtist.start();
@@ -3116,6 +3120,22 @@ final class LockScreenOverlay {
     }
 
     /**
+     * 「展开通知 / 返回播放器」胶囊的**唯一可见性出口**（HE20 / hide_entry）。
+     *
+     * 三条路径都会想把它摆回 VISIBLE：create() 里 addView 的默认态、暗期预显 applyPreShow()、
+     * 跨锁屏周期复用 resume()。只在一处设 GONE 的话，熄屏亮屏一轮胶囊就会自己回来
+     * （旧教训：守卫要盯视图的实际状态，不能依赖「我上次设过」）。
+     *
+     * 比较实际可见性再写，避免每帧无谓 requestLayout。隐藏时按钮仍是 foreground 的子视图，
+     * 但 GONE 后不参与布局也不接收触摸 —— 屏下指纹那块区域就彻底让开了。
+     */
+    private void syncEntryVisibility() {
+        if (notificationButton == null) return;
+        int want = fxHideEntry ? View.GONE : View.VISIBLE;
+        if (notificationButton.getVisibility() != want) notificationButton.setVisibility(want);
+    }
+
+    /**
      * 「展开通知 / 返回播放器」入口与系统底部快捷栏（左手的电筒、右手的相机）对齐高度。
      *
      * 这两个图标是 MIUI 自己的 keyguard 布局，**资源 id 换版本就改名**（网上流传的那些名字
@@ -3126,6 +3146,8 @@ final class LockScreenOverlay {
      * 拿不到锚点时保留默认的 dp(10)，绝不因为对齐失败让入口跑出屏幕。
      */
     private void alignEntryWithShortcutRow() {
+        // 胶囊已隐藏：底部快捷栏坐标对它没有意义，别白扫整棵窗口树（HE20）。
+        if (fxHideEntry) return;
         // 已经对齐过就别再扫树了；几何不变，重复测量只是白花钱。
         // 最多试 5 次：showMusic() 每次媒体回调都会走到（播放时约每秒一次），
         // 拿不到锚点时不能让它一直滚窗口树。

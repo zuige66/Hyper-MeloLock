@@ -41,9 +41,9 @@ public final class HookEntry implements IXposedHookLoadPackage {
             }
             return;
         }
-        Log.i(TAG, "HookEntry rev=HE19 (media probe: 会话清单/枚举异常进诊断报告"
-                + "; session listener retry: 注册失败 5s 自愈"
-                + "; 平板适配取证) rev-prev=HE18");
+        Log.i(TAG, "HookEntry rev=HE20 (hide_entry: 可隐藏底部「展开通知」胶囊，让开屏下指纹区"
+                + "; 胶囊可见性统一收口 syncEntryVisibility"
+                + "; 含 HE18/HE19 未发布的网易云锁屏页拦截与媒体现场取证) rev-prev=HE19");
         try {
             Class<?> root = XposedHelpers.findClass(
                     "com.android.keyguard.widget.HyperOSKeyguardRootView", param.classLoader);

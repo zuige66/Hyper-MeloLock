@@ -171,6 +171,22 @@ public final class Config {
     public static final String ENTRY_BG = "entry_bg";
 
     /**
+     * 隐藏底部「展开通知 / 返回播放器」入口胶囊（外观页「通知入口」分组，默认关）。
+     *
+     * 2026-11-15 zuige 反馈：屏下指纹（尤其超声波）机型上，这颗底部居中的胶囊正好落在
+     * 指纹感应区，会干扰解锁。开＝胶囊 GONE，连布局位与触摸响应一起让开；关＝现状。
+     *
+     * 代价（开关说明里要讲清）：胶囊同时是沉浸式「播放器 ↔ 通知页」双向切换的唯一入口，
+     * 隐藏后两页切换不再可用，通知仍走系统下拉；默认「锁屏禁止左下拉」开着时左侧下拉不通。
+     * 按 zuige 定的「纯隐藏」方案，不动下拉拦截逻辑，保持最小改动面。
+     *
+     * 走 /elements 的 key/value 通道，自动进 elementSignature —— 改开关触发 config-changed
+     * 撤场重建，无需重启 SystemUI。可见性统一走 LockScreenOverlay.syncEntryVisibility()：
+     * 暗期预显 applyPreShow() 与场景复用 resume() 两条路径原本都会把它摆回 VISIBLE。
+     */
+    public static final String HIDE_ENTRY = "hide_entry";
+
+    /**
      * 各「跟随封面」档的取色风格：0＝低饱和磨砂（M3E，主色压饱和做容器/弱化做文字），
      * 1＝鲜艳（主色原色直出，只调亮度保证可读）。每个可调颜色的项独立一份。
      * 仅在对应颜色选「跟随封面」时生效；进 elementSignature，改动触发整场重建。
@@ -395,6 +411,7 @@ public final class Config {
         ELEMENT_DEFAULTS.put(SIGN_SPACING, 8);
         ELEMENT_DEFAULTS.put(ENTRY_COLOR, 0);            // 已废弃（入口文字固定算法黑白），键保留兼容旧配置
         ELEMENT_DEFAULTS.put(ENTRY_BG, 0);
+        ELEMENT_DEFAULTS.put(HIDE_ENTRY, 0);              // 默认显示（zuige 2026-11-15：只给受影响的机型手动开）
         ELEMENT_DEFAULTS.put(CARD_BG_PICK, 1);
         ELEMENT_DEFAULTS.put(CLOCK_PICK, 1);
         ELEMENT_DEFAULTS.put(DATE_PICK, 1);

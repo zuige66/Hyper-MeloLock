@@ -36,6 +36,25 @@
 
 ## 最近改动补充
 
+2026-11-15（v0.3.9 / HE20）：**隐藏底部「展开通知」胶囊（`hide_entry`）**。
+
+**需求**：一位屏下指纹（疑似超声波）用户反馈锁屏底部「展开通知」胶囊会干扰指纹解锁。胶囊是模块自绘的 `Button`（`LockScreenOverlay.java:1193`：`FrameLayout.LayoutParams(-2, dp(48), BOTTOM|CENTER_HORIZONTAL)` + `bottomMargin dp(10)`），底部居中、正好压在常见 FOD 感应区；GONE 后不参与布局也不接收触摸，该区域即让开。
+
+**方案（zuige 拍板「纯隐藏」）**：只去掉胶囊，不动 `BLOCK_LEFT_SHADE` 下拉拦截、不做替代入口。默认关（存量与新装都是老样子），只给受影响机型手动开。
+
+**实现链路**：
+
+- `Config.HIDE_ENTRY = "hide_entry"` + `ELEMENT_DEFAULTS.put(HIDE_ENTRY, 0)`。`/elements` 是 key/value 通用投影（`ConfigProvider.queryElements()` 遍历 `elementKeys()`），**不用改 Provider**；新键自动进 `currentElementSignature()`，于是改开关走 `applyPendingConfig` → `restore("config-changed")` → 下一帧 `render()` 重建，`create()` 重新读值，**即时生效、无需重启 SystemUI**。
+- `LockScreenOverlay.create()` 读一次到 `fxHideEntry`。新增 `syncEntryVisibility()` 作为胶囊的**唯一可见性出口**：比较视图实际可见性后再写 `GONE`/`VISIBLE`，避免每帧无谓 `requestLayout`。
+- 三处原本会把它摆回 VISIBLE 的路径全部收口：`create()` 里 `addView` 的默认态、暗期预显 `applyPreShow()`（不走 resume）、跨锁屏周期复用 `resume()`。**只在 create 里设一次 GONE 不够**——熄屏亮屏一轮就会自己回来，与「守卫要比视图实际状态」是同一条教训。
+- `alignEntryWithShortcutRow()` 在隐藏时直接 return：胶囊都不在了，扫整棵窗口树找快捷栏坐标纯属白费。
+- `Elements:` 诊断日志补 `hideEntry=`，真机一眼确认本次 create 读到的值。
+- 设置页：`LockAppearancePage` 的「通知入口」分组置顶加 `PreferenceSwitch`（主开关置顶的组内排序约定），并把 `HIDE_ENTRY` 补进 `sectionDefaultKeys["entry"]`，让分组「↺ 恢复默认」一并复位。
+
+**已知限制（对外文案必须写清）**：胶囊同时是「播放器 ↔ 通知页」双向切换的唯一入口（`showNotifications()` / `showMusic()` 只由它的 `OnClickListener` 触发），隐藏后这两页互相切不了；通知仍走系统下拉，而默认 `BLOCK_LEFT_SHADE=1` 会吃掉左半屏下拉，左侧那条路也不通。`native_player` 模式本来就藏胶囊，不受本开关影响。**超声波指纹的具体干扰机制未验证**：能确认的只有「该位置有一个可点击 View」，FOD 图标/触摸由 SystemUI 原生层负责，隐藏后是否彻底解决需受影响机型实测。
+
+**验收命令**：`content query --uri content://io.github.melolock.config/elements` 看 `hide_entry=0`；`logcat -d -v time -s MeloLock:V` 里看 `HookEntry rev=HE20` 与 `Elements: … hideEntry=`；开开关后灭屏亮屏一轮，确认胶囊不复现。
+
 2026-10-29（平板适配第一轮）：**诊断报告「不可判读」的根因 + 媒体现场取证（HE19）**。
 
 **问题**：用户报「平板（Xiaomi Pad 5 Pro / `elish` / Android 16 移植 ROM / `16.03.251211.r`）上不生效」，附的诊断报告只有 9 条事件、跨 4 秒：
@@ -1791,3 +1810,11 @@ v0.3.1 APK 39,206,696 字节，两侧下载源：GitHub Releases 与
     - **背景**：平板（`elish` / Android 16 / `16.03.251211.r`）报告只有 4 秒 9 条事件，链路到「媒体层」为止——`no active sessions` → `render skipped: no-session` → `restore: render-no-session`，`create ok` 从未出现。旧诊断把「枚举返回空」与「枚举抛异常」写成同一句，报告不可判读。
     - **取证**：`MediaSource.probe()`（会话清单 + 名单 + 异常原文）、`ACTION_MEDIA_PROBE`（「复制报告」前按需取证 + `Diag.flushNow()` 立即回写）、`refresh()` 记会话总数变化与枚举异常、`start()` 注册失败留痕 + 5s 自愈重试。
     - **不改渲染行为**：本轮只补证据链；判据见「最近改动补充」2026-10-29 条。rev HE18→HE19，0.3.7→0.3.8。
+
+73. 2026-11-15 **HE20：隐藏底部「展开通知」胶囊（`hide_entry`）+ 发布 v0.3.9**：
+
+    - **需求**：屏下指纹（疑似超声波）机型上，底部居中的「展开通知」胶囊压在 FOD 感应区，反馈会干扰解锁。zuige 拍板「纯隐藏」，不改下拉拦截、不做替代入口。
+    - **实现**：`Config.HIDE_ENTRY`（默认 0）、`LockScreenOverlay.fxHideEntry` + `syncEntryVisibility()` 收口 create / applyPreShow / resume 三条路径、`alignEntryWithShortcutRow()` 隐藏时短路、`Elements:` 日志补 `hideEntry=`；设置页「通知入口」分组置顶开关 + `sectionDefaultKeys` 同步。详见「最近改动补充」2026-11-15 条。
+    - **限制**：隐藏后「播放器 ↔ 通知页」切换入口消失，默认左下拉又被 `BLOCK_LEFT_SHADE` 吃掉，通知只能走系统其他下拉路径。FOD 干扰机制未经真机验证。
+    - **发布对齐**：本版把此前**未发布**的 HE18（网易云锁屏页拦截 + 结构普查）、HE19（媒体现场取证 + 会话监听自愈）一并带出。发版前两个源都停在 v0.3.6 / code 16，本地已 0.3.8 / code 18，且 HE18、HE19 两个提交未推 `origin/main`；本次 bump 到 `versionCode 19 / 0.3.9`，GitHub Release 与 blog `latest.json` 同步到同一版本。
+    - rev HE19→HE20，0.3.8→0.3.9。

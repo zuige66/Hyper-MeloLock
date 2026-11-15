@@ -44,7 +44,7 @@
 
 ### 🔔 共享元素切换
 
-点「展开通知」时播放器卡片沿着计算好的位移滑走、通知列表同向淡入，看起来像同一个组件在两个位置之间移动；返回时反向重演。
+点「展开通知」时播放器卡片沿着计算好的位移滑走、通知列表同向淡入，看起来像同一个组件在两个位置之间移动；返回时反向重演。屏下指纹机型如果觉得底部这颗胶囊挡手，可在「外观 → 通知入口」里打开「隐藏通知入口」把它去掉，让开指纹区域；**代价是隐藏后不能再靠它在播放器与通知页之间切换**，通知仍从系统下拉查看。
 
 </td>
 <td width="50%">
@@ -67,7 +67,7 @@
 
 ### 🚫 锁屏禁用左下拉
 
-沉浸场景显示期间吃掉左半屏的下拉手势，避免自绘层和原生通知面板叠在一起。右侧控制中心和指纹解锁不受影响。
+沉浸场景显示期间吃掉左半屏的下拉手势，避免自绘层和原生通知面板叠在一起。右侧控制中心不受影响。
 
 </td>
 </tr>
@@ -156,17 +156,18 @@
 | --- | --- |
 | 系统 | 澎湃 OS 3（HyperOS 3），Android 16 / API 36 |
 | 设备 | Redmi Note 9 Pro（`M2007J17C` / `gauguinpro`） |
-| 框架 | Vector / LSPosed，作用域**勾两项**：`com.android.systemui` 与 `com.miui.miwallpaper` |
+| 框架 | Vector / LSPosed，作用域**至少勾两项**：`com.android.systemui` 与 `com.miui.miwallpaper`；装了网易云音乐且想拦掉它的锁屏歌词页，再补勾 `com.netease.cloudmusic` |
 | 播放器 | 任何提供标准 `MediaSession` 的音乐应用 |
 
 ---
 
 ## 🚀 安装
 
-1. 到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases) 下载最新 APK 安装（正式签名，可直接覆盖升级）；最新版直链：[Hyper-MeloLock-v0.3.6.apk](https://github.com/zuige66/Hyper-MeloLock/releases/download/v0.3.6/Hyper-MeloLock-v0.3.6.apk)。安装包约 3.6MB。
-2. 在 Vector 中启用本模块，**作用域勾这两项**，缺一项对应功能就不生效：
+1. 到 [Releases](https://github.com/zuige66/Hyper-MeloLock/releases) 下载最新 APK 安装（正式签名，可直接覆盖升级）；最新版直链：[Hyper-MeloLock-v0.3.9.apk](https://github.com/zuige66/Hyper-MeloLock/releases/download/v0.3.9/Hyper-MeloLock-v0.3.9.apk)。安装包约 3.6MB。
+2. 在 Vector 中启用本模块，**作用域至少勾前两项**：
    - `com.android.systemui` —— 锁屏覆盖层本体，**必须**
    - `com.miui.miwallpaper` —— 封面壁纸化（不勾则仍是「在 SystemUI 里叠一层」的旧效果）
+   - `com.netease.cloudmusic` —— 可选：拦掉网易云音乐自己的锁屏歌词页（不勾则该页面照旧；勾了要重启一次网易云）
 3. 重启设备（或分别重启这两个进程）。
 4. 打开应用，点首页状态卡开启模块开关。
 5. 在「应用」页**勾选你的音乐播放器**（默认一个都不勾，必须手动选，没勾锁屏不会接管）。
