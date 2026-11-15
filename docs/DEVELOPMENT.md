@@ -221,7 +221,7 @@ AppShell 的根分页把 `isActive` 传给首页，首页在重新可见时重�
 
 - **发版**：versionCode 10 / versionName 0.3.0，tag `v0.3.0`，Release 用临时 PAT 经 api.github.com 创建、uploads.github.com 上传 APK（39,157,583 字节，apksigner 校验 SHA-1 `2b73…c1f7` ✓）。
 - **blog 回退源**：GitHub Releases API 失败（国内网络常态）→ 回退 Hexo blog 的静态 `latest.json`（`https://blog.zuiges.com/downloads/melolock/latest.json`，字段 versionName/versionCode/changelog/apkUrl，versionCode 整数比较）。两源都失败才抛原始 GitHub 错误弹失败框。`fetchIfNewer` 新增 `currentVersionCode` 参数（blog 侧没有 tag 可解析，只能整数比较）。**注意 Manifest 的 INTERNET 上游曾是 `tools:node="remove"`，必须恢复**。
-- **blog 端部署**：`D:\Workplace\hexo\source\downloads\melolock\` 放 `latest.json` + APK，`hexo generate && hexo deploy`（**本机跑法：用 managed node 直接跑 `node_modules/hexo/bin/hexo`，pnpm exec 会失败**；部署目标是 gh-pages 分支）。
+- **blog 端部署（2026-11-15 更正，旧写法 `hexo generate && hexo deploy` 作废）**：`D:\Workplace\hexo\source\downloads\melolock\` 放 `latest.json` + APK、文章改好后，**只需在 hexo 仓库 commit + push `main`**，GitHub Actions `Circle Feed Update & Deploy` 会自动 `hexo generate` 并部署到 `gh-pages`（2026-11-12 起，见 hexo 仓库 `f2971c1` 的 19.2 红线）。**不要本机跑 `hexo deploy`**：它对 gh-pages 是 force push，会把 CI 刷新的朋友圈数据 `source/circle/circle.json` 回退掉——v0.3.9 发版踩过一次，靠随后 push main 触发的 Actions 重跑才纠正。需要本地预览可跑 `node node_modules/hexo/bin/hexo generate`（**本机跑法：用 managed node 直接跑 `node_modules/hexo/bin/hexo`，pnpm exec 会失败**），但**只预览不部署**。
 - **验证 404 的教训**：deploy 推送成功后立即 curl 仍 404，**别急着排查代码**——是 GitHub Pages 构建延迟（约几分钟）+ CDN 缓存旧 404 响应。正确排查顺序：① api.github.com 查 gh-pages 分支 `downloads/melolock` 目录（文件在）→ ② raw.githubusercontent.com 直链（200）→ ③ 等 CDN 过期后 blog 域名恢复 200。链路：Cloudflare → GitHub Pages（Fastly）。
 - **发版红线**：必须打 tag，否则 GitHub API 的 `releases/latest` 检不到该版本；blog 仓库旧 APK 会随着版本堆积，可删。
 

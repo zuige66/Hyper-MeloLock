@@ -83,7 +83,10 @@
    - **待人工**：在 App 里打开「隐藏通知入口」，灭屏亮屏一轮确认胶囊不复现（本机拒绝 ADB 输入事件，UI 只能人工验）
    → 提交 + `git push origin main` → `git tag -a v0.3.9` + `git push origin v0.3.9`
 2. **GitHub Release**：PAT + REST API 建 release、上传 APK；验证 `releases/latest` 返回 `v0.3.9`、直链 200 且字节数一致。curl 必须带 `--noproxy '*' --ssl-no-revoke`
-3. **blog 备用源**：APK 复制进 `D:\Workplace\hexo\source\downloads\melolock\` + 更新 `latest.json` → `hexo generate`（以 `public/downloads/melolock/latest.json` 实际内容为准）→ `hexo deploy` → 等 CDN 缓存（max-age=600）后验 `versionCode 19` 与 APK HEAD 200
+3. **blog 备用源**：APK 复制进 `D:\Workplace\hexo\source\downloads\melolock\` + 更新 `latest.json` + 改常青文 → **commit + push `main`，由 GitHub Actions `Circle Feed Update & Deploy` 自动部署**（本次：`d2461a5` 因远端 `1d3ee65` 抢先推了友链数据被拒 → `pull --rebase --autostash` 后 `9a66e8c` 推送成功）。
+   - ⚠️ **本次踩坑**：先跑了一遍本机 `hexo deploy`（gh-pages `ee1a57c`），它对 gh-pages 是 force push，会回退 CI 刷新的朋友圈数据；已由后续 push main 触发的 Actions 重跑纠正。**以后只推 main，不要本地 deploy**（已写进 AGENTS.md / DEVELOPMENT.md）。
+   - 推 main 前若远端有新提交，用 `git pull --rebase --autostash origin main` 保护本地未提交改动，别 force。
+   - **验收**：Cloudflare CDN 600s + GitHub Pages 构建有延迟，push 后立刻查 `blog.zuiges.com` 可能仍是旧内容；源站真相用 GitHub API 查 `zuige66/hexo` 的 `gh-pages` 分支 `downloads/melolock/latest.json`（本次已确认 19 / 0.3.9），等缓存过期后再验域名返回 `versionCode 19` 与 APK HEAD 200。
 4. **文章与文案**：常青文追加 v0.3.9 一节；`docs/COOLAPK-v0.3.9.md` 发布到酷安
 
 **两个源发布后都要回到同一版本 `0.3.9` / code 19**，这是本轮「对齐发布」的验收标准。
